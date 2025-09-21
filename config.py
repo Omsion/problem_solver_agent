@@ -14,7 +14,7 @@ DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_MODEL_NAME = "qwen-vl-plus"
 
-# ### NEW ### - Prompt for Step 1: Problem Classification
+# Prompt for Step 1: Problem Classification
 # This prompt instructs the model to act as a classifier.
 CLASSIFICATION_PROMPT = """
 Analyze the content of the image(s). Determine the type of problem presented.
@@ -42,7 +42,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_MODE = "reasoner"
 MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deepseek-chat"
 
-# ### NEW ### - A dictionary of specialized prompts for DeepSeek
+#  A dictionary of specialized prompts for DeepSeek
 PROMPT_TEMPLATES = {
     "GENERAL": """
 Based on the following problem text, please provide a comprehensive solution.

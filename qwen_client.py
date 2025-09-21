@@ -8,7 +8,8 @@ This module handles two key tasks in the pipeline:
 """
 
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Dict, Any
+from typing_extensions import TypedDict
 from openai import OpenAI
 
 import config
@@ -16,10 +17,19 @@ from utils import setup_logger, encode_image_to_base64
 
 logger = setup_logger()
 
+
+#  Define the payload structure for Qwen-VL calls
+# This provides a precise data structure to the type checker, resolving IDE warnings.
+class VisionCompletionPayload(TypedDict):
+    model: str
+    messages: List[Dict[str, Any]]
+
+
 # --- Initialize the Qwen-VL Client once ---
 try:
     if not config.DASHSCOPE_API_KEY:
         raise ValueError("DASHSCOPE_API_KEY not found in .env file.")
+
     qwen_client = OpenAI(
         api_key=config.DASHSCOPE_API_KEY,
         base_url=config.DASHSCOPE_BASE_URL,
@@ -50,11 +60,16 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
         logger.error("No valid images to send to Qwen-VL.")
         return None
 
+    #  Construct the payload using the TypedDict definition
+    payload: VisionCompletionPayload = {
+        "model": config.QWEN_MODEL_NAME,
+        "messages": [{"role": "user", "content": content_payload}]
+    }
+
     try:
-        completion = qwen_client.chat.completions.create(
-            model=config.QWEN_MODEL_NAME,
-            messages=[{"role": "user", "content": content_payload}]
-        )  # type: ignore
+        #  Pass the structured payload using kwargs unpacking 
+        completion = qwen_client.chat.completions.create(**payload)
+
         return completion.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Qwen-VL API request failed: {e}")
