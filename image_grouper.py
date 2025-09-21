@@ -68,7 +68,7 @@ class ImageGrouper:
         try:
             lock_file_path.touch()
 
-            # ### UPDATED - 实现了“粗分类-精细化”的智能工作流 ###
+            # 实现了“粗分类-精细化”的智能工作流 ###
             # -------------------------------------------------------------------------------------
             # 步骤 1: AI进行粗分类
             broad_problem_type = qwen_client.classify_problem_type(group_to_process)

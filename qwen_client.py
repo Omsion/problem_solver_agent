@@ -64,7 +64,6 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
 
 def classify_problem_type(image_paths: List[Path]) -> str:
     """
-    ### UPDATED ###
     步骤 1: 调用Qwen-VL进行“粗分类”。
     返回 'CODING' 或 'GENERAL'。
     """
