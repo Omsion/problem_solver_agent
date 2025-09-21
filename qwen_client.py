@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 qwen_client.py - Qwen-VL (DashScope) API Client
-
-This module handles two key tasks in the pipeline:
-1. Classifying the problem type from the images.
-2. Transcribing the text content from the images.
 """
 
 from pathlib import Path
@@ -17,19 +13,13 @@ from utils import setup_logger, encode_image_to_base64
 
 logger = setup_logger()
 
-
-#  Define the payload structure for Qwen-VL calls
-# This provides a precise data structure to the type checker, resolving IDE warnings.
 class VisionCompletionPayload(TypedDict):
     model: str
     messages: List[Dict[str, Any]]
 
-
-# --- Initialize the Qwen-VL Client once ---
 try:
     if not config.DASHSCOPE_API_KEY:
         raise ValueError("DASHSCOPE_API_KEY not found in .env file.")
-
     qwen_client = OpenAI(
         api_key=config.DASHSCOPE_API_KEY,
         base_url=config.DASHSCOPE_BASE_URL,
@@ -40,7 +30,6 @@ except Exception as e:
 
 
 def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
-    """A generic helper function to call the Qwen API."""
     if not qwen_client:
         logger.error("Qwen-VL client is not initialized.")
         return None
@@ -60,16 +49,13 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
         logger.error("No valid images to send to Qwen-VL.")
         return None
 
-    #  Construct the payload using the TypedDict definition
     payload: VisionCompletionPayload = {
         "model": config.QWEN_MODEL_NAME,
         "messages": [{"role": "user", "content": content_payload}]
     }
 
     try:
-        #  Pass the structured payload using kwargs unpacking 
         completion = qwen_client.chat.completions.create(**payload)
-
         return completion.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Qwen-VL API request failed: {e}")
@@ -78,23 +64,25 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
 
 def classify_problem_type(image_paths: List[Path]) -> str:
     """
-    Step 1: Sends images to Qwen-VL to classify the problem type.
-    Returns one of 'LEETCODE', 'ACM', or 'GENERAL'.
+    ### UPDATED ###
+    步骤 1: 调用Qwen-VL进行“粗分类”。
+    返回 'CODING' 或 'GENERAL'。
     """
-    logger.info("Step 1: Classifying problem type with Qwen-VL...")
+    logger.info("步骤 1: 正在进行问题类型粗分类...")
     response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT)
 
-    if response and response in ["LEETCODE", "ACM", "GENERAL"]:
-        logger.info(f"Classification successful. Detected type: {response}")
+    # 更新期望的关键词列表
+    if response and response in ["CODING", "GENERAL"]:
+        logger.info(f"粗分类成功，识别类型为: {response}")
         return response
 
-    logger.warning(f"Classification failed or returned unknown type ('{response}'). Defaulting to 'GENERAL'.")
+    logger.warning(f"粗分类失败或返回未知类型 ('{response}')。将默认视为 'GENERAL'。")
     return "GENERAL"
 
 
 def transcribe_images(image_paths: List[Path]) -> Union[str, None]:
     """
-    Step 3: Sends images to Qwen-VL to transcribe their text content.
+    步骤 3: 调用Qwen-VL进行文字转录。
     """
-    logger.info("Step 3: Transcribing images with Qwen-VL...")
+    logger.info("步骤 3: 正在进行图片文字转录...")
     return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT)
