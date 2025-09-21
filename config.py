@@ -14,7 +14,7 @@ DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_MODEL_NAME = "qwen-vl-plus"  # Vision model for transcription
 
-# Prompt for Qwen-VL: Instructs it to accurately transcribe text from images.
+# Prompt for Qwen-VL: 指示它精确地从图片中转录文本。
 QWEN_PROMPT = """
 Your task is to act as a highly accurate OCR engine. Analyze the following image(s) and transcribe all text content you see.
 - Transcribe the text in the order it appears across the images.
@@ -29,9 +29,11 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_MODE = "reasoner"  # "reasoner" or "chat"
 MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deepseek-chat"
 
-# Prompt for DeepSeek: Instructs it to solve the problem based on the text provided by Qwen.
+# ### UPDATED PROMPT ### - 优化后的DeepSeek提示词，明确要求代码实现
+# -------------------------------------------------------------------------------------
+# Prompt for DeepSeek: 指示它根据Qwen转录的文本，提供结构化的解答，其中明确包含代码。
 DEEPSEEK_PROMPT_TEMPLATE = """
-Based on the following transcribed problem text, please provide a comprehensive solution.
+Based on the following transcribed problem text, please provide a comprehensive solution structured in three parts as specified below.
 
 **Transcribed Problem:**
 ---
@@ -39,10 +41,20 @@ Based on the following transcribed problem text, please provide a comprehensive 
 ---
 
 **Your Task:**
-1.  **Detailed Analysis:** Provide a detailed thought process, step-by-step reasoning, and the final answer.
-2.  **Clear Formatting:** Use Markdown for clarity.
-3.  **Generate a Title:** After your solution, start a new line and strictly follow the format 'TITLE: [A 5-10 word summary of the problem]' to create a suitable filename title.
+
+1.  **Problem Analysis:**
+    Begin with a brief analysis of the problem, explaining the core logic and the chosen approach for solving it.
+
+2.  **Python Code Implementation:**
+    Provide a complete and efficient Python code solution. The solution should be encapsulated within a `Solution` class, with a method signature that matches the problem's requirements (e.g., `def trap(self, height: List[int]) -> int:`).
+
+3.  **Explanation of the Code:**
+    After the code block, explain the key parts of your implementation step by step.
+
+Finally, after all three parts are complete, start a new line and strictly follow the format 'TITLE: [A 5-10 word summary of the problem]' to create a suitable filename title.
 """
+# -------------------------------------------------------------------------------------
+
 
 # --- 3. Core File Paths ---
 ROOT_DIR = Path(r"D:\Users\wzw\Pictures")
@@ -51,7 +63,7 @@ PROCESSED_DIR = ROOT_DIR / "processed"
 SOLUTION_DIR = ROOT_DIR / "problem_solver_agent" / "solutions"
 
 # --- 4. Agent Behavior ---
-GROUP_TIMEOUT = 5.0
+GROUP_TIMEOUT = 10.0  # 您可以按需调整
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 # --- Initialization Function ---

@@ -1,0 +1,6 @@
+# requirements.txt
+langchain
+langchain-deepseek
+langserve[all]
+python-dotenv
+watchdog

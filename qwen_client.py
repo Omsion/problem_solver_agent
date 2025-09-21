@@ -7,15 +7,19 @@ into a single block of transcribed text using the Qwen-VL model.
 """
 
 from pathlib import Path
-from typing import List, Union
-
-# Uses the openai library as per DashScope documentation
+from typing import List, Union, Dict, Any
+from typing_extensions import TypedDict
 from openai import OpenAI
 
 import config
 from utils import setup_logger, encode_image_to_base64
 
 logger = setup_logger()
+
+# Define the payload structure for the Qwen-VL call
+class VisionCompletionPayload(TypedDict):
+    model: str
+    messages: List[Dict[str, Any]]
 
 # --- Initialize the Qwen-VL Client once ---
 try:
@@ -41,12 +45,9 @@ def describe_images(image_paths: List[Path]) -> Union[str, None]:
 
     logger.info(f"Step 1: Transcribing {len(image_paths)} images with Qwen-VL...")
 
-    # Build the 'content' list for the payload
     content_payload = []
-    # Add the text prompt first
     content_payload.append({"type": "text", "text": config.QWEN_PROMPT})
 
-    # Add each image
     for image_path in image_paths:
         base64_image = encode_image_to_base64(image_path)
         if base64_image:
@@ -61,11 +62,15 @@ def describe_images(image_paths: List[Path]) -> Union[str, None]:
         logger.error("No valid images to transcribe for Qwen-VL.")
         return None
 
+    # Construct the payload using the TypedDict definition
+    payload: VisionCompletionPayload = {
+        "model": config.QWEN_MODEL_NAME,
+        "messages": [{"role": "user", "content": content_payload}]
+    }
+
     try:
-        completion = qwen_client.chat.completions.create(
-            model=config.QWEN_MODEL_NAME,
-            messages=[{"role": "user", "content": content_payload}]
-        )
+        # Pass the structured payload using kwargs unpacking
+        completion = qwen_client.chat.completions.create(**payload)
 
         transcribed_text = completion.choices[0].message.content
         logger.info("Successfully transcribed images with Qwen-VL.")

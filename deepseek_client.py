@@ -3,12 +3,12 @@
 deepseek_client.py - DeepSeek API Client (Text-Only Analysis)
 
 ### FINAL CORRECTED VERSION ###
-Uses the official 'openai' library to interact with the DeepSeek API endpoint.
-This is the industry-standard method for OpenAI-compatible APIs and resolves all previous import errors.
+Uses a TypedDict to define the payload structure, providing a robust solution
+to IDE type-checking warnings when using the openai library for third-party services.
 """
 
-from typing import Union
-# ### UPDATED ### - Import the correct, standard 'OpenAI' client
+from typing import Union, List, Dict, Any
+from typing_extensions import TypedDict, Literal
 from openai import OpenAI
 
 import config
@@ -16,12 +16,21 @@ from utils import setup_logger
 
 logger = setup_logger()
 
+
+# ### NEW ### - Define the payload structure to satisfy the type checker
+class ChatCompletionPayload(TypedDict):
+    model: str
+    messages: List[Dict[str, Any]]
+    max_tokens: int
+    temperature: float
+    stream: Literal[False]
+
+
 # --- Initialize the DeepSeek Client using the OpenAI library structure ---
 try:
     if not config.DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY not found in .env file.")
 
-    # ### UPDATED ### - Create an OpenAI client instance pointed at the DeepSeek URL
     deepseek_client = OpenAI(
         api_key=config.DEEPSEEK_API_KEY,
         base_url=config.DEEPSEEK_BASE_URL
@@ -45,17 +54,19 @@ def ask_deepseek_for_analysis(transcribed_text: str) -> Union[str, None]:
         transcribed_text=transcribed_text
     )
 
-    messages_payload = [{"role": "user", "content": final_prompt}]
+    # Construct the payload using the TypedDict definition
+    payload: ChatCompletionPayload = {
+        "model": config.MODEL_NAME,
+        "messages": [{"role": "user", "content": final_prompt}],
+        "max_tokens": 4000,
+        "temperature": 0.7,
+        "stream": False
+    }
 
     try:
-        # The API call remains the same, as it follows the OpenAI library's standard.
-        response = deepseek_client.chat.completions.create(
-            model=config.MODEL_NAME,
-            messages=messages_payload,
-            max_tokens=4000,
-            temperature=0.7,
-            stream=False
-        )
+        # Pass the structured payload using kwargs unpacking (**)
+        response = deepseek_client.chat.completions.create(**payload)
+
         answer = response.choices[0].message.content
         logger.info("Successfully received analysis from DeepSeek.")
         return answer

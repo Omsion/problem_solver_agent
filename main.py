@@ -3,7 +3,6 @@
 main.py - 自动化多图解题Agent主程序入口
 """
 
-import time
 import sys
 import config
 import file_monitor
@@ -11,6 +10,7 @@ from image_grouper import ImageGrouper
 from utils import setup_logger
 
 def main():
+    """主执行函数"""
     logger = setup_logger()
     logger.info("="*50)
     logger.info("启动自动化解题Agent (双模型流水线)...")
@@ -35,13 +35,14 @@ def main():
     observer = file_monitor.start_monitoring(config.MONITOR_DIR, image_grouper)
 
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("\nUser interrupt detected (Ctrl+C). Shutting down gracefully...")
-        observer.stop()
         observer.join()
-        logger.info("File monitor stopped. Exiting.")
+    except Exception as e:
+        logger.critical(f"An unexpected error occurred in the file monitor: {e}")
+    finally:
+        observer.stop()
+        logger.info("File monitor has been shut down.")
+    # -------------------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
     main()
