@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-image_grouper.py - 图片分组处理器模块 (双模型流水线版)
+image_grouper.py - 图片分组处理器模块 (智能分流版)
 """
 
 import shutil
@@ -10,7 +10,6 @@ from threading import Timer, Lock
 from typing import List
 
 import config
-# Import both clients
 import qwen_client
 import deepseek_client
 from utils import setup_logger, parse_title_from_response, sanitize_filename
@@ -41,21 +40,28 @@ class ImageGrouper:
             self.current_group.clear()
             logger.info(f"Timeout! Processing group with {len(group_to_process)} image(s)...")
 
-        # --- NEW TWO-STEP PIPELINE ---
+        # --- NEW INTELLIGENT WORKFLOW ---
 
-        # Step 1: Transcribe images using Qwen-VL
-        transcribed_text = qwen_client.describe_images(group_to_process)
+        # Step 1: Classify the problem type
+        problem_type = qwen_client.classify_problem_type(group_to_process)
+
+        # Step 2: Select the appropriate prompt template
+        prompt_template = config.PROMPT_TEMPLATES.get(problem_type, config.PROMPT_TEMPLATES["GENERAL"])
+        logger.info(f"Step 2: Strategy selected. Using '{problem_type}' prompt.")
+
+        # Step 3: Transcribe the images to text
+        transcribed_text = qwen_client.transcribe_images(group_to_process)
         if not transcribed_text:
-            logger.error("Failed to transcribe images. The original images will not be moved.")
+            logger.error("Transcription failed. Aborting workflow.")
             return
 
-        # Step 2: Get analysis from DeepSeek using the transcribed text
-        final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text)
+        # Step 4: Solve the problem using the transcribed text and the selected prompt
+        final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, prompt_template)
         if not final_answer:
-            logger.error("Failed to get analysis from DeepSeek. The original images will not be moved.")
+            logger.error("Solving failed. Aborting workflow.")
             return
 
-        # --- Archiving the result (largely unchanged) ---
+        # --- Archiving the result ---
         title = parse_title_from_response(final_answer)
         timestamp = time.strftime("%Y%m%d-%H%M%S")
 
@@ -68,17 +74,18 @@ class ImageGrouper:
 
         solution_path = config.SOLUTION_DIR / filename
 
-        # Save the result, including the intermediate transcription for debugging
         try:
             with open(solution_path, 'w', encoding='utf-8') as f:
                 f.write(f"Processed Image Group:\n")
                 for img_path in group_to_process:
                     f.write(f"- {img_path.name}\n")
                 f.write("\n" + "=" * 50 + "\n\n")
-                f.write("Step 1: Text Transcribed by Qwen-VL:\n")
+                f.write(f"Detected Problem Type: {problem_type}\n")
+                f.write("=" * 50 + "\n\n")
+                f.write("Step 3: Text Transcribed by Qwen-VL:\n")
                 f.write(transcribed_text)
                 f.write("\n\n" + "=" * 50 + "\n\n")
-                f.write("Step 2: Solution by DeepSeek-Reasoner:\n")
+                f.write("Step 4: Solution by DeepSeek-Reasoner:\n")
                 f.write(final_answer)
             logger.info(f"Solution successfully saved to: {solution_path}")
         except IOError as e:
@@ -89,6 +96,7 @@ class ImageGrouper:
         logger.info(f"Moving processed images to '{config.PROCESSED_DIR}'...")
         for img_path in group_to_process:
             try:
+                # Use a unique name to avoid conflicts
                 destination = config.PROCESSED_DIR / f"{img_path.stem}_{timestamp}{img_path.suffix}"
                 shutil.move(str(img_path), str(destination))
             except (IOError, FileNotFoundError) as e:

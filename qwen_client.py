@@ -2,13 +2,13 @@
 """
 qwen_client.py - Qwen-VL (DashScope) API Client
 
-This module handles the first step of the pipeline: converting a group of images
-into a single block of transcribed text using the Qwen-VL model.
+This module handles two key tasks in the pipeline:
+1. Classifying the problem type from the images.
+2. Transcribing the text content from the images.
 """
 
 from pathlib import Path
-from typing import List, Union, Dict, Any
-from typing_extensions import TypedDict
+from typing import List, Union
 from openai import OpenAI
 
 import config
@@ -16,16 +16,10 @@ from utils import setup_logger, encode_image_to_base64
 
 logger = setup_logger()
 
-# Define the payload structure for the Qwen-VL call
-class VisionCompletionPayload(TypedDict):
-    model: str
-    messages: List[Dict[str, Any]]
-
 # --- Initialize the Qwen-VL Client once ---
 try:
     if not config.DASHSCOPE_API_KEY:
         raise ValueError("DASHSCOPE_API_KEY not found in .env file.")
-
     qwen_client = OpenAI(
         api_key=config.DASHSCOPE_API_KEY,
         base_url=config.DASHSCOPE_BASE_URL,
@@ -35,19 +29,13 @@ except Exception as e:
     qwen_client = None
 
 
-def describe_images(image_paths: List[Path]) -> Union[str, None]:
-    """
-    Sends images to the Qwen-VL API and returns the transcribed text.
-    """
+def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
+    """A generic helper function to call the Qwen API."""
     if not qwen_client:
-        logger.error("Qwen-VL client is not initialized. Aborting transcription.")
+        logger.error("Qwen-VL client is not initialized.")
         return None
 
-    logger.info(f"Step 1: Transcribing {len(image_paths)} images with Qwen-VL...")
-
-    content_payload = []
-    content_payload.append({"type": "text", "text": config.QWEN_PROMPT})
-
+    content_payload = [{"type": "text", "text": prompt}]
     for image_path in image_paths:
         base64_image = encode_image_to_base64(image_path)
         if base64_image:
@@ -59,23 +47,39 @@ def describe_images(image_paths: List[Path]) -> Union[str, None]:
             logger.warning(f"Skipping image that could not be encoded: {image_path}")
 
     if len(content_payload) <= 1:
-        logger.error("No valid images to transcribe for Qwen-VL.")
+        logger.error("No valid images to send to Qwen-VL.")
         return None
 
-    # Construct the payload using the TypedDict definition
-    payload: VisionCompletionPayload = {
-        "model": config.QWEN_MODEL_NAME,
-        "messages": [{"role": "user", "content": content_payload}]
-    }
-
     try:
-        # Pass the structured payload using kwargs unpacking
-        completion = qwen_client.chat.completions.create(**payload)
-
-        transcribed_text = completion.choices[0].message.content
-        logger.info("Successfully transcribed images with Qwen-VL.")
-        return transcribed_text.strip()
-
+        completion = qwen_client.chat.completions.create(
+            model=config.QWEN_MODEL_NAME,
+            messages=[{"role": "user", "content": content_payload}]
+        )  # type: ignore
+        return completion.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Qwen-VL API request failed: {e}")
         return None
+
+
+def classify_problem_type(image_paths: List[Path]) -> str:
+    """
+    Step 1: Sends images to Qwen-VL to classify the problem type.
+    Returns one of 'LEETCODE', 'ACM', or 'GENERAL'.
+    """
+    logger.info("Step 1: Classifying problem type with Qwen-VL...")
+    response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT)
+
+    if response and response in ["LEETCODE", "ACM", "GENERAL"]:
+        logger.info(f"Classification successful. Detected type: {response}")
+        return response
+
+    logger.warning(f"Classification failed or returned unknown type ('{response}'). Defaulting to 'GENERAL'.")
+    return "GENERAL"
+
+
+def transcribe_images(image_paths: List[Path]) -> Union[str, None]:
+    """
+    Step 3: Sends images to Qwen-VL to transcribe their text content.
+    """
+    logger.info("Step 3: Transcribing images with Qwen-VL...")
+    return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT)
