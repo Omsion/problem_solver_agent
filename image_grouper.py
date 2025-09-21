@@ -41,21 +41,15 @@ class ImageGrouper:
             logger.info(f"Timeout! Processing group with {len(group_to_process)} image(s)...")
 
         # --- NEW INTELLIGENT WORKFLOW ---
-
-        # Step 1: Classify the problem type
         problem_type = qwen_client.classify_problem_type(group_to_process)
-
-        # Step 2: Select the appropriate prompt template
         prompt_template = config.PROMPT_TEMPLATES.get(problem_type, config.PROMPT_TEMPLATES["GENERAL"])
         logger.info(f"Step 2: Strategy selected. Using '{problem_type}' prompt.")
 
-        # Step 3: Transcribe the images to text
         transcribed_text = qwen_client.transcribe_images(group_to_process)
         if not transcribed_text:
             logger.error("Transcription failed. Aborting workflow.")
             return
 
-        # Step 4: Solve the problem using the transcribed text and the selected prompt
         final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, prompt_template)
         if not final_answer:
             logger.error("Solving failed. Aborting workflow.")
@@ -92,12 +86,18 @@ class ImageGrouper:
             logger.error(f"Failed to save solution file: {e}")
             return
 
-        # Move processed images
+        # UPDATED AND MORE ROBUST FILE MOVING LOGIC
+        # -------------------------------------------------------------------------------------
         logger.info(f"Moving processed images to '{config.PROCESSED_DIR}'...")
         for img_path in group_to_process:
             try:
                 # Use a unique name to avoid conflicts
                 destination = config.PROCESSED_DIR / f"{img_path.stem}_{timestamp}{img_path.suffix}"
                 shutil.move(str(img_path), str(destination))
-            except (IOError, FileNotFoundError) as e:
+            except FileNotFoundError:
+                logger.warning(
+                    f"Could not find '{img_path.name}' to move. It was likely moved or renamed by the user. This is OK.")
+            except Exception as e:
+                # Catch any other potential file system errors.
                 logger.error(f"Failed to move image '{img_path.name}': {e}")
+        # -------------------------------------------------------------------------------------
