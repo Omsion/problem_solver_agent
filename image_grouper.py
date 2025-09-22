@@ -13,12 +13,15 @@ image_grouper.py - 图片分组处理器模块 (智能分流版)
     c. (Agent) 策略选择：在各自的流程中，选取最优的提示词模板。
     d. (AI Models) 问题求解：调用相应的AI模型（Qwen或DeepSeek）来解决问题。
 5.  **健壮的文件操作**: 在处理完图片后，使用带延时重试的机制将其归档，有效应对因云同步、杀毒软件等导致的临时性文件锁定问题。
+6.  **并行任务处理**: 采用生产者-消费者模式，将每个待处理的图片组作为一个独立任务放入线程安全的队列中，
+    由一个或多个后台工作线程并行处理，解决了“新任务中断旧任务”的并发缺陷。
 """
 
 import shutil
 import time
 from pathlib import Path
-from threading import Timer, Lock
+from threading import Timer, Lock, Thread
+from queue import Queue
 from typing import List
 
 # 从项目其他模块导入必要的配置和功能
@@ -34,9 +37,10 @@ logger = setup_logger()
 class ImageGrouper:
     """
     一个状态化的核心类，用于管理图片的分组、AI处理流水线以及后续的归档工作。
+    本版本采用任务队列和工作线程，以支持稳定、并行的多任务处理。
     """
 
-    def __init__(self):
+    def __init__(self, num_workers=2):
         # self.current_group: 临时的图片路径列表，用于存放当前正在收集的图片组。
         self.current_group: List[Path] = []
         # self.timer: 一个定时器对象，用于实现“超时触发处理”的逻辑。
@@ -44,39 +48,79 @@ class ImageGrouper:
         # self.lock: 线程锁，用于保护 self.current_group 和 self.timer 的线程安全。
         self.lock = Lock()
 
+        # --- 任务队列和工作线程 ---
+        # 采用生产者-消费者模式，彻底解决“新任务中断旧任务”的并发问题。
+        # self.task_queue: 一个线程安全的队列，用于存放待处理的图片组（任务），充当“生产者”和“消费者”之间的缓冲。
+        self.task_queue = Queue()
+        # self.num_workers: 同时执行任务的工作线程数量。默认为2，意味着可以同时处理两个不同的图片组。
+        self.num_workers = num_workers
+        self.workers: List[Thread] = []
+        self._start_workers()
+
+    def _start_workers(self):
+        """
+        私有辅助方法，在类实例化时，初始化并启动所有后台工作线程。
+        """
+        logger.info(f"正在启动 {self.num_workers} 个后台工作线程...")
+        for i in range(self.num_workers):
+            # 将工作线程设置为守护线程 (daemon=True)，意味着当主程序退出时，这些线程也会被自动、强制地终止，
+            # 避免了程序关闭后仍有残留线程在运行的问题。
+            worker = Thread(target=self._worker_loop, daemon=True, name=f"Worker-{i + 1}")
+            worker.start()
+            self.workers.append(worker)
+        logger.info("后台工作线程已全部启动，等待任务中...")
+
+    def _worker_loop(self):
+        """
+        每个工作线程（“消费者”）的主循环。
+        它会永远地、高效地等待任务队列中的新任务。
+        """
+        while True:
+            # task_queue.get() 是一个阻塞操作。如果队列为空，线程会在此处“睡眠”，不消耗CPU资源，
+            # 直到队列中有新任务被放入，线程才会被唤醒。
+            group_to_process = self.task_queue.get()
+            logger.info(f"工作线程 {Path(__file__).name} 领取了一个新任务，包含 {len(group_to_process)} 张图片。")
+            try:
+                # 调用我们已有的、健壮的流水线处理逻辑。
+                self._execute_pipeline(group_to_process)
+            except Exception as e:
+                # 捕获流水线中可能出现的任何意外错误，记录日志，以防止单个任务的失败导致整个工作线程崩溃。
+                logger.error(f"处理任务时发生意外错误: {e}", exc_info=True)
+            finally:
+                # 通知队列，刚才取出的那个任务已经处理完毕。这对于队列管理是必要的。
+                self.task_queue.task_done()
+
     def add_image(self, image_path: Path):
         """
-        公开的入口方法，由文件监控器(file_monitor.py)在检测到新图片时调用。
-
-        Args:
-            image_path (Path): 新创建的图片文件的路径。
+        公开的入口方法（“生产者”的一部分），由文件监控器在检测到新图片时调用。
         """
-        # 使用'with self.lock:'确保在任何时刻只有一个线程可以修改图片组或定时器，
-        # 从而避免了在处理文件事件时可能发生的竞态条件。
         with self.lock:
-            # 如果已有定时器在运行，说明当前正在一个分组窗口期内，取消旧的定时器。
             if self.timer:
                 self.timer.cancel()
-
-            # 将新图片的路径添加到当前分组中。
             self.current_group.append(image_path)
             logger.info(f"图片已添加到组: {image_path.name} (当前组共 {len(self.current_group)} 张)")
-
-            # 创建并启动一个新的定时器。如果在GROUP_TIMEOUT秒内没有新图片加入（即本方法没有被再次调用），
-            # 定时器将自动在后台线程中触发 self._process_group 方法。
-            self.timer = Timer(config.GROUP_TIMEOUT, self._process_group)
+            # 定时器现在的唯一职责是触发“提交任务到队列”这个轻量级动作。
+            self.timer = Timer(config.GROUP_TIMEOUT, self._submit_group_to_queue)
             self.timer.start()
+
+    def _submit_group_to_queue(self):
+        """
+        当定时器超时后，此方法被调用，负责将收集好的图片组作为一个任务放入队列。
+        """
+        with self.lock:
+            if not self.current_group:
+                return
+            group_to_submit = self.current_group.copy()
+            self.current_group.clear()
+
+        # task_queue.put() 是一个线程安全的操作，它将任务放入队列，供后台的工作线程领取。
+        self.task_queue.put(group_to_submit)
+        logger.info(f"超时! 包含 {len(group_to_submit)} 张图片的组已提交到处理队列。")
 
     def _move_file_with_retry(self, src: Path, dest: Path, retries=3, delay=0.5):
         """
         一个健壮的私有辅助方法，用于移动文件，并在失败时进行重试。
         这对于处理由外部程序（如OneDrive, Dropbox, 杀毒软件）造成的临时文件锁至关重要。
-
-        Args:
-            src (Path): 源文件路径。
-            dest (Path): 目标文件路径。
-            retries (int): 最大重试次数。
-            delay (float): 每次重试前的等待时间（秒）。
         """
         for i in range(retries):
             try:
@@ -84,12 +128,9 @@ class ImageGrouper:
                 logger.info(f"成功移动 '{src.name}' 到 '{dest.parent.name}' 文件夹。")
                 return True
             except FileNotFoundError:
-                # 这是一个“良性”错误，意味着用户可能在Agent处理期间手动重命名或移动了文件。
-                # 既然文件已不在原处，我们的清理目标已经达成，因此可以将其视为成功。
                 logger.warning(f"无法找到 '{src.name}' 进行移动。可能已被用户手动处理，此为正常情况。")
                 return True
             except Exception as e:
-                # 捕获其他所有IO异常，最常见的是'PermissionError'（文件被锁定）。
                 if i < retries - 1:
                     logger.warning(
                         f"移动 '{src.name}' 失败 (尝试 {i + 1}/{retries})，可能是文件被锁定。将在 {delay}s 后重试... 错误: {e}")
@@ -98,24 +139,11 @@ class ImageGrouper:
                     logger.error(f"在 {retries} 次尝试后，移动 '{src.name}' 仍然失败。错误: {e}")
                     return False
 
-    def _process_group(self):
+    def _execute_pipeline(self, group_to_process: List[Path]):
         """
-        核心处理方法，由定时器超时后在后台线程中触发。
-        负责执行完整的AI流水线和文件归档。
+        封装了完整的AI处理和归档流水线，现在由每个工作线程独立调用。
         """
-        # 再次使用锁，以确保在复制和清空列表时是原子操作。
-        with self.lock:
-            if not self.current_group:
-                return
-            # 关键操作：创建一个当前组的副本进行处理，然后立即清空原始组。
-            # 这使得在当前组被送去进行耗时的API调用时，新的截图可以立刻开始形成一个全新的组，互不干扰。
-            group_to_process = self.current_group.copy()
-            self.current_group.clear()
-            logger.info(f"超时! 开始处理包含 {len(group_to_process)} 张图片的组...")
-
         # --- 防并发处理锁机制 ---
-        # 为了防止IDE热重载等外部因素导致多个Agent实例同时处理同一组滞留文件，我们引入文件锁。
-        # 锁文件以第一张图片的干文件名命名，存放在solutions目录中。
         lock_file_name = f".{group_to_process[0].stem}.lock"
         lock_file_path = config.SOLUTION_DIR / lock_file_name
 
@@ -124,7 +152,6 @@ class ImageGrouper:
             return
 
         try:
-            # 创建锁文件，标志着处理开始。
             lock_file_path.touch()
 
             # --- 智能工作流开始 ---
@@ -135,38 +162,31 @@ class ImageGrouper:
             prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
             logger.info(f"步骤 2: 策略选择完成。使用 '{problem_type}' 类型的提示词。")
 
-            # 初始化变量，为后续归档做准备
             final_answer = None
-            transcribed_text = "N/A (视觉推理任务，无此步骤)"  # 为视觉推理提供默认文本
-            final_problem_type = problem_type  # 记录最终使用的问题类型
+            transcribed_text = "N/A (视觉推理任务，无此步骤)"
+            final_problem_type = problem_type
 
             # 步骤 3: 核心逻辑分流
             if problem_type == "VISUAL_REASONING":
-                # === 视觉推理路径 ===
-                # 直接调用Qwen-VL的多模态能力进行求解，跳过文字转录。
                 final_answer = qwen_client.solve_visual_problem(group_to_process, prompt_template)
 
             elif problem_type in ["CODING", "GENERAL"]:
-                # === 文本处理路径 ===
-                # 步骤 3.1: 对文本类问题进行文字转录
                 transcribed_text = qwen_client.transcribe_images(group_to_process)
                 if transcribed_text:
-                    # 步骤 3.2: 对编程题进行精细化分类
                     if problem_type == "CODING":
+                        # 步骤 3.2 (精细化): 基于代码规则进一步判断编程题类型
                         if "leetcode" in transcribed_text.lower():
                             final_problem_type = "LEETCODE"
                         else:
                             final_problem_type = "ACM"
                         logger.info(f"精细化分类：最终判断为 '{final_problem_type}' 模式。")
-                        # 根据精细化结果，更新提示词模板
                         prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
 
-                    # 步骤 4: 使用相应模板和转录文本，交由DeepSeek进行求解
+                    # 步骤 4: 交由DeepSeek求解
                     final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, prompt_template)
                 else:
                     logger.error("文字转录失败，中止本次工作流。")
 
-            # 检查最终结果
             if not final_answer:
                 logger.error("求解步骤失败，中止本次工作流。")
                 return
@@ -174,7 +194,6 @@ class ImageGrouper:
             # --- 结果归档 ---
             title = parse_title_from_response(final_answer)
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-
             if title:
                 filename = f"{timestamp}_{sanitize_filename(title)}.txt"
             else:
@@ -183,7 +202,6 @@ class ImageGrouper:
                 filename = f"{timestamp}_{base_name}_result.txt"
 
             solution_path = config.SOLUTION_DIR / filename
-
             with open(solution_path, 'w', encoding='utf-8') as f:
                 f.write(f"Processed Image Group:\n")
                 for img_path in group_to_process:
@@ -194,7 +212,6 @@ class ImageGrouper:
                 f.write("Transcribed Text by Qwen-VL:\n")
                 f.write(transcribed_text)
                 f.write("\n\n" + "=" * 50 + "\n\n")
-                # 根据分流，最终答案可能来自Qwen或DeepSeek，统一命名为"Final Solution"。
                 f.write("Final Solution:\n")
                 f.write(final_answer)
             logger.info(f"解答已成功保存至: {solution_path}")

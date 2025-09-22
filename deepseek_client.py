@@ -50,7 +50,7 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
     payload: ChatCompletionPayload = {
         "model": config.MODEL_NAME,
         "messages": [{"role": "user", "content": final_prompt}],
-        "max_tokens": 5000,
+        "max_tokens": 10000,
         "temperature": 0.7,
         "stream": False
     }
