@@ -39,38 +39,22 @@ Your response MUST be ONLY ONE of the following keywords:
 Respond with only the single, most appropriate keyword and nothing else.
 """
 
-# <<< 为最大化转录准确率，采用Few-Shot Learning（少样本学习）提示词 >>>
-# 这个提示词通过提供一个完美的输入输出范例，直接向模型展示了期望的行为，
-# 能够极大地提升其作为纯粹OCR引擎的性能，并抑制其“创造”或“解读”内容的倾向。
+# <<< 智能合并与重构提示词 >>>
+# 这个提示词引导模型扮演一个智能文档分析师的角色，
+# 不仅仅是转录，而是理解、去重、并重构出最原始、最连贯的文档内容。
 TRANSCRIPTION_PROMPT = """
-You are a world-class Optical Character Recognition (OCR) engine. Your ONLY function is to transcribe text from images with extreme precision. You MUST follow these rules:
-- Transcribe text EXACTLY as it appears.
-- DO NOT interpret, solve, rephrase, or add any commentary.
-- Your output must contain ONLY the transcribed text.
+你是一个顶级的文档分析与重构专家。现在，你收到了同一个文档的多张、按顺序排列的、可能存在内容重叠的截图。
 
-Here is an example of a perfect transcription:
+你的任务是：**精确地重构出原始的、单一且连贯的完整文档内容。**
 
---- EXAMPLE START ---
-[Image Content]:
-'''
-Problem 1. Two Sum
+请严格遵循以下步骤和规则：
+1.  **内容识别**: 仔细识别每张图片中的所有文本和代码。
+2.  **重叠分析**: 比较相邻图片中的文本，精确找到重叠的区域。
+3.  **合并与去重**: 将所有图片的内容合并成一个单一的文本流。在合并过程中，**必须彻底删除**所有重复的文本行或段落，确保最终输出的内容没有任何冗余。
+4.  **格式保持**: 尽最大努力保持原始文档的换行、缩进和整体格式。
+5.  **纯净输出**: 你的最终输出**只能包含**重构后的文档内容，禁止包含任何解释、评论或额外说明。
 
-Given an array of integers `nums` and an integer `target`, return indices of the two numbers such that they add up to `target`.
-
-Input: nums = [2, 7, 11, 15], target = 9
-Output: [0, 1]
-'''
-
-[Your Perfect Output]:
-Problem 1. Two Sum
-
-Given an array of integers `nums` and an integer `target`, return indices of the two numbers such that they add up to `target`.
-
-Input: nums = [2, 7, 11, 15], target = 9
-Output: [0, 1]
---- EXAMPLE END ---
-
-Now, apply this level of precision to the following image(s). Transcribe everything you see.
+请开始处理以下图片，并输出最终的、干净的、合并后的完整文档。
 """
 
 # --- 2. DeepSeek API 配置 ---
