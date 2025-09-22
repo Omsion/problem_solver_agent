@@ -6,7 +6,6 @@
 使得调整Agent的行为（如更换模型、修改指令、调整路径）无需触及核心业务逻辑代码，
 极大地提高了项目的可维护性和可扩展性。
 """
-
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -33,24 +32,45 @@ QWEN_MODEL_NAME = "qwen-vl-plus"  # 使用通义千问的视觉语言模型
 CLASSIFICATION_PROMPT = """
 Analyze the content of the image(s). Determine the type of problem presented.
 Your response MUST be ONLY ONE of the following keywords:
-
 - 'CODING': If the problem is a programming/coding challenge requiring a code solution.
-- 'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes, figures, or matrices, and choosing a correct option.
-- 'QUESTION_ANSWERING': If the problem is a standard question-answering task based on provided text or data (like data analysis, reading comprehension).
-- 'GENERAL': For any other text-based problem (e.g., logic puzzles without provided data).
-
+- 'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes, figures, or matrices.
+- 'QUESTION_ANSWERING': If the problem is a standard question-answering task based on provided text or data.
+- 'GENERAL': For any other text-based problem.
 Respond with only the single, most appropriate keyword and nothing else.
 """
 
-# 提示词 2: 图片转录 (Transcription Prompt)
-# 这个提示词的目标是让模型扮演一个高精度的OCR（光学字符识别）引擎。
-# 明确指示它“不要添加任何评论、解释或介绍性短语”，以获取最纯净的原始问题文本。
+# <<< 为最大化转录准确率，采用Few-Shot Learning（少样本学习）提示词 >>>
+# 这个提示词通过提供一个完美的输入输出范例，直接向模型展示了期望的行为，
+# 能够极大地提升其作为纯粹OCR引擎的性能，并抑制其“创造”或“解读”内容的倾向。
 TRANSCRIPTION_PROMPT = """
-Your task is to act as a highly accurate OCR engine. Analyze the following image(s) and transcribe all text content you see.
-- Transcribe the text in the order it appears across the images.
-- Preserve all original formatting, including mathematical formulas, symbols, code indentation, and line breaks.
-- Combine the text from all images into a single, seamless block of text.
-- Do not add any commentary, explanations, or introductory phrases. Output only the transcribed text.
+You are a world-class Optical Character Recognition (OCR) engine. Your ONLY function is to transcribe text from images with extreme precision. You MUST follow these rules:
+- Transcribe text EXACTLY as it appears.
+- DO NOT interpret, solve, rephrase, or add any commentary.
+- Your output must contain ONLY the transcribed text.
+
+Here is an example of a perfect transcription:
+
+--- EXAMPLE START ---
+[Image Content]:
+'''
+Problem 1. Two Sum
+
+Given an array of integers `nums` and an integer `target`, return indices of the two numbers such that they add up to `target`.
+
+Input: nums = [2, 7, 11, 15], target = 9
+Output: [0, 1]
+'''
+
+[Your Perfect Output]:
+Problem 1. Two Sum
+
+Given an array of integers `nums` and an integer `target`, return indices of the two numbers such that they add up to `target`.
+
+Input: nums = [2, 7, 11, 15], target = 9
+Output: [0, 1]
+--- EXAMPLE END ---
+
+Now, apply this level of precision to the following image(s). Transcribe everything you see.
 """
 
 # --- 2. DeepSeek API 配置 ---
@@ -61,7 +81,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_MODE = "reasoner"  # 可选 "reasoner" (思考模式) 或 "chat" (快速模式)
 MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deepseek-chat"
 # 增加API调用优化配置
-API_TIMEOUT = 300.0  # API调用超时时间（秒）
+API_TIMEOUT = 600.0  # API调用超时时间（秒）
 MAX_RETRIES = 3     # 最大重试次数
 RETRY_DELAY = 5     # 每次重试延迟
 
@@ -72,26 +92,20 @@ RETRY_DELAY = 5     # 每次重试延迟
 # - 'EXPLORATORY': AI将被引导提供一个非最优但逻辑正确、更易于理解的“次优解”，并附带优化思路，以增加答案的多样性和教学价值。
 SOLUTION_STYLE = "OPTIMAL"  # <-- 在这里修改 'OPTIMAL' 或 'EXPLORATORY'
 
-
-# --- 4. 提示词工程 (Prompt Engineering) for All Solvers ---
-# 这是一个“策略字典”，它将最终确定的问题类型映射到最优的、高度专业化的提示词模板。
-# 这是实现Agent能够根据不同问题类型给出不同格式答案的核心。
+# --- 4. 提示词工程 for Solvers (已包含容错指令) ---
 PROMPT_TEMPLATES = {
     # 策略一: 针对视觉推理题 (由Qwen-VL执行)
     # 采用了顶尖研究 'VisuRiddles' 的核心思想 (ref:https://arxiv.org/abs/2506.02537)，
     # 强制模型遵循“精细化感知 -> 抽象推理”的两步框架，显著提升复杂图形题的正确率。
     "VISUAL_REASONING": """
-你是一位顶级的逻辑推理专家，精通解决各类抽象视觉谜题。你的任务是严格遵循“精细化感知”和“抽象推理”两个步骤，来解决下面的图形推理问题。
-**问题图片:** (你正在观察图片)
+你是一位顶级的逻辑推理专家。请严格遵循“精细化感知”和“抽象推理”两个步骤，来解决下面的图形推理问题。
 ### 1. 精细化感知 (Fine-Grained Perception)
-*   **题干图形描述:** 逐一、详细地描述题干序列中的每一个图形。对于每个图形，请描述其核心组成元素、几何属性（如对称性、曲直、开闭）、元素数量和相对位置。
-*   **选项图形描述:** 逐一、详细地描述选项A, B, C, D中的每一个图形的核心特征。
+*   **题干图形描述:** 逐一、详细地描述题干序列和选项中的每一个图形。
 ### 2. 抽象推理与结论 (Abstract Reasoning & Conclusion)
 *   **规律寻找:** 分析你在“精细化感知”阶段描述的特征，找出题干图形序列中蕴含的核心规律。
-*   **应用规律:** 将你选择的最佳规律应用到序列中，推导出问号处应该具备什么样的特征。
-*   **匹配与决策:** 将你推导出的特征与“选项图形描述”进行匹配，明确指出哪个选项完全符合所有规律。
+*   **匹配与决策:** 将规律应用到选项中，明确指出哪个选项完全符合。
 ### 3. 最终答案
-明确指出哪个选项是正确答案，并用你最终选择的最佳规律简要重申核心理由。
+明确指出哪个选项是正确答案，并简要重申核心理由。
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文问题总结]' 的格式，为该问题生成一个适合用作文件名的标题。
 """,
@@ -99,18 +113,15 @@ PROMPT_TEMPLATES = {
     # 策略二: 针对直接问答题 (由DeepSeek执行)
     # 这个提示词高度聚焦和简化，避免了模型在简单计算题上“过度思考”或“角色扮演失控”的问题。
     "QUESTION_ANSWERING": """
-你是一个精准、高效的“信息提取与计算”机器人。你的唯一任务是根据提供的“问题文本”，直接、清晰地回答问题。
-你必须严格遵循下面指定的“三段式”结构进行回答。
+你是一个精准、高效的“信息提取与计算”机器人。请根据提供的“问题文本”，直接、清晰地回答问题。
 **问题文本:**
 ---
 {transcribed_text}
 ---
 ### 1. 计算过程
-*   **数据提取:** 清晰地列出解决问题所需的所有关键数据点。
-*   **计算公式:** 写出用于计算最终答案的数学公式。
-*   **代入计算:** 将提取的数据代入公式，并展示计算步骤。
+*   清晰地列出解决问题所需的关键数据、公式和计算步骤。
 ### 2. 最终答案
-明确地给出问题的最终选项和数值。
+*   明确地给出问题的最终答案。
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文问题总结]' 的格式，为该问题生成一个适合用作文件名的标题。
 """,
@@ -118,16 +129,14 @@ PROMPT_TEMPLATES = {
     # 策略三: 针对通用文字题 (由DeepSeek执行)
     "GENERAL": """
 你是一位逻辑严谨、善于分析问题的专家。请根据以下问题文本，提供一份详尽的解决方案。
-你必须严格遵循下面指定的“三段式”结构进行回答。
 **问题文本:**
 ---
 {transcribed_text}
 ---
 ### 1. 题目分析
-*   **核心思路:** 清晰地阐述解决这个问题的核心逻辑和思考过程。
-*   **步骤推理:** 一步步地详细拆解你的推理过程。
+*   阐述解决这个问题的核心逻辑和思考过程。
 ### 2. 最终答案
-明确地给出问题的最终答案。
+*   明确地给出问题的最终答案。
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文问题总结]' 的格式，为该问题生成一个适合用作文件名的标题。
 """,
@@ -135,75 +144,51 @@ PROMPT_TEMPLATES = {
     # 策略四: 针对LeetCode编程题 (由DeepSeek执行, 包含“思维链”和两种风格)
     "LEETCODE": {
         "OPTIMAL": """
-你是一位融合了顶尖算法导师和资深软件架构师双重身份的AI专家，以极度的严谨和对细节的关注而闻名。
-你的任务是为下面的LeetCode风格编程题目提供一份“超越标准答案”的深度教学式题解。
-你必须严格遵循下面指定的结构，在一次回答中完成所有分析和编码。
+你是一位顶级的算法专家和软件架构师。请为下面的LeetCode编程题提供一份高质量的教学式题解。
 
 **问题文本:**
 ---
 {transcribed_text}
 ---
 
-### 1. 需求分析 (Requirement Analysis)
-*   **核心任务:** 仔细阅读“问题文本”，明确指出本题的核心计算任务是什么？
-*   **输入/输出格式:** 详细描述输入数据的格式、约束条件以及输出结果的精确格式要求。
-*   **关键细节与边界:** 列出所有必须处理的特殊规则、数值格式要求或边界条件。
+为了保证题解的清晰性和完整性，我们推荐你的回答包含以下几个部分：
 
-### 2. 核心思路与算法选择
-*   **解题直觉与问题转化:** 基于完整的需求分析，用一两句话描述解决这个问题的直观想法，并说明这个问题的本质（例如：这是一个典型的滑动窗口问题，需要高效计算子数组的统计量）。
-*   **算法选型:** 分析并确定**时间与空间复杂度最优**的核心算法。解释为什么这是最优解。
-*   **复杂度分析:** 明确指出最优解法的时间和空间复杂度。
+### 1. 题目分析与核心思路
+*   首先，请准确概括这道题的核心要求。
+*   然后，阐述解决这个问题的最优算法思路，并解释其为何最优。
+*   最后，给出该算法的时间和空间复杂度。
 
-### 3. 备选方案与权衡分析 (Trade-offs)
-*   **备选方案:** 简要描述一到两种解决此问题的其他可行方法。
-*   **优劣对比:** 对比最优解和备选方案的优劣。
+### 2. 代码实现
+*   在 `Solution` 类中，提供完整、注释清晰的最优解Python代码。请确保代码100%符合题目的所有要求，包括所有细节和边界条件。
 
-### 4. 最优解Python代码实现 (LeetCode模式)
-在 `Solution` 类中提供一个完整、注释清晰、完全满足“需求分析”中所有细节的最优解Python代码。
-
-### 5. 代码逐行讲解
-对最优解代码中的关键部分进行详细讲解。
-
-### 6. 原创性与学习建议
-*   **关于原创性:** 明确指出这份代码是基于公开知识和最佳实践生成的标准解法。
-*   **学习建议:** 给出1-2条关于如何掌握此题背后知识点的学习建议。
+### 3. 学习建议
+*   提供1-2条关于掌握此题背后知识点的学习建议。
 
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文解法总结]' 的格式，为该题解生成一个适合用作文件名的标题。
 """,
         "EXPLORATORY": """
-你是一位聪明但经验尚浅的软件工程师，倾向于使用最直观、最易于理解的方法来解决问题。你的任务是为下面的LeetCode风格编程题目提供一份侧重于“思路清晰”的教学式题解。
-你必须严格遵循下面指定的结构，在一次回答中完成所有分析和编码。
+你是一位乐于助人的资深软件工程师，擅长用最直观易懂的方式讲解问题。请为下面的LeetCode编程题提供一份侧重于“思路清晰”的教学式题解。
 
-**重要约束：** 请优先使用列表、排序、循环等基础技巧。
+**重要约束：** 请优先使用循环、排序等基础技巧，避免使用过于复杂的算法。
 
 **问题文本:**
 ---
 {transcribed_text}
 ---
 
-### 1. 需求分析 (Requirement Analysis)
-*   **核心任务:** 仔细阅读“问题文本”，明确指出本题的核心计算任务是什么？
-*   **输入/输出格式:** 详细描述输入输出的精确格式要求。
-*   **关键细节与边界:** 列出所有必须处理的特殊规则或边界条件。
+为了帮助初学者理解，我们推荐你的回答包含以下几个部分：
 
-### 2. 核心思路与算法选择
-*   **解题直觉:** 描述解决这个问题最直接、最符合直觉的暴力或次优想法。
-*   **算法选型:** 基于上述直觉，设计一个**虽然可能不是最高效，但逻辑清晰、易于实现**的算法。
-*   **复杂度分析:** 分析这个次优解法的时间和空间复杂度。
+### 1. 题目分析与核心思路
+*   请用最直白的方式解释这道题要求我们做什么。
+*   然后，提出一个逻辑清晰、易于实现的解法思路。
+*   最后，分析这个解法的时间和空间复杂度。
 
-### 3. 更优方案探讨
-*   **可能的优化:** 简要提及存在一个或多个更优的解法。
+### 2. 代码实现
+*   在 `Solution` 类中，提供完整、注释清晰的、基于你上述“直觉”思路的Python代码。
 
-### 4. 次优解Python代码实现 (LeetCode模式)
-在 `Solution` 类中提供一个完整、注释清晰的、基于你上述“直觉”思路的Python代码实现。
-
-### 5. 代码逐行讲解
-对你的次优解代码进行详细讲解。
-
-### 6. 原创性与学习建议
-*   **关于原创性:** 明确指出这是一份为了教学和展示基础思路而构建的次优解。
-*   **学习建议:** 建议学习者在理解此解法后，主动去探索和实现更优的解决方案。
+### 3. 进阶思考
+*   简要提及可能存在的更优解法，为学习者指明优化方向。
 
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文次优解法总结]' 的格式，为该题解生成一个适合用作文件名的标题。
@@ -213,75 +198,47 @@ PROMPT_TEMPLATES = {
     # 策略五: 针对ACM编程题 (由DeepSeek执行, 包含“思维链”和两种风格)
     "ACM": {
         "OPTIMAL": """
-你是一位经验丰富的ACM竞赛金牌教练，以代码的绝对正确性和对题目细节的精确把握著称。
-你的任务是为下面的ACM/ICPC风格编程题目提供一份“从理解决赛”的深度教学式题解。
-你必须严格遵循下面指定的结构，在一次回答中完成所有分析和编码。
+你是一位经验丰富的ACM竞赛金牌教练，以代码的绝对正确性和对题目细节的精确把握著称。请为下面的ACM风格编程题目提供一份竞赛级的完整题解。
+**注意:** 以下问题文本由OCR工具从图片转录而来，可能存在少量识别错误。请运用你的专业知识和推理能力，理解其核心意图并解决问题。
 
 **问题文本:**
 ---
 {transcribed_text}
 ---
-
-### 1. 需求分析 (Requirement Analysis)
-*   **核心任务:** 仔细阅读“问题文本”，一字不差地明确本题要求计算并输出的所有内容。
-*   **输入/输出格式:** 精确描述输入数据的格式、所有变量的范围和约束，以及输出结果的精确格式要求（包括数值格式、四舍五入规则）。
-*   **特殊规则与边界:** 列出所有必须处理的特殊情况，例如空输入、数组长度小于窗口大小等。
-
-### 2. 核心思路与算法选择
-*   **问题转化:** 基于完整的需求分析，说明这个问题的本质是什么（例如：滑动窗口统计、动态规划模型等）。
-*   **算法选型:** 解释为什么选择某个特定算法来解决转化后的问题，以及它如何满足“需求分析”中明确的所有计算任务。
-*   **复杂度分析:** 明确指出最终解法的时间复杂度和空间复杂度，并评估是否能满足竞赛的时间限制。
-
-### 3. 备选方案与权衡分析 (Trade-offs)
-*   **备选方案:** 简要描述其他可能但也许会超时的解法（如暴力搜索）。
-*   **优劣对比:** 对比最优解和备选方案在竞赛场景下的优劣。
-
-### 4. 最优解Python代码实现 (可执行脚本模式)
-提供一份完整的、可独立运行的Python脚本，该脚本必须完全符合“需求分析”中明确的所有输入输出格式和计算逻辑。代码需包含高效的输入输出处理和清晰的注释。
-
-### 5. 代码逐行讲解
-对最优解代码中的关键部分，特别是数据解析、核心算法实现和输出格式化部分，进行详细讲解。
-
-### 6. 原创性与学习建议
-*   **关于原创性:** 明确指出这份代码是解决此类问题的经典模板或标准实现。
-*   **学习建议:** 给出1-2条关于提升此类问题解决能力的建议。
-
+为了保证题解的专业性和实用性，我们推荐你的回答包含以下几个部分：
+### 1. 题目分析与核心思路
+*   **需求提炼:** 首先，请精确地提炼出本题的所有计算任务、输入输出格式、数值精度要求和所有边界条件。
+*   **算法选型:** 接着，阐述解决此问题的最优算法，并解释它为什么能高效且正确地处理所有需求。
+*   **复杂度分析:** 最后，给出该算法的时间和空间复杂度。
+### 2. 最优解Python代码实现
+*   提供一份完整的、可直接在OJ系统提交的Python脚本。代码必须包含高效的输入输出处理，并完全符合题目的所有格式要求。
+### 3. 代码关键点讲解
+*   对代码中的核心算法、数据结构或关键处理逻辑进行简要讲解。
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文解法总结]' 的格式，为该题解生成一个适合用作文件名的标题。
 """,
         "EXPLORATORY": """
-你是一位正在备战区域赛的ACM队员，擅长用稳健、不易出错的基础算法解决问题。你的任务是为下面的ACM/ICPC风格编程题目提供一份侧重于“正确性优先”的题解。
-你必须严格遵循下面指定的结构，在一次回答中完成所有分析和编码。
+你是一位正在备战区域赛的ACM队员，擅长用稳健、不易出错的基础算法解决问题。请为下面的ACM风格编程题目提供一份侧重于“正确性优先”的题解。
 
-**重要约束：** 请优先使用排序、暴力搜索（如果时间允许）、基础动态规划等方法。
+**重要约束：** 请优先使用暴力搜索、排序等基础但可靠的方法。
 
 **问题文本:**
 ---
 {transcribed_text}
 ---
 
-### 1. 需求分析 (Requirement Analysis)
-*   **核心任务:** 仔细阅读“问题文本”，一字不差地明确本题要求计算并输出的所有内容。
-*   **输入/输出格式:** 精确描述输入输出格式、变量范围和数值格式要求。
-*   **特殊规则与边界:** 列出所有必须处理的特殊情况。
+为了确保解法的可靠性，我们推荐你的回答包含以下几个部分：
 
-### 2. 核心思路与算法选择
-*   **问题转化:** 基于完整的需求分析，说明这个问题的本质。
-*   **算法选型:** 设计一个**虽然可能不是最快，但正确性有保障、容易调试**的算法。
-*   **复杂度分析:** 分析该解法的时间和空间复杂度。
+### 1. 题目分析与核心思路
+*   **需求提炼:** 首先，请精确地提炼出本题的所有要求。
+*   **算法选型:** 提出一个虽然不一定最快，但逻辑清晰、确保能得到正确答案的算法思路。
+*   **复杂度分析:** 分析该解法的时间和空间复杂度，并评估是否可能超时。
 
-### 3. 更优方案探讨
-*   **可能的优化:** 简要提及为了在竞赛中稳定通过，可能需要采用的更高级的算法或数据结构。
+### 2. 次优解Python代码实现
+*   提供一份完整的、可独立运行的、基于你上述“稳健”思路的Python脚本。
 
-### 4. 次优解Python代码实现 (可执行脚本模式)
-提供一份完整的、可独立运行的、基于你上述“稳健”思路的Python脚本。
-
-### 5. 代码逐行讲解
-对你的次优解代码进行详细讲解。
-
-### 6. 原创性与学习建议
-*   **关于原创性:** 明确指出这是一份为了确保正确性而设计的、可能非最优的解法。
-*   **学习建议:** 鼓励学习者思考如何对该解法进行优化。
+### 3. 优化方向
+*   简要说明为了通过更严格的时间限制，可以从哪些方面进行优化。
 
 ---
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文次优解法总结]' 的格式，为该题解生成一个适合用作文件名的标题。

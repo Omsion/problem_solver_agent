@@ -19,9 +19,10 @@ from pathlib import Path
 from typing import List, Union, Dict, Any
 from typing_extensions import TypedDict
 from openai import OpenAI
+import base64
 
 import config
-from utils import setup_logger, encode_image_to_base64
+from utils import setup_logger, encode_image_to_base64, preprocess_image_for_ocr
 
 logger = setup_logger()
 
@@ -45,9 +46,16 @@ except Exception as e:
     qwen_client = None
 
 
-def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
+# <<< 重构核心API调用函数以支持选择性预处理 >>>
+def _call_qwen_api(image_paths: List[Path], prompt: str, use_preprocessing: bool = False) -> Union[str, None]:
     """
-    一个通用的私有辅助函数，封装了调用Qwen API的核心逻辑，以减少代码重复。
+    通用的Qwen-VL API调用函数，增加了图像预处理的开关。
+
+    Args:
+        image_paths (List[Path]): 待处理的图片路径列表。
+        prompt (str): 发送给模型的指令。
+        use_preprocessing (bool): 是否激活图像预处理。为True时，图片会先被增强再发送。
+                                  默认为False。
     """
     if not qwen_client:
         logger.error("Qwen-VL客户端未初始化，API调用中止。")
@@ -56,14 +64,26 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
     # 构建API请求体中的'content'部分，这是一个包含文本和多张图片的列表。
     content_payload = [{"type": "text", "text": prompt}]
     for image_path in image_paths:
-        base64_image = encode_image_to_base64(image_path)
+        base64_image = None
+        # 根据开关决定处理路径
+        if use_preprocessing:
+            logger.info(f"正在对图片应用OCR预处理: {image_path.name}")
+            processed_image_bytes = preprocess_image_for_ocr(image_path)
+            if processed_image_bytes:
+                # 对处理后的二进制数据进行Base64编码
+                base64_image = base64.b64encode(processed_image_bytes).decode('utf-8')
+        else:
+            # 保持原有逻辑，直接对原图进行编码
+            base64_image = encode_image_to_base64(image_path)
+
         if base64_image:
+            # 注意：预处理后我们保存为PNG，因此MIME类型统一为 image/png 以保证兼容性
             content_payload.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                "image_url": {"url": f"data:image/png;base64,{base64_image}"}
             })
         else:
-            logger.warning(f"跳过无法进行Base64编码的图片: {image_path}")
+            logger.warning(f"跳过无法处理的图片: {image_path}")
 
     if len(content_payload) <= 1:
         logger.error("没有有效的图片可发送至Qwen-VL。")
@@ -84,10 +104,11 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
 
 def classify_problem_type(image_paths: List[Path]) -> str:
     """
-    步骤 1: 调用Qwen-VL进行问题分类。
+    步骤 1: 问题分类。
+    该任务依赖宏观视觉信息，不应进行可能破坏整体布局的预处理。
     """
     logger.info("步骤 1: 正在进行问题类型分类...")
-    response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT)
+    response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT, use_preprocessing=False)
 
     # 对模型的返回结果进行严格校验，确保其在我们预设的分类中。
     valid_types = ["CODING", "VISUAL_REASONING", "QUESTION_ANSWERING", "GENERAL"]
@@ -102,16 +123,17 @@ def classify_problem_type(image_paths: List[Path]) -> str:
 
 def transcribe_images(image_paths: List[Path]) -> Union[str, None]:
     """
-    步骤 3.1: 调用Qwen-VL进行文字转录 (文本类问题路径)。
+    步骤 3.1: 文字转录。
+    这是最需要OCR准确率的环节，因此**激活图像预处理**。
     """
-    logger.info("步骤 3.1: 正在进行图片文字转录...")
-    return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT)
+    logger.info("步骤 3.1: 正在进行图片预处理和文字转录...")
+    return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT, use_preprocessing=True)
 
 
 def solve_visual_problem(image_paths: List[Path], prompt_template: str) -> Union[str, None]:
     """
-    步骤 3.2: 直接调用Qwen-VL进行视觉推理求解 (视觉类问题路径)。
+    步骤 3.2: 视觉推理求解。
+    该任务需要原始的图形、颜色和纹理信息，**严禁进行预处理**。
     """
     logger.info("步骤 3.2: 正在直接进行视觉推理求解...")
-    # 复用通用的API调用函数，但传入的是专门为视觉推理设计的提示词。
-    return _call_qwen_api(image_paths, prompt_template)
+    return _call_qwen_api(image_paths, prompt_template, use_preprocessing=False)
