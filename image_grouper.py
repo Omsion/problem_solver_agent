@@ -186,12 +186,14 @@ class ImageGrouper:
 
                     # 步骤 2.1 (规划阶段)
                     logger.info("步骤 2.1 (规划): 正在请求AI生成解题计划...")
-                    planning_prompt = config.PROMPT_TEMPLATES[final_problem_type].get("PLANNING_PROMPT")
-                    if not planning_prompt:
+                    planning_prompt_template = config.PROMPT_TEMPLATES[final_problem_type].get("PLANNING_PROMPT")
+                    if not planning_prompt_template:
                         logger.error("未找到规划提示词模板")
                         return
 
-                    solution_plan = deepseek_client.ask_deepseek_for_analysis(transcribed_text, planning_prompt)
+                    # Pass the template directly, not a string with format placeholders
+                    solution_plan = deepseek_client.ask_deepseek_for_analysis(transcribed_text,
+                                                                              planning_prompt_template)
                     if not solution_plan:
                         logger.error("生成解题计划失败，中止本次工作流。")
                         return
@@ -201,17 +203,14 @@ class ImageGrouper:
                     logger.info("步骤 2.2 (求解): 正在请求AI根据计划编写最终题解...")
                     style_prompt_template = config.PROMPT_TEMPLATES[final_problem_type][config.SOLUTION_STYLE]
 
-                    # 创建一个包含“计划”的、新的组合提示词
-                    combined_prompt = f"""
-                        {style_prompt_template}
-                        
-                        **重要参考：** 这是由架构师提供的实现计划，请在你的实现中遵循此计划。
-                        ---
-                        **实现计划:**
-                        {solution_plan}
-                        ---
-                        """
-                    final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, combined_prompt)
+                    # < New, safer way to combine prompts.
+                    # The new template has placeholders for both transcribed_text and solution_plan.
+                    # This ensures the model sees all information in a well-structured context.
+                    final_prompt = style_prompt_template.format(
+                        transcribed_text=transcribed_text,
+                        solution_plan=solution_plan
+                    )
+                    final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, final_prompt)
 
                 else:  # GENERAL 或 QUESTION_ANSWERING 类型
                     final_problem_type = problem_type
@@ -220,13 +219,16 @@ class ImageGrouper:
                     # 步骤 4: 交由DeepSeek求解
                     final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, prompt_template)
             else:
-                logger.error("文字转录失败，中止本次工作流。")
+                logger.error(
+                    f"未知的初始问题类型: {problem_type}，中止处理。")  # More specific error message
+                return
 
             # 检查最终结果
             if not final_answer:
                 logger.error("求解步骤失败，尝试使用备用方案...")
                 # 备用方案：直接使用简单提示词
-                backup_prompt = "请解决以下问题：\n" + transcribed_text
+                backup_prompt = "请仔细阅读并解决以下问题：\n" + transcribed_text
+                # Use the original text in the API call for the backup prompt
                 final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, backup_prompt)
 
                 if not final_answer:
