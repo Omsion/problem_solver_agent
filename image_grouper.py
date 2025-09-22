@@ -5,13 +5,12 @@ image_grouper.py - 图片分组处理器模块 (智能分流版)
 本文件是整个自动化Agent的核心调度器（Orchestrator）。它的主要职责包括：
 
 1.  **时间窗口分组**: 监听来自 file_monitor.py 的新图片事件，并将短时间内连续到达的图片智能地组合成一个“待处理组”。
-2.  **并发安全**: 使用线程锁（threading.Lock）确保在多线程环境下（文件事件和定时器事件）对共享数据（图片组列表）的访问是安全的。
+2.  **并发安全**: 使用线程锁（threading.Lock）确保在多线程环境下对共享数据（图片组列表）的访问是安全的。
 3.  **防重复处理**: 实现了一个基于文件的“处理锁”机制，防止因外部因素（如IDE热重载）导致的多实例并发执行，确保同一组图片永远只被处理一次。
 4.  **智能工作流**: 编排一个多分支的AI流水线：
     a. (Qwen-VL) 问题分类：判断题目是“编程”、“视觉”还是“通用”类型。
-    b. (Agent) 智能分流：根据分类结果，决定是进入“视觉推理”流程还是“文本处理”流程。
-    c. (Agent) 策略选择：在各自的流程中，选取最优的提示词模板。
-    d. (AI Models) 问题求解：调用相应的AI模型（Qwen或DeepSeek）来解决问题。
+    b. (Agent) 智能分流与策略选择：根据分类结果和代码规则，决定最终的处理路径和提示词模板，包括选择“最优”还是“次优”解法。
+    c. (AI Models) 问题求解：调用相应的AI模型（Qwen或DeepSeek）来解决问题。
 5.  **健壮的文件操作**: 在处理完图片后，使用带延时重试的机制将其归档，有效应对因云同步、杀毒软件等导致的临时性文件锁定问题。
 6.  **并行任务处理**: 采用生产者-消费者模式，将每个待处理的图片组作为一个独立任务放入线程安全的队列中，
     由一个或多个后台工作线程并行处理，解决了“新任务中断旧任务”的并发缺陷。
@@ -79,7 +78,8 @@ class ImageGrouper:
             # task_queue.get() 是一个阻塞操作。如果队列为空，线程会在此处“睡眠”，不消耗CPU资源，
             # 直到队列中有新任务被放入，线程才会被唤醒。
             group_to_process = self.task_queue.get()
-            logger.info(f"工作线程 {Path(__file__).name} 领取了一个新任务，包含 {len(group_to_process)} 张图片。")
+            thread_name = Path(__file__).name
+            logger.info(f"\n工作线程 {thread_name} 领取了一个新任务，包含 {len(group_to_process)} 张图片。")
             try:
                 # 调用我们已有的、健壮的流水线处理逻辑。
                 self._execute_pipeline(group_to_process)
@@ -155,38 +155,48 @@ class ImageGrouper:
             lock_file_path.touch()
 
             # --- 智能工作流开始 ---
-            # 步骤 1: AI进行问题分类
+            # 步骤 1: AI进行问题粗分类
             problem_type = qwen_client.classify_problem_type(group_to_process)
 
-            # 步骤 2: 策略选择
-            prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
-            logger.info(f"步骤 2: 策略选择完成。使用 '{problem_type}' 类型的提示词。")
-
+            # 初始化变量
             final_answer = None
             transcribed_text = "N/A (视觉推理任务，无此步骤)"
             final_problem_type = problem_type
+            prompt_template = None
 
-            # 步骤 3: 核心逻辑分流
+            # 步骤 2 & 3: 核心逻辑分流与策略选择
             if problem_type == "VISUAL_REASONING":
+                # === 视觉推理路径 ===
+                prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
+                logger.info(f"步骤 2: 策略选择完成。使用 '{problem_type}' 类型的提示词。")
                 final_answer = qwen_client.solve_visual_problem(group_to_process, prompt_template)
 
             elif problem_type in ["CODING", "GENERAL"]:
+                # === 文本处理路径 ===
                 transcribed_text = qwen_client.transcribe_images(group_to_process)
                 if transcribed_text:
                     if problem_type == "CODING":
-                        # 步骤 3.2 (精细化): 基于代码规则进一步判断编程题类型
+                        # 步骤 2.1 (精细化): 基于代码规则进一步判断编程题类型
                         if "leetcode" in transcribed_text.lower():
                             final_problem_type = "LEETCODE"
                         else:
                             final_problem_type = "ACM"
                         logger.info(f"精细化分类：最终判断为 '{final_problem_type}' 模式。")
+                        # 步骤 2.2 (风格选择): 根据配置选择最优或次优解法
+                        strategy_package = config.PROMPT_TEMPLATES.get(final_problem_type)
+                        prompt_template = strategy_package.get(config.SOLUTION_STYLE)
+                        logger.info(f"风格选择：采用 '{config.SOLUTION_STYLE}' 风格的提示词。")
+                    else:  # GENERAL类型
+                        final_problem_type = "GENERAL"
                         prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
+                        logger.info(f"步骤 2: 策略选择完成。使用 '{final_problem_type}' 类型的提示词。")
 
                     # 步骤 4: 交由DeepSeek求解
                     final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, prompt_template)
                 else:
                     logger.error("文字转录失败，中止本次工作流。")
 
+            # 检查最终结果
             if not final_answer:
                 logger.error("求解步骤失败，中止本次工作流。")
                 return
@@ -212,7 +222,9 @@ class ImageGrouper:
                 f.write("Transcribed Text by Qwen-VL:\n")
                 f.write(transcribed_text)
                 f.write("\n\n" + "=" * 50 + "\n\n")
-                f.write("Final Solution:\n")
+                # 统一命名为"Final Solution"，并附加上风格信息
+                style_info = f"(Style: {config.SOLUTION_STYLE})" if final_problem_type in ["LEETCODE", "ACM"] else ""
+                f.write(f"Final Solution {style_info}:\n")
                 f.write(final_answer)
             logger.info(f"解答已成功保存至: {solution_path}")
 
@@ -224,7 +236,6 @@ class ImageGrouper:
 
         finally:
             # 'finally'块确保无论处理流程是成功、失败还是中途退出，锁文件最终都会被尝试删除。
-            # 这是保证系统不会被永久锁住的关键。
             if lock_file_path.exists():
                 lock_file_path.unlink()
             logger.info(f"针对组 '{group_to_process[0].name}' 的处理流程结束，锁已释放。")
