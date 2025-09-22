@@ -127,7 +127,7 @@ def transcribe_images(image_paths: List[Path]) -> Union[str, None]:
     这是最需要OCR准确率的环节，因此**激活图像预处理**。
     """
     logger.info("步骤 3.1: 正在进行图片预处理和文字转录...")
-    return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT, use_preprocessing=True)
+    return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT, use_preprocessing=False)
 
 
 def solve_visual_problem(image_paths: List[Path], prompt_template: str) -> Union[str, None]:
