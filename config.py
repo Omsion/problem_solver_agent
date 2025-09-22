@@ -83,7 +83,7 @@ MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deep
 # 增加API调用优化配置
 API_TIMEOUT = 600.0  # API调用超时时间（秒）
 MAX_RETRIES = 3     # 最大重试次数
-RETRY_DELAY = 5     # 每次重试延迟
+RETRY_DELAY = 10     # 每次重试延迟
 
 # --- 3. 求解风格配置 ---
 # -------------------------------------------------------------------------------------

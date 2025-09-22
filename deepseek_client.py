@@ -52,7 +52,7 @@ def ask_deepseek_for_analysis(final_prompt: str) -> Union[str, None]:
     payload: ChatCompletionPayload = {
         "model": config.MODEL_NAME,
         "messages": [{"role": "user", "content": final_prompt}],
-        "max_tokens": 8000,
+        "max_tokens": 10000,
         "temperature": 0.7,
         "stream": False
     }
@@ -66,10 +66,7 @@ def ask_deepseek_for_analysis(final_prompt: str) -> Union[str, None]:
             logger.info(f"API请求尝试 {attempt + 1}/{max_retries}")
 
             # 添加请求超时控制
-            response = deepseek_client.chat.completions.create(
-                **payload,
-                timeout=config.API_TIMEOUT
-            )
+            response = deepseek_client.chat.completions.create(**payload)
 
             if response and response.choices:
                 answer = response.choices[0].message.content
