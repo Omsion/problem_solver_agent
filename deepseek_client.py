@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-deepseek_client.py - DeepSeek API Client (Text-Only Analysis)
+deepseek_client.py - DeepSeek API Client (Text-Only Analysis) - 优化版
 """
 
 from typing import Union, List, Dict, Any
 from typing_extensions import TypedDict, Literal
 from openai import OpenAI
+import time
+import requests
 
 import config
 from utils import setup_logger
@@ -24,20 +26,22 @@ class ChatCompletionPayload(TypedDict):
 try:
     if not config.DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY not found in .env file.")
+
+    # 增加超时和重试配置
     deepseek_client = OpenAI(
         api_key=config.DEEPSEEK_API_KEY,
-        base_url=config.DEEPSEEK_BASE_URL
+        base_url=config.DEEPSEEK_BASE_URL,
+        timeout=config.API_TIMEOUT,  # 增加超时时间
+        max_retries=config.MAX_RETRIES,  # 增加重试次数
     )
 except Exception as e:
     logger.critical(f"Failed to initialize DeepSeek client: {e}")
     deepseek_client = None
 
 
-# Function now accepts the prompt_template as an argument
 def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Union[str, None]:
     """
-    Step 4: Sends transcribed text to the DeepSeek API for analysis and solution
-    using a strategically selected prompt.
+    优化的DeepSeek API调用函数，增加错误处理和重试机制
     """
     if not deepseek_client:
         logger.error("DeepSeek client is not initialized. Aborting analysis.")
@@ -47,19 +51,67 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
 
     final_prompt = prompt_template.format(transcribed_text=transcribed_text)
 
+    # 优化的payload配置
     payload: ChatCompletionPayload = {
         "model": config.MODEL_NAME,
         "messages": [{"role": "user", "content": final_prompt}],
-        "max_tokens": 10000,
-        "temperature": 0.7,
+        "max_tokens": 8000,  # 减少token限制，避免超时
+        "temperature": 0.3,  # 降低随机性，提高稳定性
         "stream": False
     }
 
+    # 重试机制
+    max_retries = config.MAX_RETRIES
+    retry_delay = config.RETRY_DELAY  # 秒
+
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"API请求尝试 {attempt + 1}/{max_retries}")
+
+            # 添加请求超时控制
+            response = deepseek_client.chat.completions.create(**payload)
+
+            if response and response.choices:
+                answer = response.choices[0].message.content
+                if answer and len(answer.strip()) > 0:
+                    logger.info("Successfully received solution from DeepSeek.")
+                    return answer
+                else:
+                    logger.warning("Received empty response from DeepSeek.")
+            else:
+                logger.warning("Invalid response structure from DeepSeek.")
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"DeepSeek API timeout on attempt {attempt + 1}")
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"DeepSeek API connection error on attempt {attempt + 1}")
+        except Exception as e:
+            logger.error(f"DeepSeek API request failed on attempt {attempt + 1}: {e}")
+
+        # 如果不是最后一次尝试，等待后重试
+        if attempt < max_retries - 1:
+            logger.info(f"Waiting {retry_delay} seconds before retry...")
+            time.sleep(retry_delay)
+            retry_delay *= 2  # 指数退避
+
+    logger.error("All DeepSeek API attempts failed.")
+    return None
+
+
+# 添加API健康检查函数
+def check_deepseek_health() -> bool:
+    """检查DeepSeek API是否可用"""
+    if not deepseek_client:
+        return False
+
     try:
-        response = deepseek_client.chat.completions.create(**payload)
-        answer = response.choices[0].message.content
-        logger.info("Successfully received solution from DeepSeek.")
-        return answer
+        # 简单的测试请求
+        test_response = deepseek_client.chat.completions.create(
+            model=config.MODEL_NAME,
+            messages=[{"role": "user", "content": "Say 'hello'"}],
+            max_tokens=10
+        )
+        return test_response.choices[0].message.content.strip().lower() == "hello"
     except Exception as e:
-        logger.error(f"DeepSeek API request failed: {e}")
-        return None
+        logger.warning(f"DeepSeek health check failed: {e}")
+        return False

@@ -10,7 +10,8 @@ image_grouper.py - 图片分组处理器模块 (智能分流版)
 4.  **智能工作流**: 编排一个多分支的AI流水线：
     a. (Qwen-VL) 问题分类：判断题目是“编程”、“视觉”、“问答”还是“通用”类型。
     b. (Agent) 智能分流与策略选择：根据分类结果和代码规则，决定最终的处理路径和提示词模板，包括选择“最优”还是“次优”解法。
-    c. (AI Models) 问题求解：调用相应的AI模型（Qwen或DeepSeek）来解决问题。
+    c. (Agent) 思维链分解：对于复杂编程题，先让AI生成解题计划，再让其根据计划编写代码，化繁为简。
+    d. (AI Models) 问题求解：调用相应的AI模型（Qwen或DeepSeek）来解决问题。
 5.  **健壮的文件操作**: 在处理完图片后，使用带延时重试的机制将其归档，有效应对因云同步、杀毒软件等导致的临时性文件锁定问题。
 6.  **并行任务处理**: 采用生产者-消费者模式，将每个待处理的图片组作为一个独立任务放入线程安全的队列中，
     由一个或多个后台工作线程并行处理，解决了“新任务中断旧任务”的并发缺陷。
@@ -66,7 +67,9 @@ class ImageGrouper:
         while True:
             group_to_process = self.task_queue.get()
             thread_name = Path(__file__).name
-            logger.info(f"工作线程 {thread_name} 领取了一个新任务，包含 {len(group_to_process)} 张图片。")
+            logger.info(f"\n **********************************"
+                        f"工作线程 {thread_name} 领取了一个新任务，包含 {len(group_to_process)} 张图片。"
+                        f" **********************************")
             try:
                 self._execute_pipeline(group_to_process)
             except Exception as e:
@@ -134,52 +137,101 @@ class ImageGrouper:
         try:
             lock_file_path.touch()
 
+            # --- 健康检查 ---
+            if not deepseek_client.check_deepseek_health():
+                logger.error("DeepSeek API健康检查失败，跳过本次处理")
+                return
+
             # --- 智能工作流开始 ---
             # 步骤 1: AI进行问题粗分类
             problem_type = qwen_client.classify_problem_type(group_to_process)
+            logger.info(f"分类结果: {problem_type}")
 
             # 初始化变量
             final_answer = None
             transcribed_text = "N/A (视觉推理任务，无此步骤)"
             final_problem_type = problem_type
-            prompt_template = None
 
             # 步骤 2 & 3: 核心逻辑分流与策略选择
             if problem_type == "VISUAL_REASONING":
-                # === 视觉推理路径 ===
                 prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
+                if not prompt_template:
+                    logger.error(f"未找到 {problem_type} 类型的提示词模板")
+                    return
+
                 logger.info(f"步骤 2: 策略选择完成。使用 '{problem_type}' 类型的提示词。")
                 final_answer = qwen_client.solve_visual_problem(group_to_process, prompt_template)
 
             elif problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING"]:
-                # === 文本处理路径 ===
+                # --- 文本处理路径 ---
                 transcribed_text = qwen_client.transcribe_images(group_to_process)
-                if transcribed_text:
-                    if problem_type == "CODING":
-                        # 步骤 2.1 (精细化): 基于代码规则进一步判断编程题类型
-                        if "leetcode" in transcribed_text.lower():
-                            final_problem_type = "LEETCODE"
-                        else:
-                            final_problem_type = "ACM"
-                        logger.info(f"精细化分类：最终判断为 '{final_problem_type}' 模式。")
-                        # 步骤 2.2 (风格选择): 根据配置选择最优或次优解法
-                        strategy_package = config.PROMPT_TEMPLATES.get(final_problem_type)
-                        prompt_template = strategy_package.get(config.SOLUTION_STYLE)
-                        logger.info(f"风格选择：采用 '{config.SOLUTION_STYLE}' 风格的提示词。")
-                    else:  # GENERAL 或 QUESTION_ANSWERING 类型
-                        final_problem_type = problem_type
-                        prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
-                        logger.info(f"步骤 2: 策略选择完成。使用 '{final_problem_type}' 类型的提示词。")
+                if not transcribed_text:
+                    logger.error("文字转录失败，中止本次工作流。")
+                    return
 
+                logger.info(f"文字转录成功，长度: {len(transcribed_text)} 字符")
+
+                if problem_type == "CODING":
+                    # === 编程题的优化处理 ===
+                    if "leetcode" in transcribed_text.lower():
+                        final_problem_type = "LEETCODE"
+                    else:
+                        final_problem_type = "ACM"
+                    logger.info(f"精细化分类：最终判断为 '{final_problem_type}' 模式。")
+
+                    # 检查提示词模板是否存在
+                    if final_problem_type not in config.PROMPT_TEMPLATES:
+                        logger.error(f"未找到 {final_problem_type} 的提示词模板")
+                        return
+
+                    # 步骤 2.1 (规划阶段)
+                    logger.info("步骤 2.1 (规划): 正在请求AI生成解题计划...")
+                    planning_prompt = config.PROMPT_TEMPLATES[final_problem_type].get("PLANNING_PROMPT")
+                    if not planning_prompt:
+                        logger.error("未找到规划提示词模板")
+                        return
+
+                    solution_plan = deepseek_client.ask_deepseek_for_analysis(transcribed_text, planning_prompt)
+                    if not solution_plan:
+                        logger.error("生成解题计划失败，中止本次工作流。")
+                        return
+                    logger.info("解题计划生成成功。")
+
+                    # 步骤 2.2 (思维链第二步 - 求解): 让AI根据计划编写代码
+                    logger.info("步骤 2.2 (求解): 正在请求AI根据计划编写最终题解...")
+                    style_prompt_template = config.PROMPT_TEMPLATES[final_problem_type][config.SOLUTION_STYLE]
+
+                    # 创建一个包含“计划”的、新的组合提示词
+                    combined_prompt = f"""
+                        {style_prompt_template}
+                        
+                        **重要参考：** 这是由架构师提供的实现计划，请在你的实现中遵循此计划。
+                        ---
+                        **实现计划:**
+                        {solution_plan}
+                        ---
+                        """
+                    final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, combined_prompt)
+
+                else:  # GENERAL 或 QUESTION_ANSWERING 类型
+                    final_problem_type = problem_type
+                    prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
+                    logger.info(f"步骤 2: 策略选择完成。使用 '{final_problem_type}' 类型的提示词。")
                     # 步骤 4: 交由DeepSeek求解
                     final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, prompt_template)
-                else:
-                    logger.error("文字转录失败，中止本次工作流。")
+            else:
+                logger.error("文字转录失败，中止本次工作流。")
 
             # 检查最终结果
             if not final_answer:
-                logger.error("求解步骤失败，中止本次工作流。")
-                return
+                logger.error("求解步骤失败，尝试使用备用方案...")
+                # 备用方案：直接使用简单提示词
+                backup_prompt = "请解决以下问题：\n" + transcribed_text
+                final_answer = deepseek_client.ask_deepseek_for_analysis(transcribed_text, backup_prompt)
+
+                if not final_answer:
+                    logger.error("备用方案也失败，完全中止本次工作流。")
+                    return
 
             # --- 结果归档 ---
             title = parse_title_from_response(final_answer)
@@ -213,7 +265,13 @@ class ImageGrouper:
                 destination = config.PROCESSED_DIR / f"{img_path.stem}_{timestamp}{img_path.suffix}"
                 self._move_file_with_retry(img_path, destination)
 
+
+        except Exception as e:
+            logger.error(f"处理流水线发生未预期错误: {e}", exc_info=True)
+
         finally:
+
             if lock_file_path.exists():
                 lock_file_path.unlink()
-            logger.info(f"针对组 '{group_to_process[0].name}' 的处理流程结束，锁已释放。")
+
+            logger.info(f"针对组 '{group_to_process[0].name}' 的处理流程结束。")
