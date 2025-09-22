@@ -69,7 +69,10 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
             logger.info(f"API请求尝试 {attempt + 1}/{max_retries}")
 
             # 添加请求超时控制
-            response = deepseek_client.chat.completions.create(**payload)
+            response = deepseek_client.chat.completions.create(
+                **payload,
+                timeout=config.API_TIMEOUT  # 单个请求超时API_TIMEOUT秒
+            )
 
             if response and response.choices:
                 answer = response.choices[0].message.content
@@ -92,7 +95,7 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
         if attempt < max_retries - 1:
             logger.info(f"Waiting {retry_delay} seconds before retry...")
             time.sleep(retry_delay)
-            retry_delay *= 2  # 指数退避
+            retry_delay *= 1.5  # 指数退避
 
     logger.error("All DeepSeek API attempts failed.")
     return None
@@ -100,18 +103,26 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
 
 # 添加API健康检查函数
 def check_deepseek_health() -> bool:
-    """检查DeepSeek API是否可用"""
+    """检查DeepSeek API是否可用 - 修复版"""
     if not deepseek_client:
+        logger.error("DeepSeek客户端未初始化")
         return False
 
     try:
-        # 简单的测试请求
+        # 更简单的健康检查，只验证连接性
         test_response = deepseek_client.chat.completions.create(
             model=config.MODEL_NAME,
-            messages=[{"role": "user", "content": "Say 'hello'"}],
-            max_tokens=10
+            messages=[{"role": "user", "content": "回复'ok'"}],
+            max_tokens=5,
+            timeout=10.0  # 添加超时
         )
-        return test_response.choices[0].message.content.strip().lower() == "hello"
+        # 只要响应正常就返回True，不检查具体内容
+        if test_response and test_response.choices:
+            logger.info("DeepSeek API健康检查通过")
+            return True
+        else:
+            logger.warning("DeepSeek API响应结构异常")
+            return False
     except Exception as e:
-        logger.warning(f"DeepSeek health check failed: {e}")
+        logger.error(f"DeepSeek健康检查失败: {e}")
         return False

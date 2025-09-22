@@ -61,10 +61,9 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_MODE = "reasoner"  # 可选 "reasoner" (思考模式) 或 "chat" (快速模式)
 MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deepseek-chat"
 # 增加API调用优化配置
-API_TIMEOUT = 30.0  # API调用超时时间（秒）
+API_TIMEOUT = 300.0  # API调用超时时间（秒）
 MAX_RETRIES = 3     # 最大重试次数
 RETRY_DELAY = 5     # 每次重试延迟
-MAX_INPUT_LENGTH = 3000  # 最大输入文本长度
 
 # --- 3. 求解风格配置 ---
 # -------------------------------------------------------------------------------------
