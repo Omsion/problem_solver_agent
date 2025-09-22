@@ -25,44 +25,41 @@ class ChatCompletionPayload(TypedDict):
 
 try:
     if not config.DEEPSEEK_API_KEY:
-        raise ValueError("DEEPSEEK_API_KEY not found in .env file.")
+        raise ValueError("DEEPSEEK_API_key not found in .env file.")
 
     # 增加超时和重试配置
     deepseek_client = OpenAI(
         api_key=config.DEEPSEEK_API_KEY,
         base_url=config.DEEPSEEK_BASE_URL,
-        timeout=config.API_TIMEOUT,  # 增加超时时间
-        max_retries=config.MAX_RETRIES,  # 增加重试次数
+        timeout=config.API_TIMEOUT,
+        max_retries=config.MAX_RETRIES,
     )
 except Exception as e:
     logger.critical(f"Failed to initialize DeepSeek client: {e}")
     deepseek_client = None
 
 
-def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Union[str, None]:
+def ask_deepseek_for_analysis(final_prompt: str) -> Union[str, None]:
     """
-    优化的DeepSeek API调用函数，增加错误处理和重试机制
+    优化的DeepSeek API调用函数，直接接收最终提示词。
     """
     if not deepseek_client:
         logger.error("DeepSeek client is not initialized. Aborting analysis.")
         return None
 
-    logger.info("Step 4: Sending transcribed text to DeepSeek for solving...")
+    logger.info("Step 4: Sending final prompt to DeepSeek for solving...")
 
-    final_prompt = prompt_template.format(transcribed_text=transcribed_text)
-
-    # 优化的payload配置
     payload: ChatCompletionPayload = {
         "model": config.MODEL_NAME,
         "messages": [{"role": "user", "content": final_prompt}],
-        "max_tokens": 8000,  # 减少token限制，避免超时
-        "temperature": 0.3,  # 降低随机性，提高稳定性
+        "max_tokens": 8000,
+        "temperature": 0.7,
         "stream": False
     }
 
     # 重试机制
     max_retries = config.MAX_RETRIES
-    retry_delay = config.RETRY_DELAY  # 秒
+    retry_delay = config.RETRY_DELAY
 
     for attempt in range(max_retries):
         try:
@@ -71,7 +68,7 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
             # 添加请求超时控制
             response = deepseek_client.chat.completions.create(
                 **payload,
-                timeout=config.API_TIMEOUT  # 单个请求超时API_TIMEOUT秒
+                timeout=config.API_TIMEOUT
             )
 
             if response and response.choices:
@@ -95,7 +92,7 @@ def ask_deepseek_for_analysis(transcribed_text: str, prompt_template: str) -> Un
         if attempt < max_retries - 1:
             logger.info(f"Waiting {retry_delay} seconds before retry...")
             time.sleep(retry_delay)
-            retry_delay *= 1.5  # 指数退避
+            retry_delay *= 1.5
 
     logger.error("All DeepSeek API attempts failed.")
     return None
@@ -109,12 +106,11 @@ def check_deepseek_health() -> bool:
         return False
 
     try:
-        # 更简单的健康检查，只验证连接性
         test_response = deepseek_client.chat.completions.create(
             model=config.MODEL_NAME,
             messages=[{"role": "user", "content": "回复'ok'"}],
             max_tokens=5,
-            timeout=10.0  # 添加超时
+            timeout=10.0
         )
         # 只要响应正常就返回True，不检查具体内容
         if test_response and test_response.choices:
