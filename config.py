@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- 1. Qwen-VL (DashScope) API 配置 ---
-# 负责所有与“视觉”相关的任务，包括初步的问题分类和后续的图片文字转录。
+# 负责所有与“视觉”相关的任务，包括初步的问题分类和后续的图片文字转录/视觉推理。
 # -------------------------------------------------------------------------------------
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -24,18 +24,18 @@ QWEN_MODEL_NAME = "qwen-vl-plus"  # 使用通义千问的视觉语言模型
 
 # --- 提示词工程 (Prompt Engineering) for Qwen-VL ---
 
-# 提示词 1: 问题“粗分类” (Classification Prompt)
-# 这个提示词的目标是让模型充当一个精准的二元分类器，判断问题是否需要编程。
+# 提示词 1: 问题分类 (Classification Prompt)
+# 这个提示词的目标是让模型充当一个精准的三元分类器。
 # - 指令非常严格 ("MUST be ONLY ONE")，确保输出干净，便于程序解析。
-# - 使用英文关键词 ('CODING', 'GENERAL') 是一个刻意的设计选择，
-#   因为它们是明确的、无歧义的编程术语，可以避免因中文近义词带来的解析困难，
-#   让后续的逻辑判断更加稳定可靠。
+# - 使用英文关键词 ('CODING', 'VISUAL_REASONING', 'GENERAL') 是一个刻意的设计选择，
+#   因为它们是明确的、无歧义的编程术语，让后续的逻辑判断更加稳定可靠。
 CLASSIFICATION_PROMPT = """
-Analyze the content of the image(s). Determine if the problem is a programming/coding challenge or a general knowledge question.
+Analyze the content of the image(s). Determine the type of problem presented.
 Your response MUST be ONLY ONE of the following keywords:
 
-- 'CODING': If the problem requires writing an algorithm or a code solution.
-- 'GENERAL': If the problem is a multiple-choice, fill-in-the-blank, or any other non-coding question.
+- 'CODING': If the problem is a programming/coding challenge requiring a code solution.
+- 'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes, figures, or matrices, and choosing a correct option.
+- 'GENERAL': If the problem is a text-based multiple-choice, fill-in-the-blank, or logic question not covered by the above.
 
 Respond with only the single, most appropriate keyword and nothing else.
 """
@@ -52,19 +52,42 @@ Your task is to act as a highly accurate OCR engine. Analyze the following image
 """
 
 # --- 2. DeepSeek API 配置 ---
-# 负责所有与“思考”和“推理”相关的任务，即根据转录后的文本进行问题求解。
+# 负责所有基于文本的“思考”和“推理”任务，即对转录后的文本进行问题求解。
 # -------------------------------------------------------------------------------------
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_MODE = "reasoner"  # 可选 "reasoner" (思考模式) 或 "chat" (快速模式)
 MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deepseek-chat"
 
-# --- 提示词工程 (Prompt Engineering) for DeepSeek ---
+# --- 提示词工程 (Prompt Engineering) for All Solvers ---
 
 # 这是一个“策略字典”，它将最终确定的问题类型映射到最优的、高度专业化的提示词模板。
 # 这是实现Agent能够根据不同问题类型给出不同格式答案的核心。
 PROMPT_TEMPLATES = {
-    # 策略一: 针对通用问题（选择、填空、逻辑题等）
+    # 策略一: 针对视觉推理题 (由Qwen-VL执行)
+    "VISUAL_REASONING": """
+你是一位顶级的图形逻辑推理专家。你的任务是分析给出的图形序列，找出其中蕴含的规律，并从选项中选出正确答案。
+你必须严格遵循下面指定的“三段式”结构进行回答。
+
+**问题图片:**
+(你正在观察图片)
+
+### 1. 规律分析
+*   **观察对象:** 描述图形中变化的核心元素（例如：黑色方块的数量、位置、形状等）。
+*   **规律推导:** 详细阐述你从图形序列中发现的逻辑规律（例如：每次顺时针旋转90度、每步向上平移一格、对称变换等）。
+
+### 2. 应用规律并得出结论
+*   **应用推导:** 将你发现的规律应用到序列的最后一个图形，推导出问号处应该是什么样的图形。
+*   **匹配选项:** 将你推导出的结果与选项A, B, C, D进行仔细比对。
+
+### 3. 最终答案
+明确指出哪个选项是正确答案，并简要重申理由。
+
+---
+任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文问题总结]' 的格式，为该问题生成一个适合用作文件名的标题。
+""",
+
+    # 策略二: 针对通用问题（选择、填空、文字逻辑题等，由DeepSeek执行）
     "GENERAL": """
 你是一位逻辑严谨、善于分析问题的专家。请根据以下问题文本，提供一份详尽的解决方案。
 你必须严格遵循下面指定的“三段式”结构进行回答，并使用提供的Markdown标题。
@@ -85,7 +108,7 @@ PROMPT_TEMPLATES = {
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文问题总结]' 的格式，为该问题生成一个适合用作文件名的标题。
 """,
 
-    # 策略二: 针对LeetCode编程题
+    # 策略三: 针对LeetCode编程题 (由DeepSeek执行)
     # - 通过“角色扮演”（顶级的算法工程师）引导模型产出更专业的内容。
     # - 使用“强制性指令” (必须严格遵循) 和 “Markdown标题模板” (###) 来“硬化”格式约束，
     #   确保模型始终按我们期望的结构输出，解决了之前输出格式不稳定的问题。
@@ -112,7 +135,7 @@ PROMPT_TEMPLATES = {
 任务完成后，请另起一行，并严格遵循 'TITLE: [5-10个字的中文解法总结]' 的格式，为该题解生成一个适合用作文件名的标题。
 """,
 
-    # 策略三: 针对ACM及其他非LeetCode编程题
+    # 策略四: 针对ACM及其他非LeetCode编程题 (由DeepSeek执行)
     # - 这个提示词经过“泛化”和“强化”，使其具有高度适应性。
     # - 它指示模型“智能判断”输入形式：如果是标准IO，就写真正的ACM模式；
     #   如果是函数调用型（如此前遇到的Attention数学题），就在主程序块中演示，
@@ -169,10 +192,17 @@ GROUP_TIMEOUT = 15.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 # --- 5. 初始化功能 ---
+# -------------------------------------------------------------------------------------
 def initialize_directories():
+    """
+    一个辅助函数，在程序启动时自动检查并创建必要的文件夹。
+    这增强了程序的健壮性，使得用户在第一次运行时无需手动创建目录。
+    """
     print("正在初始化目录结构...")
     for dir_path in [PROCESSED_DIR, SOLUTION_DIR]:
         try:
+            # parents=True: 允许创建多层级的中间目录。
+            # exist_ok=True: 如果目录已经存在，则不会引发错误。
             dir_path.mkdir(parents=True, exist_ok=True)
             print(f"  - 目录 '{dir_path}' 已确认存在。")
         except OSError as e:
