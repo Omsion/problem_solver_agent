@@ -6,10 +6,10 @@ qwen_client.py - Qwen-VL (DashScope) API 客户端
 处理所有直接与图片内容理解相关的任务。它现在承担三项关键职责：
 
 1.  **问题分类 (classify_problem_type)**:
-    作为工作流的第一步，它对图片进行宏观分析，判断问题属于“编程题”、“视觉推理题”还是“通用文字题”中的哪一类。这个分类结果将决定后续整个处理流程。
+    作为工作流的第一步，它对图片进行宏观分析，判断问题属于“编程”、“视觉推理”、“问答”还是“通用文字”中的哪一类。这个分类结果将决定后续整个处理流程。
 
 2.  **文字转录 (transcribe_images)**:
-    对于文本密集型问题（编程题和通用题），它扮演高精度OCR的角色，将图片中的所有文字信息提取出来，为后续的文本分析模型做准备。
+    对于文本密集型问题，它扮演高精度OCR的角色，将图片中的所有文字信息提取出来，为后续的文本分析模型做准备。
 
 3.  **视觉求解 (solve_visual_problem)**:
     对于纯视觉的图形推理题，它将绕过文字转录，直接利用Qwen-VL的多模态能力，观察、推理并解答问题。
@@ -26,7 +26,6 @@ from utils import setup_logger, encode_image_to_base64
 logger = setup_logger()
 
 # 为了代码的健壮性和可读性，使用TypedDict为API的负载（payload）定义一个明确的数据结构。
-# 这可以帮助IDE进行类型检查，并解决了之前因模型名称不匹配而产生的警告。
 class VisionCompletionPayload(TypedDict):
     model: str
     messages: List[Dict[str, Any]]
@@ -70,14 +69,12 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
         logger.error("没有有效的图片可发送至Qwen-VL。")
         return None
 
-    # 使用TypedDict构建结构化的负载
     payload: VisionCompletionPayload = {
         "model": config.QWEN_MODEL_NAME,
         "messages": [{"role": "user", "content": content_payload}]
     }
 
     try:
-        # 使用kwargs解包(**payload)的方式传递参数，代码更简洁且能配合TypedDict进行类型检查。
         completion = qwen_client.chat.completions.create(**payload)
         return completion.choices[0].message.content.strip()
     except Exception as e:
@@ -87,18 +84,18 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
 
 def classify_problem_type(image_paths: List[Path]) -> str:
     """
-    步骤 1: 调用Qwen-VL进行“三元分类”。
-    返回 'CODING', 'VISUAL_REASONING', 或 'GENERAL'。
+    步骤 1: 调用Qwen-VL进行问题分类。
     """
     logger.info("步骤 1: 正在进行问题类型分类...")
     response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT)
 
     # 对模型的返回结果进行严格校验，确保其在我们预设的分类中。
-    if response and response in ["CODING", "VISUAL_REASONING", "GENERAL"]:
+    valid_types = ["CODING", "VISUAL_REASONING", "QUESTION_ANSWERING", "GENERAL"]
+    if response and response in valid_types:
         logger.info(f"分类成功，识别类型为: {response}")
         return response
 
-    # 如果分类失败或返回意外结果，提供一个安全的默认值'GENERAL'，保证程序流程的健壮性。
+    # 如果分类失败或返回意外结果，提供一个安全的默认值'GENERAL'，保证程序流程的健-壮性。
     logger.warning(f"分类失败或返回未知类型 ('{response}')。将默认视为 'GENERAL'。")
     return "GENERAL"
 
