@@ -152,7 +152,7 @@ def merge_transcribed_texts(texts: List[str]) -> str:
                 # 既然找到了完美的末尾-开头连接，这必定是我们想要的那个，可以直接跳出循环
                 break
 
-        MIN_OVERLAP_LENGTH = 20  # 最小重叠字符数，防止误判
+        MIN_OVERLAP_LENGTH = 10  # 最小重叠字符数，防止误判
 
         if best_overlap_size >= MIN_OVERLAP_LENGTH:
             # 1. 获取重叠部分的原始文本

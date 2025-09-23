@@ -20,7 +20,7 @@ class ChatCompletionPayload(TypedDict):
     messages: List[Dict[str, Any]]
     max_tokens: int
     temperature: float
-    stream: Literal[False]
+    stream: Literal[True]
 
 
 try:
@@ -63,7 +63,7 @@ def ask_deepseek_for_analysis(final_prompt: str, model_override: str = None) -> 
         "messages": [{"role": "user", "content": final_prompt}],
         "max_tokens": 8000,
         "temperature": 0.7,
-        "stream": False
+        "stream": True
     }
 
     # 重试机制
