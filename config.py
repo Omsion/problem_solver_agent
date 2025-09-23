@@ -20,7 +20,6 @@ from prompts import *
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
-# DASHSCOPE_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # API调用优化配置
 API_TIMEOUT = 600.0  # API调用超时时间（秒）
@@ -34,8 +33,8 @@ QWEN_MODEL_NAME = "qwen-vl-max"
 
 # --- 3. 文本润色模型配置 ---
 # 用于对OCR结果进行初步校对，建议使用速度较快的模型
-POLISHING_MODEL_PROVIDER = "deepseek"
-POLISHING_MODEL_NAME = "deepseek-chat"
+POLISHING_MODEL_PROVIDER = "deepseek" # 明确指定润色模型提供商
+POLISHING_MODEL_NAME = "deepseek-chat" # 明确指定润色模型名称
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 # 这是整个重构的核心。在这里选择你希望使用的最终求解模型。
@@ -91,4 +90,3 @@ def initialize_directories():
         except OSError as e:
             print(f"创建目录 '{dir_path}' 时发生错误: {e}")
             exit(1)
-
