@@ -134,7 +134,7 @@ class ImageGrouper:
         因为下游的DeepSeek模型有很强的上下文推理和纠错能力，可以修复小瑕疵。
         """
         thread_name = current_thread().name
-        if not text or len(text) < 10:  # 编程题的单张图片内容完整描述通常远超10字符
+        if not text or len(text) < 100:  # 编程题的单张图片内容完整描述通常远超100字符
             logger.error(
                 f"[{thread_name}] 转录质量检测失败: 文本为空或过短 (长度: {len(text)})。这表明OCR可能已完全失败。")
             return False

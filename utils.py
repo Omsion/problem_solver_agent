@@ -13,6 +13,7 @@ utils.py - 通用工具模块
 import base64
 import logging
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 import io
 from typing import List
@@ -113,8 +114,8 @@ def preprocess_image_for_ocr(image_path: Path) -> bytes:
 
 def merge_transcribed_texts(texts: List[str]) -> str:
     """
-    通过寻找相邻文本片段间的最长“后缀-前缀”重叠，将它们精确地合并成一个单一的字符串。
-    这是专门为滚动截图场景优化的合并算法。
+    通过寻找相邻文本片段间的最长连续匹配块（Longest Contiguous Matching Block），
+    将它们精确地合并成一个单一的字符串。此算法能有效抵抗OCR在边缘产生的噪音。
 
     Args:
         texts (List[str]): 按顺序排列的、从图片独立转录出的文本片段列表。
@@ -132,27 +133,38 @@ def merge_transcribed_texts(texts: List[str]) -> str:
         prev_text = merged_text
         curr_text = texts[i]
 
-        # 寻找 prev_text 的后缀 与 curr_text 的前缀 的最大重叠长度
-        max_overlap_len = 0
-        search_range = min(len(prev_text), len(curr_text), 500)  # 增加搜索范围上限，提升性能
+        # 使用 SequenceMatcher 寻找最长的匹配块
+        # isjunk=None 表示将每个字符都视为重要
+        matcher = SequenceMatcher(None, prev_text, curr_text, autojunk=False)
 
-        for length in range(search_range, 0, -1):
-            # 如果 prev_text 的最后 length 个字符 等于 curr_text 的前 length 个字符
-            if prev_text.endswith(curr_text[:length]):
-                max_overlap_len = length
-                # 日志中只显示一小部分锚点文本，避免刷屏
-                anchor_preview = curr_text[:length].replace('\n', '↵').strip()
-                if len(anchor_preview) > 40:
-                    anchor_preview = "..." + anchor_preview[-37:]
-                logger.info(f"找到长度为 {length} 的文本重叠，锚点: '{anchor_preview}'")
-                break
+        # find_longest_match(a_low, a_high, b_low, b_high)
+        # 我们只关心 prev_text 的后半部分 和 curr_text 的前半部分的匹配
+        match = matcher.find_longest_match(
+            len(prev_text) // 2, len(prev_text),
+            0, len(curr_text) // 2
+        )
 
-        # 将当前文本中不重叠的部分追加到结果中
-        if max_overlap_len > 0:
-            merged_text += curr_text[max_overlap_len:]
+        # --- 核心验证逻辑 ---
+        # 1. 匹配块必须足够长，以避免偶然的短文本巧合（例如都匹配了"的"）
+        # 2. 匹配块必须精确地接触到 prev_text 的末尾 (match.a + match.size == len(prev_text))
+        # 3. 匹配块必须精确地从 curr_text 的开头开始 (match.b == 0)
+        # 这三点共同定义了一个完美的“滚动截图重叠”
+        MIN_OVERLAP_LENGTH = 20  # 最小重叠字符数，可根据需要调整
+        if (match.a + match.size) == len(prev_text) and match.b == 0 and match.size >= MIN_OVERLAP_LENGTH:
+
+            anchor_preview = prev_text[match.a: match.a + match.size].replace('\n', '↵').strip()
+            if len(anchor_preview) > 40:
+                anchor_preview = "..." + anchor_preview[-37:]
+            logger.info(f"找到长度为 {match.size} 的有效重叠，锚点: '{anchor_preview}'")
+
+            # 只追加 curr_text 中不重叠的部分
+            merged_text += curr_text[match.size:]
         else:
-            # 如果完全没有重叠，添加一个换行符以示分隔，并追加全部内容
-            logger.warning("未找到重叠区域，将直接拼接文本。")
+            # 如果找不到有效的重叠，记录详细信息并直接拼接
+            logger.warning(
+                f"未找到有效重叠区域。最长匹配(size={match.size})在({match.a}, {match.b})，"
+                f"未满足“后缀-前缀”条件。将直接拼接文本。"
+            )
             merged_text += "\n" + curr_text
 
     return merged_text

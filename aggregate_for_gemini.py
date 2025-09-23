@@ -11,7 +11,6 @@ aggregate_for_gemini.py - 项目代码聚合脚本
 
 请将此脚本放置在项目根目录 (problem_solver_agent/) 下运行。
 """
-
 import os
 import sys
 from pathlib import Path
