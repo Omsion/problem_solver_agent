@@ -39,20 +39,29 @@ except Exception as e:
     deepseek_client = None
 
 
-def ask_deepseek_for_analysis(final_prompt: str) -> Union[str, None]:
+def ask_deepseek_for_analysis(final_prompt: str, model_override: str = None) -> Union[str, None]:
     """
-    优化的DeepSeek API调用函数，直接接收最终提示词。
+    优化的DeepSeek API调用函数，支持动态切换模型。
+
+    Args:
+        final_prompt (str): 发送给模型的最终提示词。
+        model_override (str, optional): 如果提供，则使用此模型名称覆盖配置文件中的默认模型。
+                                        默认为 None。
     """
     if not deepseek_client:
         logger.error("DeepSeek client is not initialized. Aborting analysis.")
         return None
 
-    logger.info("Step 4: Sending final prompt to DeepSeek for solving...")
+    # 决定本次API调用使用哪个模型
+    target_model = model_override if model_override else config.MODEL_NAME
+
+    # 在日志中明确记录正在使用的模型，便于调试
+    logger.info(f"Step 4: Sending final prompt to DeepSeek using model '{target_model}'...")
 
     payload: ChatCompletionPayload = {
-        "model": config.MODEL_NAME,
+        "model": target_model,  # <-- 使用动态决定的模型
         "messages": [{"role": "user", "content": final_prompt}],
-        "max_tokens": 10000,
+        "max_tokens": 8000,
         "temperature": 0.7,
         "stream": False
     }

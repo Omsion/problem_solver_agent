@@ -211,10 +211,14 @@ class ImageGrouper:
                     return
 
                 # ---  文本润色 ---
-                logger.info(f"[{thread_name}] 正在使用 deepseek-chat 对合并后的文本进行最终润色...")
+                logger.info(
+                    f"[{thread_name}] 正在使用快速模型({config.POLISHING_MODEL_NAME})对合并后的文本进行最终润色...")
                 polishing_prompt = config.TEXT_POLISHING_PROMPT.format(merged_text=transcribed_text)
-                polished_text = deepseek_client.ask_deepseek_for_analysis(polishing_prompt)
-
+                # 调用时，通过 model_override 参数指定使用润色专用模型
+                polished_text = deepseek_client.ask_deepseek_for_analysis(
+                    polishing_prompt,
+                    model_override=config.POLISHING_MODEL_NAME
+                )
                 if polished_text:
                     logger.info(f"[{thread_name}] 文本润色成功。")
                     transcribed_text = polished_text  # 使用润色后的版本

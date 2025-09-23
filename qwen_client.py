@@ -15,7 +15,7 @@ qwen_client.py - Qwen-VL (DashScope) API 客户端 (结构化重构版)
 3.  **视觉求解 (solve_visual_problem)**:
     对于纯视觉的图形推理题，它将绕过文字转录，直接利用Qwen-VL的多模态能力，观察、推理并解答问题。
 """
-
+import concurrent.futures
 from pathlib import Path
 from typing import List, Union, Dict, Any
 from typing_extensions import TypedDict
@@ -127,30 +127,41 @@ def classify_problem_type(image_paths: List[Path]) -> str:
 
 def transcribe_images(image_paths: List[Path]) -> Union[str, None]:
     """
-    【分治法 + 结构化识别】
-    Stage 1: 使用强大的 "qwen-vl-max" 和结构化提示词，独立、高精度地转录每一张图片。
-    Stage 2: 以编程方式，通过最优的滚动截图合并算法，确定性地合并转录后的文本。
+    【并行分治 + 结构化识别】
+    Stage 1: 使用线程池并行处理，独立、高精度地转录每一张图片。
+    Stage 2: 以编程方式，确定性地合并转录后的文本。
     """
-    logger.info("步骤 3.1: 启动“分治法”+“结构化识别”合并流程...")
+    logger.info("步骤 3.1: 启动“并行分治”+“结构化识别”合并流程...")
 
-    individual_transcriptions = []
+    individual_transcriptions = [None] * len(image_paths)
 
-    # --- Stage 1: 独立、高精度地转录每一张图片 ---
-    for i, image_path in enumerate(image_paths):
-        logger.info(f"  - 正在进行结构化转录，图片 {i + 1}/{len(image_paths)}: {image_path.name}...")
+    # --- Stage 1: 使用线程池并行转录每一张图片 ---
+    # 定义一个辅助函数，用于在线程中调用API
+    def transcribe_single_image(index_path_tuple):
+        index, image_path = index_path_tuple
+        logger.info(f"  - 开始并行转录，图片 {index + 1}/{len(image_paths)}: {image_path.name}...")
 
-        # 每次只调用一张图片，并禁用预处理，以保留表格/公式的完整视觉信息
-        single_image_text = _call_qwen_api([image_path], config.TRANSCRIPTION_PROMPT, use_preprocessing=False)
+        # 每次只调用一张图片，并禁用预处理
+        text = _call_qwen_api([image_path], config.TRANSCRIPTION_PROMPT, use_preprocessing=False)
 
-        if single_image_text:
-            individual_transcriptions.append(single_image_text)
+        if text:
+            logger.info(f"  - 成功完成并行转录，图片 {index + 1}/{len(image_paths)}。")
         else:
-            logger.error(f"    转录图片 {image_path.name} 失败，中止整个合并流程。")
-            return None
+            logger.error(f"  - 并行转录失败，图片 {index + 1}/{len(image_paths)}。")
+        return index, text
 
-    if not individual_transcriptions:
-        logger.error("所有图片均未能成功转录。")
-        return None
+    # 创建一个线程池来并行执行任务
+    # max_workers可以根据您的网络和CPU情况调整，4-8通常是比较合适的值
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        # 使用 executor.map 来保持原始顺序
+        # enumerate(image_paths) 会生成 (0, path1), (1, path2), ...
+        results = executor.map(transcribe_single_image, enumerate(image_paths))
+
+        for index, text in results:
+            if text is None:
+                logger.error(f"由于图片 {index + 1} 转录失败，整个合并流程中止。")
+                return None
+            individual_transcriptions[index] = text
 
     # --- Stage 2: 确定性的程序化合并 ---
     logger.info("所有图片独立转录完成，开始进行程序化文本合并...")

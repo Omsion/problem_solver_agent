@@ -83,6 +83,10 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_MODE = "reasoner"  # 可选 "reasoner" (思考模式) 或 "chat" (快速模式)
 MODEL_NAME = "deepseek-reasoner" if DEEPSEEK_MODEL_MODE == "reasoner" else "deepseek-chat"
+
+# ---为可选的文本润色步骤定义一个更快的模型 ---
+POLISHING_MODEL_NAME = "deepseek-chat"
+
 # 增加API调用优化配置
 API_TIMEOUT = 600.0  # API调用超时时间（秒）
 MAX_RETRIES = 2     # 最大重试次数
@@ -258,7 +262,7 @@ PROCESSED_DIR = ROOT_DIR / "processed"
 SOLUTION_DIR = ROOT_DIR / "solutions"
 
 # --- 6. Agent 行为配置 ---
-GROUP_TIMEOUT = 15.0
+GROUP_TIMEOUT = 8.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 # --- 7. 初始化功能 ---
