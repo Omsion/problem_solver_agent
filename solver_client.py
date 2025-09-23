@@ -98,6 +98,7 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
                     yield chunk.choices[0].delta.content
 
         else:
+            # 适用于 DeepSeek 和其他标准 OpenAI 接口的模型
             logger.info(f"使用标准模式调用模型: {model}")
             payload: StandardChatPayload = {"model": model, "messages": messages, "stream": True, "max_tokens": 8000,
                                             "temperature": 0.7}
@@ -111,6 +112,7 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
         yield f"\n\n--- ERROR ---\n{error_message}\n--- END ERROR ---\n"
 
 
+#  用于辅助任务的非流式调用函数
 def ask_for_analysis(prompt: str, provider: str, model: str) -> Union[str, None]:
     """
     对指定的模型进行一次非流式的API调用，并立即返回完整的文本结果。
@@ -137,6 +139,7 @@ def ask_for_analysis(prompt: str, provider: str, model: str) -> Union[str, None]
         return None
 
 
+# 统一的、动态的健康检查函数
 def check_solver_health() -> bool:
     """
     对当前在 config.py 中配置的核心求解器进行一次快速的健康检查。
