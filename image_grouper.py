@@ -210,6 +210,17 @@ class ImageGrouper:
                     self._write_failure_log(group_to_process, "The transcription/merge step failed and returned None.")
                     return
 
+                # ---  文本润色 ---
+                logger.info(f"[{thread_name}] 正在使用 deepseek-chat 对合并后的文本进行最终润色...")
+                polishing_prompt = config.TEXT_POLISHING_PROMPT.format(merged_text=transcribed_text)
+                polished_text = deepseek_client.ask_deepseek_for_analysis(polishing_prompt)
+
+                if polished_text:
+                    logger.info(f"[{thread_name}] 文本润色成功。")
+                    transcribed_text = polished_text  # 使用润色后的版本
+                else:
+                    logger.warning(f"[{thread_name}] 文本润色失败，将使用原始合并文本。")
+
                 # 防御 2: OCR质量检查防火墙
                 if not self._is_transcription_valid(transcribed_text):
                     self._write_failure_log(group_to_process, "Transcription quality check failed.", transcribed_text)

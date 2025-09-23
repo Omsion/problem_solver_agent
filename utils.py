@@ -133,38 +133,48 @@ def merge_transcribed_texts(texts: List[str]) -> str:
         prev_text = merged_text
         curr_text = texts[i]
 
-        # 使用 SequenceMatcher 寻找最长的匹配块
-        # isjunk=None 表示将每个字符都视为重要
         matcher = SequenceMatcher(None, prev_text, curr_text, autojunk=False)
 
-        # find_longest_match(a_low, a_high, b_low, b_high)
-        # 我们只关心 prev_text 的后半部分 和 curr_text 的前半部分的匹配
-        match = matcher.find_longest_match(
-            len(prev_text) // 2, len(prev_text),
-            0, len(curr_text) // 2
-        )
+        # 1. 获取所有匹配块。返回的是 Match(a, b, size) 的元组列表。
+        #    列表最后一项是虚拟块，我们用 [:-1] 将其忽略。
+        matching_blocks = matcher.get_matching_blocks()[:-1]
 
-        # --- 核心验证逻辑 ---
-        # 1. 匹配块必须足够长，以避免偶然的短文本巧合（例如都匹配了"的"）
-        # 2. 匹配块必须精确地接触到 prev_text 的末尾 (match.a + match.size == len(prev_text))
-        # 3. 匹配块必须精确地从 curr_text 的开头开始 (match.b == 0)
-        # 这三点共同定义了一个完美的“滚动截图重叠”
-        MIN_OVERLAP_LENGTH = 20  # 最小重叠字符数，可根据需要调整
-        if (match.a + match.size) == len(prev_text) and match.b == 0 and match.size >= MIN_OVERLAP_LENGTH:
+        best_overlap_size = 0
 
-            anchor_preview = prev_text[match.a: match.a + match.size].replace('\n', '↵').strip()
+        # 2. 寻找完美的“后缀-前缀”匹配块
+        #    我们需要找到一个匹配块，它同时满足：
+        #    a) 在 prev_text 的末尾结束
+        #    b) 在 curr_text 的开头开始
+        for match in matching_blocks:
+            # 检查是否是完美的“后缀-前缀”重叠
+            if (match.a + match.size) == len(prev_text) and match.b == 0:
+                best_overlap_size = match.size
+                # 既然找到了完美的末尾-开头连接，这必定是我们想要的那个，可以直接跳出循环
+                break
+
+        MIN_OVERLAP_LENGTH = 20  # 最小重叠字符数，防止误判
+
+        if best_overlap_size >= MIN_OVERLAP_LENGTH:
+            # 1. 获取重叠部分的原始文本
+            overlap_text = curr_text[:best_overlap_size]
+
+            # 2. 为了日志显示，将换行符替换为可见字符
+            anchor_preview = overlap_text.replace('\n', '↵')
+
+            # 3. 移除首尾可能存在的空白字符（如空格、制表符）
+            anchor_preview = anchor_preview.strip()
+
             if len(anchor_preview) > 40:
                 anchor_preview = "..." + anchor_preview[-37:]
-            logger.info(f"找到长度为 {match.size} 的有效重叠，锚点: '{anchor_preview}'")
+            logger.info(f"找到长度为 {best_overlap_size} 的有效重叠，锚点: '{anchor_preview}'")
 
             # 只追加 curr_text 中不重叠的部分
-            merged_text += curr_text[match.size:]
+            merged_text += curr_text[best_overlap_size:]
         else:
-            # 如果找不到有效的重叠，记录详细信息并直接拼接
             logger.warning(
-                f"未找到有效重叠区域。最长匹配(size={match.size})在({match.a}, {match.b})，"
-                f"未满足“后缀-前缀”条件。将直接拼接文本。"
+                f"未找到有效的“后缀-前缀”重叠（最长有效重叠: {best_overlap_size} < {MIN_OVERLAP_LENGTH}）。"
+                f"将直接拼接文本。"
             )
-            merged_text += "\n" + curr_text
+            merged_text += "\n\n" + curr_text  # 使用两个换行符以更清晰地区分不连续的部分
 
     return merged_text
