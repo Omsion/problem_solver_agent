@@ -2,12 +2,22 @@
 """
 solver_client.py - 统一求解器客户端
 
-核心设计思想：
-1.  **配置驱动**: 完全由 config.py 中的 `SOLVER_PROVIDER` 决定使用哪个模型。
-2.  **客户端缓存**: 为每个提供商创建一个单例的OpenAI客户端，避免重复初始化。
-3.  **统一接口**: `stream_solve` 函数是唯一的入口，无论底层模型是什么。
-4.  **智能适配与类型安全**: 内部构建特定类型的Payload，并使用有注释的
-   `# type: ignore` 来处理第三方库的类型限制，实现代码的清晰与正确。
+官方文档地址：
+https://api-docs.deepseek.com/zh-cn/
+https://help.aliyun.com/zh/model-studio/use-qwen-by-calling-api?spm=a2c4g.11186623.0.0.bdd47d9djnrCpq#f4514ce9072sb
+https://docs.bigmodel.cn/cn/guide/models/text/glm-4.5#python
+
+本模块是实现多模型灵活切换的核心。它抽象了与不同LLM提供商
+（如DeepSeek, DashScope, Zhipu AI）的交互细节，并向上层
+（image_grouper.py）提供一个统一的、流式的调用接口。
+
+V2.2 版本更新：
+- 根据最新的官方API文档，精确适配了 Zhipu GLM-4.5 和 DashScope Qwen3
+  模型的“深度思考”模式参数。
+- 增强了 TypedDict 定义，使其与各模型的特殊参数（如 `thinking` 和
+  `enable_thinking`）完全对齐。
+- 优化了 Zhipu 模型的流式处理逻辑，可以分别捕获并格式化输出
+  "思考过程 (reasoning_content)" 和最终内容。
 """
 from openai import OpenAI
 from typing import Generator, Dict, Any, List
@@ -24,11 +34,10 @@ _clients: Dict[str, OpenAI] = {}
 
 
 # --- API Payload 类型定义 ---
-# 使用 TypedDict 为不同模型的 API 请求体定义明确的、类型安全的数据结构。
-# 这样做可以让IDE和静态分析工具理解我们正在构建的数据，从而消除大部分类型警告。
+# 为不同模型的 API 请求体定义明确的、类型安全的数据结构。
 
 class StandardChatPayload(TypedDict):
-    """用于 DeepSeek, Qwen 等标准 OpenAI 兼容接口的请求体结构。"""
+    """用于 DeepSeek 等标准 OpenAI 兼容接口的请求体结构。"""
     model: str
     messages: List[Dict[str, Any]]
     stream: bool
@@ -37,7 +46,21 @@ class StandardChatPayload(TypedDict):
 
 
 class ZhipuChatPayload(TypedDict):
-    """用于智谱 GLM-4.5-pro 模型的请求体结构，包含了非标准的 extra_body 参数。"""
+    """
+    用于智谱 GLM-4.5 模型的请求体结构。
+    根据官方文档，通过 extra_body 传递 thinking 参数来启用深度思考。
+    """
+    model: str
+    messages: List[Dict[str, Any]]
+    stream: bool
+    extra_body: Dict[str, Any]
+
+
+class DashScopeChatPayload(TypedDict):
+    """
+    用于 DashScope Qwen3 系列模型的请求体结构。
+    根据官方文档，通过 extra_body 传递 enable_thinking 参数。
+    """
     model: str
     messages: List[Dict[str, Any]]
     stream: bool
@@ -47,7 +70,6 @@ class ZhipuChatPayload(TypedDict):
 def get_client(provider: str) -> OpenAI:
     """
     根据提供商名称，获取或创建一个缓存的OpenAI兼容客户端实例。
-    这是一个工厂函数，负责处理不同提供商的认证和端点配置。
     """
     if provider in _clients:
         return _clients[provider]
@@ -83,12 +105,6 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
     """
     根据全局配置，流式调用指定的LLM进行问题求解。
     这是一个生成器函数，会实时地 `yield` 模型生成的文本块。
-
-    Args:
-        final_prompt (str): 发送给模型的最终提示词。
-
-    Yields:
-        str: 模型生成的文本块 (chunk)。
     """
     provider = config.SOLVER_PROVIDER
     model = config.SOLVER_MODEL_NAME
@@ -100,28 +116,50 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
         messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
 
         # --- 模型专属参数处理 ---
-        if provider == 'zhipu' and model == 'glm-4.5-pro':
-            logger.info("检测到 GLM-4.5-Pro 模型，启用 'web_search' 工具。")
-
-            # 1. 构建一个符合 ZhipuChatPayload 类型的字典
+        if provider == 'zhipu' and model == 'glm-4.5':
+            logger.info("检测到 GLM-4.5 模型，启用深度思考模式。")
             payload: ZhipuChatPayload = {
                 "model": model,
                 "messages": messages,
                 "stream": True,
-                "extra_body": {"tools": [{"type": "web_search", "web_search": {"enable": True}}]}
+                # 根据智谱官方文档，启用深度思考模式
+                "extra_body": {
+                    "thinking": {"type": "enabled"}
+                }
             }
-
-            # 2. 使用 **payload 解包传入参数
             completion = client.chat.completions.create(**payload)  # type: ignore
 
+            # 特别处理 Zhipu 的流式输出，它包含 'reasoning_content' 和 'content'
+            is_answering = False
+            yield "\n" + "=" * 20 + " 思考过程 " + "=" * 20 + "\n"
+            for chunk in completion:
+                delta = chunk.choices[0].delta
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    yield delta.reasoning_content
+
+                if hasattr(delta, "content") and delta.content:
+                    if not is_answering:
+                        yield "\n\n" + "=" * 20 + " 完整回复 " + "=" * 20 + "\n\n"
+                        is_answering = True
+                    yield delta.content
+
+        elif provider == 'dashscope' and 'qwen3' in model:
+            logger.info(f"检测到 DashScope Qwen3 系列模型 ({model})，启用思考模式。")
+            payload: DashScopeChatPayload = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                # 根据通义千问官方文档，启用思考模式
+                "extra_body": {"enable_thinking": True}
+            }
+            completion = client.chat.completions.create(**payload)  # type: ignore
             for chunk in completion:
                 if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
 
         else:
-            # 适用于 DeepSeek, Qwen 等标准OpenAI流式接口的模型
-
-            # 1. 构建一个符合 StandardChatPayload 类型的字典
+            # 适用于 DeepSeek 和其他标准 OpenAI 接口的模型
+            logger.info(f"使用标准模式调用模型: {model}")
             payload: StandardChatPayload = {
                 "model": model,
                 "messages": messages,
@@ -129,10 +167,7 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
                 "max_tokens": 8000,
                 "temperature": 0.7,
             }
-
-            # 2. 使用 **payload 解包传入参数
             completion = client.chat.completions.create(**payload)  # type: ignore
-
             for chunk in completion:
                 if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
@@ -140,5 +175,4 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
     except Exception as e:
         error_message = f"调用模型 '{model}' 时发生严重错误: {e}"
         logger.error(error_message, exc_info=True)
-        # 将错误信息也通过流式接口返回，以便上层可以捕获并记录在最终文件中。
         yield f"\n\n--- ERROR ---\n{error_message}\n--- END ERROR ---\n"
