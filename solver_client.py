@@ -123,7 +123,7 @@ def ask_for_analysis(prompt: str, provider: str, model: str) -> Union[str, None]
             model=model,
             messages=[{"role": "user", "content": prompt}],
             stream=False,
-            temperature=0.2,
+            temperature=0.7,
             timeout=120.0
         )  # type: ignore
 

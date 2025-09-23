@@ -24,10 +24,10 @@ QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_MODEL_NAME = "qwen-vl-max"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
-# 【优化】: 统一配置用于文本合并、润色和标题生成的辅助模型。
-# GLM-4.5-Air 是一个速度快、性能强的优秀选择。
-AUX_PROVIDER = "zhipu"
-AUX_MODEL_NAME = "glm-4.5-air"
+# 统一配置用于文本合并、润色和标题生成的辅助模型。
+# GLM-4.5-Air 是一个速度快、性能强的优秀选择。或者deepseek_chat
+AUX_PROVIDER = "zhipu"  # deepseek or zhipu
+AUX_MODEL_NAME = "glm-4.5-air"  # deepseek-chat or glm-4.5-air
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 SOLVER_PROVIDER = "zhipu"
@@ -60,6 +60,7 @@ SOLUTION_DIR = ROOT_DIR / "solutions"
 # --- 7. Agent 行为配置 ---
 GROUP_TIMEOUT = 8.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
+
 
 # --- 8. 初始化功能 ---
 def initialize_directories():
