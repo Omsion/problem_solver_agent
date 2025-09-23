@@ -176,3 +176,35 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
         error_message = f"调用模型 '{model}' 时发生严重错误: {e}"
         logger.error(error_message, exc_info=True)
         yield f"\n\n--- ERROR ---\n{error_message}\n--- END ERROR ---\n"
+
+
+# 统一的、动态的健康检查函数
+def check_solver_health() -> bool:
+    """
+    对当前在 config.py 中配置的核心求解器进行一次快速的健康检查。
+    """
+    provider = config.SOLVER_PROVIDER
+    model = config.SOLVER_MODEL_NAME
+
+    logger.info(f"正在对当前求解器 '{provider}' ({model}) 进行健康检查...")
+
+    try:
+        client = get_client(provider)
+        test_response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "你好，请回复'OK'"}],
+            max_tokens=5,
+            temperature=0.1,
+            stream=False,  # 健康检查使用非流式，快速获取结果
+            timeout=20.0  # 为健康检查设置一个较短的超时
+        )  # type: ignore
+
+        if test_response and test_response.choices and test_response.choices[0].message.content:
+            logger.info(f"健康检查成功，收到回复: {test_response.choices[0].message.content.strip()}")
+            return True
+        else:
+            logger.warning("健康检查失败: API响应结构异常。")
+            return False
+    except Exception as e:
+        logger.error(f"健康检查失败: 调用API时发生异常: {e}")
+        return False
