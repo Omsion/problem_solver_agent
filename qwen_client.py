@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-qwen_client.py - Qwen-VL (DashScope) API 客户端
+qwen_client.py - Qwen-VL (DashScope) API 客户端 (结构化重构版)
 
 本模块是Agent的“视觉中枢”，利用通义千问视觉语言模型（Qwen-VL）的强大能力，
 处理所有直接与图片内容理解相关的任务。它现在承担三项关键职责：
@@ -9,7 +9,8 @@ qwen_client.py - Qwen-VL (DashScope) API 客户端
     作为工作流的第一步，它对图片进行宏观分析，判断问题属于“编程”、“视觉推理”、“问答”还是“通用文字”中的哪一类。这个分类结果将决定后续整个处理流程。
 
 2.  **文字转录 (transcribe_images)**:
-    对于文本密集型问题，它扮演高精度OCR的角色，将图片中的所有文字信息提取出来，为后续的文本分析模型做准备。
+    对于文本密集型问题，它扮演高精度OCR和文档重构的角色。通过使用增强后的`TRANSCRIPTION_PROMPT`，
+    它能将多张图片中的所有内容（包括表格和公式）提取并智能合并成一份结构化的文本，为后续的文本分析模型做准备。
 
 3.  **视觉求解 (solve_visual_problem)**:
     对于纯视觉的图形推理题，它将绕过文字转录，直接利用Qwen-VL的多模态能力，观察、推理并解答问题。
@@ -22,7 +23,7 @@ from openai import OpenAI
 import base64
 
 import config
-from utils import setup_logger, encode_image_to_base64, preprocess_image_for_ocr
+from utils import setup_logger, encode_image_to_base64, preprocess_image_for_ocr, merge_transcribed_texts
 
 logger = setup_logger()
 
@@ -30,6 +31,8 @@ logger = setup_logger()
 class VisionCompletionPayload(TypedDict):
     model: str
     messages: List[Dict[str, Any]]
+    # 增加 max_tokens 以处理长文档
+    max_tokens: int
 
 # --- Qwen-VL 客户端的单例初始化 ---
 # 将客户端的初始化放在模块级别，可以确保在整个程序运行期间只创建一个实例，
@@ -91,7 +94,8 @@ def _call_qwen_api(image_paths: List[Path], prompt: str, use_preprocessing: bool
 
     payload: VisionCompletionPayload = {
         "model": config.QWEN_MODEL_NAME,
-        "messages": [{"role": "user", "content": content_payload}]
+        "messages": [{"role": "user", "content": content_payload}],
+        "max_tokens": 8192 # 增加token上限以应对复杂的结构化文档
     }
 
     try:
@@ -123,11 +127,37 @@ def classify_problem_type(image_paths: List[Path]) -> str:
 
 def transcribe_images(image_paths: List[Path]) -> Union[str, None]:
     """
-    步骤 3.1: 文字转录。
-    这是最需要OCR准确率的环节，因此**激活图像预处理**。
+    【分治法 + 结构化识别】
+    Stage 1: 使用强大的 "qwen-vl-max" 和结构化提示词，独立、高精度地转录每一张图片。
+    Stage 2: 以编程方式，通过最优的滚动截图合并算法，确定性地合并转录后的文本。
     """
-    logger.info("步骤 3.1: 正在进行图片预处理和文字转录...")
-    return _call_qwen_api(image_paths, config.TRANSCRIPTION_PROMPT, use_preprocessing=False)
+    logger.info("步骤 3.1: 启动“分治法”+“结构化识别”合并流程...")
+
+    individual_transcriptions = []
+
+    # --- Stage 1: 独立、高精度地转录每一张图片 ---
+    for i, image_path in enumerate(image_paths):
+        logger.info(f"  - 正在进行结构化转录，图片 {i + 1}/{len(image_paths)}: {image_path.name}...")
+
+        # 每次只调用一张图片，并禁用预处理，以保留表格/公式的完整视觉信息
+        single_image_text = _call_qwen_api([image_path], config.TRANSCRIPTION_PROMPT, use_preprocessing=False)
+
+        if single_image_text:
+            individual_transcriptions.append(single_image_text)
+        else:
+            logger.error(f"    转录图片 {image_path.name} 失败，中止整个合并流程。")
+            return None
+
+    if not individual_transcriptions:
+        logger.error("所有图片均未能成功转录。")
+        return None
+
+    # --- Stage 2: 确定性的程序化合并 ---
+    logger.info("所有图片独立转录完成，开始进行程序化文本合并...")
+    final_text = merge_transcribed_texts(individual_transcriptions)
+    logger.info("文本合并成功！")
+
+    return final_text
 
 
 def solve_visual_problem(image_paths: List[Path], prompt_template: str) -> Union[str, None]:

@@ -134,7 +134,7 @@ class ImageGrouper:
         因为下游的DeepSeek模型有很强的上下文推理和纠错能力，可以修复小瑕疵。
         """
         thread_name = current_thread().name
-        if not text or len(text) < 100:  # 编程题的完整描述通常远超100字符
+        if not text or len(text) < 10:  # 编程题的单张图片内容完整描述通常远超10字符
             logger.error(
                 f"[{thread_name}] 转录质量检测失败: 文本为空或过短 (长度: {len(text)})。这表明OCR可能已完全失败。")
             return False
@@ -204,12 +204,19 @@ class ImageGrouper:
             elif problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING"]:
                 transcribed_text = qwen_client.transcribe_images(group_to_process)
 
+                # 在调用质量检查之前，先确认转录步骤本身是否成功
+                if transcribed_text is None:
+                    logger.error(f"[{thread_name}] 文字转录（智能合并）步骤本身失败，返回了None值，任务中止。")
+                    self._write_failure_log(group_to_process, "The transcription/merge step failed and returned None.")
+                    return
+
                 # 防御 2: OCR质量检查防火墙
                 if not self._is_transcription_valid(transcribed_text):
                     self._write_failure_log(group_to_process, "Transcription quality check failed.", transcribed_text)
                     return
 
-                logger.info(f"[{thread_name}] 文字转录成功，长度: {len(transcribed_text)} 字符")
+                logger.info(f"[{thread_name}] 文字转录成功，长度: {len(transcribed_text)} 字符,"
+                            f"\ntranscribed_text:'{transcribed_text}'")
 
                 # 细化分类
                 if problem_type == "CODING":

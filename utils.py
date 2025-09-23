@@ -15,6 +15,8 @@ import logging
 import re
 from pathlib import Path
 import io
+from typing import List
+
 from PIL import Image, ImageEnhance, ImageFilter
 
 
@@ -107,3 +109,50 @@ def preprocess_image_for_ocr(image_path: Path) -> bytes:
     except Exception as e:
         logger.error(f"预处理图片 '{image_path.name}' 时发生严重错误: {e}")
         return None
+
+
+def merge_transcribed_texts(texts: List[str]) -> str:
+    """
+    通过寻找相邻文本片段间的最长“后缀-前缀”重叠，将它们精确地合并成一个单一的字符串。
+    这是专门为滚动截图场景优化的合并算法。
+
+    Args:
+        texts (List[str]): 按顺序排列的、从图片独立转录出的文本片段列表。
+
+    Returns:
+        str: 合并、去重后的完整文本。
+    """
+    if not texts:
+        return ""
+
+    logger = setup_logger()
+    merged_text = texts[0]
+
+    for i in range(1, len(texts)):
+        prev_text = merged_text
+        curr_text = texts[i]
+
+        # 寻找 prev_text 的后缀 与 curr_text 的前缀 的最大重叠长度
+        max_overlap_len = 0
+        search_range = min(len(prev_text), len(curr_text), 500)  # 增加搜索范围上限，提升性能
+
+        for length in range(search_range, 0, -1):
+            # 如果 prev_text 的最后 length 个字符 等于 curr_text 的前 length 个字符
+            if prev_text.endswith(curr_text[:length]):
+                max_overlap_len = length
+                # 日志中只显示一小部分锚点文本，避免刷屏
+                anchor_preview = curr_text[:length].replace('\n', '↵').strip()
+                if len(anchor_preview) > 40:
+                    anchor_preview = "..." + anchor_preview[-37:]
+                logger.info(f"找到长度为 {length} 的文本重叠，锚点: '{anchor_preview}'")
+                break
+
+        # 将当前文本中不重叠的部分追加到结果中
+        if max_overlap_len > 0:
+            merged_text += curr_text[max_overlap_len:]
+        else:
+            # 如果完全没有重叠，添加一个换行符以示分隔，并追加全部内容
+            logger.warning("未找到重叠区域，将直接拼接文本。")
+            merged_text += "\n" + curr_text
+
+    return merged_text
