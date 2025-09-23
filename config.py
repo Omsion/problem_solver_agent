@@ -39,22 +39,22 @@ POLISHING_MODEL_NAME = "deepseek-chat" # 明确指定润色模型名称
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 # 这是整个重构的核心。在这里选择你希望使用的最终求解模型。
 # 可选的提供商: "deepseek", "dashscope", "zhipu"
-SOLVER_PROVIDER = "deepseek"  # <-- 在这里切换模型提供商
+SOLVER_PROVIDER = "zhipu"  # <-- 在这里切换模型提供商
 
 # --- 为每个提供商定义具体的模型和API端点 ---
 SOLVER_CONFIG = {
     "deepseek": {
-        "model": "deepseek-coder", # 或者 "deepseek-reasoner"
+        "model": "deepseek-reasoner", # 或者 "deepseek-reasoner"
         "base_url": "https://api.deepseek.com/v1"
     },
     "dashscope": {
-        # 使用通义千问的 Qwen3-Coder-Plus 模型
-        "model": "qwen2-72b-instruct",
+        # 使用通义千问的 Qwen3-Coder-Plus 模型 https://help.aliyun.com/zh/model-studio/models
+        "model": "qwen3-max-preview",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
     },
     "zhipu": {
-        # 使用智谱的 GLM-4.5-Pro 模型
-        "model": "glm-4.5-pro",
+        # 使用智谱的 GLM-4.5 模型
+        "model": "glm-4.5",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/"
     }
 }
