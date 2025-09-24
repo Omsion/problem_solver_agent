@@ -30,15 +30,15 @@ PERFECT_CODE_MODE = True
 HIDE_MOUSE_CURSOR = True
 
 # --- 核心行为配置 (仅在 PERFECT_CODE_MODE = False 时生效) ---
-ERROR_RATE = 0.08
+ERROR_RATE = 0.2
 # BACKSPACE_CHANCE 已被移除，因为现在所有错误都将被100%修正。
 
 # --- 打字速度与节奏配置 (始终生效) ---
-MIN_TYPING_DELAY = 0.03
-MAX_TYPING_DELAY = 0.12
-PAUSE_CHANCE = 0.04
+MIN_TYPING_DELAY = 0.1
+MAX_TYPING_DELAY = 0.4
+PAUSE_CHANCE = 0.3
 MIN_PAUSE_DURATION = 0.5
-MAX_PAUSE_DURATION = 1.2
+MAX_PAUSE_DURATION = 1.5
 
 # ==============================================================================
 # --- 键盘布局定义 ---
