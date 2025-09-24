@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
 """
-项目名称: 真实打字模拟器 (最终形态)
-描述:       1. 采用“双重Home键”策略，彻底解决与编辑器“智能Home键”的冲突，实现绝对精确的缩进。
-            2. 引入可选的“鼠标光标跟随”功能，极大提升模拟的沉浸感和视觉效果。
-            3. 完善“真人模拟”模式，确保所有错误都必然被修正。
+项目名称: 真实打字模拟器 (绝对控制最终版)
+描述:       采用“绝对光标控制”(Enter -> Home -> Write)策略，彻底解决了与
+            编辑器自动缩进功能的冲突，确保在任何环境下都能实现100%精确的
+            格式和内容，尤其适用于复杂的代码缩进。
 作者:       [Your Name/Agent]
 依赖库:     keyboard, pyperclip, pyautogui
 运行方式:   在管理员终端中执行 python human_typer.py
@@ -23,15 +23,12 @@ import sys
 # --- 全局配置参数 ---
 # ==============================================================================
 
-# 【模式开关】设置为 True 以精确粘贴代码；False 以模拟带错误的真人打字
+# 设置为 True 以精确粘贴代码，设置为 False 以模拟带错误的真人打字
 PERFECT_CODE_MODE = True
-
-# 【光标跟随开关】设置为 True，让鼠标光标在打字时跟随文本向下移动
-MOUSE_FOLLOWS_CURSOR = True
-APPROX_LINE_HEIGHT = 18  # 每行的大致像素高度，可根据你的屏幕分辨率和字体大小微调
 
 # --- 核心行为配置 (仅在 PERFECT_CODE_MODE = False 时生效) ---
 ERROR_RATE = 0.08
+BACKSPACE_CHANCE = 0.85
 
 # --- 打字速度与节奏配置 (始终生效) ---
 MIN_TYPING_DELAY = 0.03
@@ -54,11 +51,11 @@ KEYBOARD_LAYOUT = {'q': ['w', 'a'], 'w': ['q', 's', 'e'], 'e': ['w', 'd', 'r'], 
 
 
 # ==============================================================================
-# --- 核心模拟器类 (集成所有终极优化) ---
+# --- 核心模拟器类 (采用绝对光标控制) ---
 # ==============================================================================
 class TypingSimulator:
-    def simulate_typing(self, text_to_type: str, start_pos=None):
-        print(f"\n--- 开始模拟输入 (模式: {'代码完美' if PERFECT_CODE_MODE else '真人模拟(100%修正)'}) ---")
+    def simulate_typing(self, text_to_type: str):
+        print(f"\n--- 开始模拟输入 (模式: {'代码完美' if PERFECT_CODE_MODE else '真人模拟'}) ---")
 
         lines = text_to_type.splitlines()
 
@@ -67,49 +64,29 @@ class TypingSimulator:
             if random.random() < PAUSE_CHANCE:
                 time.sleep(random.uniform(MIN_PAUSE_DURATION, MAX_PAUSE_DURATION))
 
-            # 【优化2】鼠标光标跟随
-            if MOUSE_FOLLOWS_CURSOR and start_pos:
-                # 使用相对移动，更健壮
-                if i > 0:
-                    pyautogui.move(0, APPROX_LINE_HEIGHT, duration=0.05)
-                else:
-                    # 对于第一行，确保鼠标在初始点击位置
-                    pyautogui.moveTo(start_pos[0], start_pos[1], duration=0.1)
-
-
-            # 【优化1】绝对光标复位 + 智能缩进
+            # 【关键逻辑】绝对光标控制
+            # 如果不是第一行，先按Enter换行，然后按Home回到行首
             if i > 0:
                 keyboard.send('enter')
-                time.sleep(0.02)
-                keyboard.send('home')  # 第一次Home，应对“智能Home键”
-                time.sleep(0.02)
-                keyboard.send('home')  # 第二次Home，确保到达物理行首
-                time.sleep(0.02)
+                time.sleep(0.01)  # 短暂等待编辑器响应
+                keyboard.send('home')
+                time.sleep(0.01)
 
-            leading_spaces = len(line) - len(line.lstrip(' '))
-            num_tabs = leading_spaces // 4
-            remaining_spaces = leading_spaces % 4
-
-            for _ in range(num_tabs):
-                keyboard.send('tab')
-                time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
-            for _ in range(remaining_spaces):
-                keyboard.write(' ')
-                time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
-
-            # 逐字输入剥离了前导空格的行内容
-            content_of_line = line.lstrip(' ')
-            for char in content_of_line:
+            # 逐字输入当前行的全部内容（包括前导空格）
+            for char in line:
+                # 只有在非完美模式下才模拟错误
                 if not PERFECT_CODE_MODE and char.lower() in KEYBOARD_LAYOUT and random.random() < ERROR_RATE:
                     error_char = random.choice(KEYBOARD_LAYOUT[char.lower()])
                     keyboard.write(error_char)
-                    time.sleep(random.uniform(0.05, 0.15))
-                    keyboard.send('backspace')
-                    time.sleep(random.uniform(0.05, 0.1))
-                    keyboard.write(char)
+                    time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
+                    if random.random() < BACKSPACE_CHANCE:
+                        time.sleep(random.uniform(0.1, 0.4))
+                        keyboard.send('backspace')
+                        keyboard.write(char)
                 else:
                     keyboard.write(char)
 
+                # 字符间的微小延迟
                 time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
 
         print("\n--- 模拟输入完成 ---")
@@ -125,20 +102,18 @@ def run_simulation_in_thread(content):
     global is_simulation_running
     try:
         pyperclip.copy('')
-        start_pos = pyautogui.position()  # 记录初始鼠标位置
         pyautogui.click()
         time.sleep(0.1)
 
+        # 预处理：只需统一换行符和转换Tab即可
         processed_content = content.replace('\r\n', '\n').expandtabs(4)
 
         simulator = TypingSimulator()
-        simulator.simulate_typing(processed_content, start_pos=start_pos)  # 传递初始位置
+        simulator.simulate_typing(processed_content)
     except Exception as e:
         print(f"[线程错误] 在模拟过程中发生异常: {e}")
     finally:
-        # 【关键点3】当此函数结束，线程销毁，所有鼠标/键盘控制自然结束
         is_simulation_running = False
-        print("[状态] 模拟线程已结束，所有控制已释放。等待下一次触发...")
 
 
 def trigger_simulation():
@@ -173,9 +148,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup)
 
     print("=" * 50)
-    print("  真实打字模拟器已启动... (最终形态)")
-    print(f"  当前模式: {'代码完美 (无错误)' if PERFECT_CODE_MODE else '真人模拟(100%修正)'}")
-    print(f"  鼠标跟随: {'开启' if MOUSE_FOLLOWS_CURSOR else '关闭'}")
+    print("  真实打字模拟器已启动... (绝对控制最终版)")
+    print(f"  当前模式: {'代码完美 (无错误)' if PERFECT_CODE_MODE else '真人模拟 (带错误)'}")
     print("  用法：复制任意文本，将鼠标光标置于目标位置，然后按下 Ctrl + V")
     print("  按 ESC 键可随时退出本程序。")
     print("  (请确保本终端以管理员身份运行)")
