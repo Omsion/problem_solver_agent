@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
 """
-项目名称: 真实打字模拟器 (智能协作最终版)
-描述:       通过采用“行处理”逻辑，并与编辑器的自动缩进功能智能协作，
-            彻底解决了“双重缩进”问题，确保在任何代码编辑器中都能实现
-            100%精确的格式和内容。
+项目名称: 真实打字模拟器 (绝对控制最终版)
+描述:       采用“绝对光标控制”(Enter -> Home -> Write)策略，彻底解决了与
+            编辑器自动缩进功能的冲突，确保在任何环境下都能实现100%精确的
+            格式和内容，尤其适用于复杂的代码缩进。
 作者:       [Your Name/Agent]
 依赖库:     keyboard, pyperclip, pyautogui
 运行方式:   在管理员终端中执行 python human_typer.py
@@ -23,13 +23,12 @@ import sys
 # --- 全局配置参数 ---
 # ==============================================================================
 
-# 【关键开关】设置为 True 以精确粘贴代码，设置为 False 以模拟带错误的真人打字
+# 设置为 True 以精确粘贴代码，设置为 False 以模拟带错误的真人打字
 PERFECT_CODE_MODE = True
 
 # --- 核心行为配置 (仅在 PERFECT_CODE_MODE = False 时生效) ---
 ERROR_RATE = 0.08
 BACKSPACE_CHANCE = 0.85
-REPEAT_KEY_CHANCE = 0.02
 
 # --- 打字速度与节奏配置 (始终生效) ---
 MIN_TYPING_DELAY = 0.03
@@ -52,7 +51,7 @@ KEYBOARD_LAYOUT = {'q': ['w', 'a'], 'w': ['q', 's', 'e'], 'e': ['w', 'd', 'r'], 
 
 
 # ==============================================================================
-# --- 核心模拟器类 (采用行处理逻辑) ---
+# --- 核心模拟器类 (采用绝对光标控制) ---
 # ==============================================================================
 class TypingSimulator:
     def simulate_typing(self, text_to_type: str):
@@ -61,23 +60,20 @@ class TypingSimulator:
         lines = text_to_type.splitlines()
 
         for i, line in enumerate(lines):
-            # 随机停顿，模拟思考
+            # 随机停顿
             if random.random() < PAUSE_CHANCE:
                 time.sleep(random.uniform(MIN_PAUSE_DURATION, MAX_PAUSE_DURATION))
 
-            # 【关键逻辑】与编辑器协作处理缩进
-            # 第一行完整输入，为缩进定调。
-            # 后续行只输入剥离了前导空格的内容，依赖编辑器的自动缩进。
-            line_to_type = line if i == 0 else line.lstrip()
-
-            # 如果行为空（或剥离后为空），只按回车
-            if not line_to_type:
+            # 【关键逻辑】绝对光标控制
+            # 如果不是第一行，先按Enter换行，然后按Home回到行首
+            if i > 0:
                 keyboard.send('enter')
-                time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
-                continue
+                time.sleep(0.01)  # 短暂等待编辑器响应
+                keyboard.send('home')
+                time.sleep(0.01)
 
-            # 逐字输入行内容
-            for char in line_to_type:
+            # 逐字输入当前行的全部内容（包括前导空格）
+            for char in line:
                 # 只有在非完美模式下才模拟错误
                 if not PERFECT_CODE_MODE and char.lower() in KEYBOARD_LAYOUT and random.random() < ERROR_RATE:
                     error_char = random.choice(KEYBOARD_LAYOUT[char.lower()])
@@ -86,15 +82,11 @@ class TypingSimulator:
                     if random.random() < BACKSPACE_CHANCE:
                         time.sleep(random.uniform(0.1, 0.4))
                         keyboard.send('backspace')
-                        keyboard.write(char)  # 输入正确的字符
+                        keyboard.write(char)
                 else:
                     keyboard.write(char)
 
-                time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
-
-            # 输入完一行后，如果不是最后一行，则按回车换行
-            if i < len(lines) - 1:
-                keyboard.send('enter')
+                # 字符间的微小延迟
                 time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
 
         print("\n--- 模拟输入完成 ---")
@@ -156,7 +148,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup)
 
     print("=" * 50)
-    print("  真实打字模拟器已启动... (智能协作最终版)")
+    print("  真实打字模拟器已启动... (绝对控制最终版)")
     print(f"  当前模式: {'代码完美 (无错误)' if PERFECT_CODE_MODE else '真人模拟 (带错误)'}")
     print("  用法：复制任意文本，将鼠标光标置于目标位置，然后按下 Ctrl + V")
     print("  按 ESC 键可随时退出本程序。")
