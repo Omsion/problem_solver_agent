@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 
 """
-项目名称: 基于键盘布局的真实打字错误与纠正模拟器
+项目名称: 基于键盘布局的真实打字错误与纠正模拟器 (最终优化版)
 描述:       该脚本在后台运行，监听 Ctrl+V 快捷键。
-            触发后，它会获取剪贴板内容，并以模拟真人的方式逐字输入，
-            包括打字速度波动、基于QWERTY键盘布局的随机错误、停顿以及错误纠正。
+            通过多线程和清空剪贴板的策略，彻底解决了原生粘贴与模拟输入冲突的竞态条件问题，
+            确保在任何编辑器中都能实现纯净、无错的模拟输入效果。
 作者:       [Your Name/Agent]
-依赖库:     pynput, pyperclip
-运行方式:   在 PowerShell 或其他终端中执行 python human_typer.py
+依赖库:     keyboard, pyperclip
+运行方式:   在管理员终端中执行 python human_typer.py
 """
 
 import time
 import random
 import pyperclip
-from pynput import keyboard
+import keyboard
+import threading  # 引入多线程库，解决竞态条件的关键
 
 # ==============================================================================
 # --- 全局配置参数 (可根据喜好调整) ---
@@ -41,164 +42,136 @@ MAX_REPEAT_COUNT = 3  # 最大重复次数
 # ==============================================================================
 
 # 标准 QWERTY 键盘布局的邻近键位映射
-# 只定义了小写字母和数字，其他字符（如空格、标点）将不会触发临近键错误
 KEYBOARD_LAYOUT = {
-    '1': ['2', 'q'], '2': ['1', 'w', '3'], '3': ['2', 'w', 'e', '4'],
-    '4': ['3', 'e', 'r', '5'], '5': ['4', 'r', 't', '6'], '6': ['5', 't', 'y', '7'],
-    '7': ['6', 'y', 'u', '8'], '8': ['7', 'u', 'i', '9'], '9': ['8', 'i', 'o', '0'],
-    '0': ['9', 'o', 'p', '-'],
-    'q': ['w', 'a', 's'], 'w': ['q', 'a', 's', 'd', 'e'], 'e': ['w', 's', 'd', 'f', 'r'],
-    'r': ['e', 'd', 'f', 'g', 't'], 't': ['r', 'f', 'g', 'h', 'y'], 'y': ['t', 'g', 'h', 'j', 'u'],
-    'u': ['y', 'h', 'j', 'k', 'i'], 'i': ['u', 'j', 'k', 'l', 'o'], 'o': ['i', 'k', 'l', 'p'],
-    'p': ['o', 'l', ';', '['],
-    'a': ['q', 'w', 's', 'z', 'x'], 's': ['a', 'w', 'e', 'd', 'z', 'x', 'c'], 'd': ['s', 'e', 'r', 'f', 'x', 'c', 'v'],
-    'f': ['d', 'r', 't', 'g', 'c', 'v', 'b'], 'g': ['f', 't', 'y', 'h', 'v', 'b', 'n'],
-    'h': ['g', 'y', 'u', 'j', 'b', 'n', 'm'],
-    'j': ['h', 'u', 'i', 'k', 'n', 'm'], 'k': ['j', 'i', 'o', 'l', 'm', ','], 'l': ['k', 'o', 'p', ';', ','],
-    'z': ['a', 's', 'x'], 'x': ['z', 's', 'd', 'c'], 'c': ['x', 'd', 'f', 'v'],
-    'v': ['c', 'f', 'g', 'b'], 'b': ['v', 'g', 'h', 'n'], 'n': ['b', 'h', 'j', 'm'],
-    'm': ['n', 'j', 'k', ',']
+    '1': ['2', 'q'], '2': ['1', 'w', '3'], '3': ['2', 'w', 'e', '4'], '4': ['3', 'e', 'r', '5'],
+    '5': ['4', 'r', 't', '6'], '6': ['5', 't', 'y', '7'], '7': ['6', 'y', 'u', '8'], '8': ['7', 'u', 'i', '9'],
+    '9': ['8', 'i', 'o', '0'], '0': ['9', 'o', 'p', '-'], 'q': ['w', 'a', 's'],
+    'w': ['q', 'a', 's', 'd', 'e'], 'e': ['w', 's', 'd', 'f', 'r'], 'r': ['e', 'd', 'f', 'g', 't'],
+    't': ['r', 'f', 'g', 'h', 'y'], 'y': ['t', 'g', 'h', 'j', 'u'], 'u': ['y', 'h', 'j', 'k', 'i'],
+    'i': ['u', 'j', 'k', 'l', 'o'], 'o': ['i', 'k', 'l', 'p'], 'p': ['o', 'l', ';', '['],
+    'a': ['q', 'w', 's', 'z', 'x'], 's': ['a', 'w', 'e', 'd', 'z', 'x', 'c'],
+    'd': ['s', 'e', 'r', 'f', 'x', 'c', 'v'], 'f': ['d', 'r', 't', 'g', 'c', 'v', 'b'],
+    'g': ['f', 't', 'y', 'h', 'v', 'b', 'n'], 'h': ['g', 'y', 'u', 'j', 'b', 'n', 'm'],
+    'j': ['h', 'u', 'i', 'k', 'n', 'm'], 'k': ['j', 'i', 'o', 'l', 'm', ','],
+    'l': ['k', 'o', 'p', ';', ','], 'z': ['a', 's', 'x'], 'x': ['z', 's', 'd', 'c'],
+    'c': ['x', 'd', 'f', 'v'], 'v': ['c', 'f', 'g', 'b'], 'b': ['v', 'g', 'h', 'n'],
+    'n': ['b', 'h', 'j', 'm'], 'm': ['n', 'j', 'k', ',']
 }
 
 
 # ==============================================================================
 # --- 核心模拟器类 ---
 # ==============================================================================
-
 class TypingSimulator:
     def __init__(self):
-        """初始化键盘控制器。"""
-        self.keyboard_controller = keyboard.Controller()
+        pass
 
-    def _type_char_with_delay(self, char):
-        """模拟单个字符的按下和释放，并在之后加入随机延迟。"""
-        self.keyboard_controller.press(char)
-        self.keyboard_controller.release(char)
-        time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
+    def _type_char_with_delay(self, char: str):
+        keyboard.write(char, delay=random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
 
-    def _press_backspace(self, count=1):
-        """模拟按下退格键。"""
+    def _press_backspace(self, count: int = 1):
         for _ in range(count):
-            self.keyboard_controller.press(keyboard.Key.backspace)
-            self.keyboard_controller.release(keyboard.Key.backspace)
-            time.sleep(random.uniform(0.05, 0.1))  # 模拟修正时的轻微延迟
+            keyboard.send('backspace')
+            time.sleep(random.uniform(0.05, 0.1))
 
     def simulate_typing(self, text_to_type: str):
-        """
-        主模拟函数，负责处理完整的文本输入模拟。
-        """
         print("\n--- 开始模拟输入 ---")
-        for char in text_to_type:
-            # 1. 模拟节奏变化：随机停顿
+        # 统一处理换行符，增强兼容性
+        processed_text = text_to_type.replace('\r\n', '\n')
+
+        for char in processed_text:
             if random.random() < PAUSE_CHANCE:
                 pause_duration = random.uniform(MIN_PAUSE_DURATION, MAX_PAUSE_DURATION)
                 print(f"[节奏: 停顿 {pause_duration:.2f} 秒]")
                 time.sleep(pause_duration)
 
-            # 2. 模拟节奏变化：重复按键
             if random.random() < REPEAT_KEY_CHANCE and char.isalnum():
                 repeat_count = random.randint(MIN_REPEAT_COUNT, MAX_REPEAT_COUNT)
                 print(f"[节奏: 重复按键 '{char}' {repeat_count} 次]")
                 for _ in range(repeat_count):
-                    self._type_char_with_delay(char)
-                # 重复后进行修正
-                time.sleep(random.uniform(0.1, 0.3))  # “反应过来”的延迟
+                    keyboard.write(char)  # 在循环中直接写入，避免重复延迟
+                time.sleep(random.uniform(0.1, 0.3))
                 self._press_backspace(count=repeat_count - 1)
 
-            # 3. 模拟基于键盘布局的错误输入
-            if char.lower() in KEYBOARD_LAYOUT and random.random() < ERROR_RATE:
-                neighbors = KEYBOARD_LAYOUT[char.lower()]
-                error_char = random.choice(neighbors)
+            elif char.lower() in KEYBOARD_LAYOUT and random.random() < ERROR_RATE:
+                error_char = random.choice(KEYBOARD_LAYOUT[char.lower()])
                 print(f"[错误: '{char}' -> '{error_char}']")
                 self._type_char_with_delay(error_char)
 
-                # 4. 模拟退格修正
                 if random.random() < BACKSPACE_CHANCE:
-                    time.sleep(random.uniform(0.1, 0.4))  # “意识到错误”的延迟
+                    time.sleep(random.uniform(0.1, 0.4))
                     print(f"[修正: 删除 '{error_char}' 并输入 '{char}']")
                     self._press_backspace()
-                    self._type_char_with_delay(char)  # 输入正确的字符
+                    self._type_char_with_delay(char)
                 else:
-                    print("[修正: 未察觉错误]")  # 错误被保留，不进行修正
+                    print("[修正: 未察觉错误]")
             else:
-                # 5. 正常输入
                 self._type_char_with_delay(char)
 
         print("\n--- 模拟输入完成 ---")
 
 
 # ==============================================================================
-# --- 全局键盘监听器 ---
+# --- 核心触发逻辑 (多线程 + 剪贴板清除) ---
 # ==============================================================================
-
-current_pressed_keys = set()
 is_simulation_running = False
 
 
-def on_press(key):
+def run_simulation_in_thread(content):
+    """这个函数在独立的线程中运行，执行耗时的模拟任务"""
     global is_simulation_running
+    try:
+        # 【关键策略 B】立即清空剪贴板，让任何潜在的原生粘贴操作失效
+        pyperclip.copy('')
+        print("[策略] 剪贴板已清空，防止原生粘贴。")
 
+        simulator = TypingSimulator()
+        simulator.simulate_typing(content)
+    except Exception as e:
+        print(f"[线程错误] 在模拟过程中发生异常: {e}")
+    finally:
+        is_simulation_running = False  # 任务完成，释放锁
+
+
+def trigger_simulation():
+    """热键回调函数，必须极快地执行完毕"""
+    global is_simulation_running
     if is_simulation_running:
         return
 
+    is_simulation_running = True
+
+    # 【关键策略 A】将耗时任务交给新线程，让回调函数立即返回
     try:
-        if key.char == 'v':
-            current_pressed_keys.add('v')
-    except AttributeError:
-        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-            current_pressed_keys.add(keyboard.Key.ctrl_l)
+        # 1. 快速读取剪贴板
+        clipboard_content = pyperclip.paste()
+        if clipboard_content and isinstance(clipboard_content, str):
+            # 2. 创建并启动一个新线程来处理模拟输入
+            simulation_thread = threading.Thread(
+                target=run_simulation_in_thread,
+                args=(clipboard_content,)
+            )
+            simulation_thread.start()
+        else:
+            print("\n[信息] 剪贴板为空或内容非文本。")
+            is_simulation_running = False  # 没有任务，立即释放锁
 
-    if 'v' in current_pressed_keys and keyboard.Key.ctrl_l in current_pressed_keys:
-        is_simulation_running = True
-
-        try:
-            clipboard_content = pyperclip.paste()
-            if clipboard_content and isinstance(clipboard_content, str):
-                print(f"\n[触发] 检测到 Ctrl+V, 准备模拟输入...")
-
-                # 【关键改动】在开始模拟前，先释放按键，防止它们被“卡住”
-                current_pressed_keys.clear()
-
-                simulator = TypingSimulator()
-                simulator.simulate_typing(clipboard_content)
-            else:
-                print("\n[信息] 剪贴板为空或内容非文本。")
-
-        except Exception as e:
-            print(f"[错误] 在模拟过程中发生异常: {e}")
-
-        finally:
-            is_simulation_running = False
-
-        # 【关键改动】返回 False 来阻止原始的 Ctrl+V 事件继续传播
-        # 这可以防止系统执行默认的粘贴操作。
-        return False
-
-
-def on_release(key):
-    try:
-        if key.char == 'v':
-            current_pressed_keys.discard('v')
-    except AttributeError:
-        if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-            current_pressed_keys.discard(keyboard.Key.ctrl_l)
-
-    if key == keyboard.Key.esc:
-        print("\n[退出] 按下 ESC，程序结束。")
-        return False
+    except Exception as e:
+        print(f"触发器错误: {e}")
+        is_simulation_running = False  # 出现异常，释放锁
 
 
 # ==============================================================================
 # --- 主程序入口 ---
 # ==============================================================================
-
 if __name__ == "__main__":
     print("=" * 50)
-    print("  真实打字模拟器已启动...")
+    print("  真实打字模拟器已启动... (最终优化版)")
     print("  用法：复制任意文本，然后在需要输入的地方按下 Ctrl + V")
     print("  按 ESC 键可随时退出本程序。")
     print("  (请确保本终端以管理员身份运行)")
     print("=" * 50)
 
-    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-        listener.join()
+    keyboard.add_hotkey('ctrl+v', trigger_simulation, suppress=True)
+    keyboard.wait('esc')
+    print("\n[退出] 按下 ESC，程序结束。")
