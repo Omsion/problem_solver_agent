@@ -24,7 +24,7 @@ import ctypes  # 新增：用于调用Windows API隐藏/显示光标
 # ==============================================================================
 
 # 【模式开关】设置为 True 以精确粘贴代码；False 以模拟带错误的真人打字
-PERFECT_CODE_MODE = True
+PERFECT_CODE_MODE = False
 
 # 【光标隐藏开关】设置为 True，在模拟输入期间隐藏系统鼠标光标
 HIDE_MOUSE_CURSOR = True
@@ -34,9 +34,9 @@ ERROR_RATE = 0.2
 # BACKSPACE_CHANCE 已被移除，因为现在所有错误都将被100%修正。
 
 # --- 打字速度与节奏配置 (始终生效) ---
-MIN_TYPING_DELAY = 0.1
-MAX_TYPING_DELAY = 0.4
-PAUSE_CHANCE = 0.3
+MIN_TYPING_DELAY = 0.2
+MAX_TYPING_DELAY = 0.9
+PAUSE_CHANCE = 0.5
 MIN_PAUSE_DURATION = 0.5
 MAX_PAUSE_DURATION = 1.5
 
