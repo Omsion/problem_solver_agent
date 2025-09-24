@@ -1,112 +1,143 @@
 # -*- coding: utf-8 -*-
 """
-silent_screencapper.py - 静默热键截图工具 (V3.0 - 窗口感知版)
+silent_screencapper.py - 静默热键截图工具 (V6.1 - 终极 GDI 对象版)
 
 本文件是一个独立的后台应用程序，旨在提供一个通过全局热键进行
 智能、静默截图的功能，并与主Agent项目无缝集成。
 
-V3.0 版本更新:
-- 【核心功能】: 新增窗口感知能力。现在截图时会自动识别鼠标光标
-  所在的窗口，并只截取该窗口的内容。
-- 【健壮性】: 如果鼠标不在任何窗口上（例如在桌面），程序会自动回退
-  到截取整个屏幕，确保总能捕获到内容。
-- 【依赖变更】: 引入了 `pywin32` 库来实现与 Windows API 的交互。
-- 保持使用 `keyboard` 库以确保在现代终端中的兼容性。
+V6.1 版本更新:
+- 【核心修复】: 修复了因混用 GDI 句柄 (handle) 和 GDI 对象 (object)
+  导致的 `AttributeError`。现在代码完全使用 `win32ui` 提供的面向
+  对象的封装（如 PyCDC, PyCBitmap），确保了 GDI 操作的正确性和健壮性。
+- 这从根本上解决了截图失败的问题，使多显示器截图功能完美运行。
 """
 
 import time
+import ctypes
 from pathlib import Path
 import keyboard
-from PIL import ImageGrab
 
-# 【新增】: 导入 pywin32 库用于与 Windows API 交互
-# pywintypes 用于捕获特定的API错误
+try:
+    from PIL import Image
+except ImportError:
+    print("错误: 缺少 'Pillow' 库。")
+    print("请在您的终端中运行: pip install Pillow")
+    exit(1)
+
 try:
     import win32gui
-    import pywintypes
+    import win32api
+    import win32con
+    import win32ui  # 导入 GDI 对象封装模块
 except ImportError:
     print("错误: 缺少 'pywin32' 库。")
     print("请在您的终端中运行: pip install pywin32")
     exit(1)
 
-# 尝试从主项目中导入配置，实现无缝集成。
+# 将应用程序标记为 DPI 感知
+try:
+    ctypes.windll.user32.SetProcessDPIAware()
+except AttributeError:
+    print("非 Windows 系统，跳过 DPI 设置。")
+    pass
+
+# --- 配置加载 ---
 try:
     import config
 
     SAVE_DIRECTORY = config.MONITOR_DIR
     print(f"成功加载配置，截图将保存至: {SAVE_DIRECTORY}")
 except (ImportError, AttributeError):
-    # 如果主项目配置不存在，则提供一个安全的回退方案。
     SAVE_DIRECTORY = Path.home() / "silent_screenshots"
-    print(f"警告: 无法从 'config.py' 加载配置。")
-    print(f"将使用默认回退目录: {SAVE_DIRECTORY}")
+    print(f"警告: 无法加载配置，将使用默认目录: {SAVE_DIRECTORY}")
 
-# 定义热键字符串
+# --- 热键定义 ---
 HOTKEY_STRING = 'alt+x'
 
 
-def take_silent_screenshot():
+def take_screenshot():
     """
-    执行核心的静默截图和保存操作。
-    此版本会自动检测鼠标下的窗口并仅截取该窗口。
+    执行核心的、针对【当前显示器】的静默截图和保存操作。
+    此版本使用 `win32ui` 对象，确保 GDI 操作的正确性。
     """
+    print(f"\n热键 '{HOTKEY_STRING}' 触发: 尝试截取当前显示器...")
+
+    # 初始化所有 GDI 对象为 None，以便在 finally 中安全地清理
+    desktop_dc = None
+    mem_dc = None
+    bitmap = None
+
     try:
-        bbox = None  # 初始化边界框为 None
+        # 1. 获取目标显示器的边界
+        pos = win32gui.GetCursorPos()
+        monitor_handle = win32api.MonitorFromPoint(pos, win32con.MONITOR_DEFAULTTONEAREST)
+        monitor_info = win32api.GetMonitorInfo(monitor_handle)
+        left, top, right, bottom = monitor_info['Monitor']
+        width = right - left
+        height = bottom - top
 
-        # --- 步骤 1: 使用 Windows API 获取窗口边界 ---
-        try:
-            # 获取鼠标当前位置的 (x, y) 坐标
-            pos = win32gui.GetCursorPos()
-            # 根据坐标获取窗口句柄 (hwnd)
-            hwnd = win32gui.WindowFromPoint(pos)
+        print(f"  -> 检测到显示器，边界: {(left, top, right, bottom)}")
 
-            # 如果 hwnd 不为 0 (表示找到了一个窗口)
-            if hwnd:
-                # 获取该窗口的边界矩形 (left, top, right, bottom)
-                bbox = win32gui.GetWindowRect(hwnd)
-                print(f"检测到窗口句柄 {hwnd}，将在边界 {bbox} 内截图。")
-            else:
-                # 如果鼠标不在任何窗口上，则回退到全屏截图
-                print("未检测到窗口，将进行全屏截图。")
-        except pywintypes.error as e:
-            # 捕获可能发生的API错误 (例如，窗口在获取句柄和截图之间被关闭)
-            print(f"Windows API 错误: {e} - 回退到全屏截图。")
-            bbox = None
+        # 2. 【核心修复】: 创建 GDI 对象，而不是原始句柄
+        # 获取桌面窗口的设备上下文句柄
+        h_desktop_dc = win32gui.GetWindowDC(win32gui.GetDesktopWindow())
+        # 从句柄创建 PyCDC 对象
+        desktop_dc = win32ui.CreateDCFromHandle(h_desktop_dc)
+        # 创建一个与桌面DC兼容的内存DC对象
+        mem_dc = desktop_dc.CreateCompatibleDC()
 
-        # --- 步骤 2: 使用 Pillow 进行截图 ---
-        # 如果 bbox 有效，则只截取该区域；否则，grab() 默认截取全屏。
-        screenshot = ImageGrab.grab(bbox=bbox, all_screens=True)
+        # 创建一个空的、与桌面DC兼容的位图对象 (PyCBitmap)
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(desktop_dc, width, height)
 
-        # --- 步骤 3: 保存文件 ---
+        # 3. 将位图选入内存DC，作为绘图的目标
+        mem_dc.SelectObject(bitmap)
+
+        # 4. 执行 BitBlt (Bit Block Transfer) 操作
+        # 使用 PyCDC 对象的 BitBlt 方法，语法更清晰
+        mem_dc.BitBlt((0, 0), (width, height), desktop_dc, (left, top), win32con.SRCCOPY)
+
+        # 5. 从 PyCBitmap 对象获取像素数据
+        # 现在 bitmap 是一个完整的对象，可以调用 GetBitmapBits 方法
+        signed_ints_array = bitmap.GetBitmapBits(True)
+
+        # 6. 将 GDI 位图数据转换为 Pillow Image 对象
+        img = Image.frombuffer('RGB', (width, height), signed_ints_array, 'raw', 'BGRX', 0, 1)
+
+        # 7. 生成唯一文件名并保存
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         microsecond = f"{time.time():.6f}"[-6:]
         filename = f"Screenshot_{timestamp}_{microsecond}.png"
         filepath = SAVE_DIRECTORY / filename
 
         SAVE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        screenshot.save(filepath, "PNG")
+        img.save(filepath, "PNG")
 
-        print(f"热键触发! 截图已保存至: {filepath}")
+        print(f"  => 截图成功! 已保存至: {filepath}")
 
     except Exception as e:
-        print(f"截图失败: {e}")
+        print(f"  => 截图失败: {e}")
+    finally:
+        # 8. 【关键】: 安全、正确地清理所有 GDI 对象
+        # win32ui 对象通常有自己的清理方法或应通过 DeleteObject 删除
+        if bitmap:
+            # 【核心修复】: 正确调用 DeleteObject，需要传递句柄
+            win32gui.DeleteObject(bitmap.GetHandle())
+        if mem_dc:
+            mem_dc.DeleteDC()
+        if desktop_dc:
+            desktop_dc.DeleteDC()
 
 
 def main():
-    """
-    主执行函数：注册热键并启动监听。
-    """
+    """主执行函数：注册热键并启动监听。"""
     print("... 静默截图工具已启动 ...")
-
     try:
-        keyboard.add_hotkey(HOTKEY_STRING, take_silent_screenshot)
-
+        keyboard.add_hotkey(HOTKEY_STRING, take_screenshot)
         print(f"[*] 成功注册热键: {HOTKEY_STRING.upper()}")
-        print("[*] 将鼠标悬停在目标窗口上，然后按下热键即可截图。")
+        print("[*] 将鼠标移动到目标显示器，然后按下热键即可截图。")
         print("[*] 在此终端按 Ctrl + C 即可退出程序。")
-
         keyboard.wait()
-
     except Exception as e:
         print(f"注册热键或启动监听时发生错误: {e}")
         print("请确保您拥有足够的权限，或尝试以管理员身份运行此脚本。")
