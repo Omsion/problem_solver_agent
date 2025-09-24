@@ -57,11 +57,17 @@ def get_client(provider: str) -> OpenAI:
     logger.info(f"正在为提供商 '{provider}' 初始化API客户端...")
     provider_config = config.SOLVER_CONFIG.get(provider)
     if not provider_config: raise ValueError(f"未在 config.py 中找到提供商 '{provider}' 的配置。")
-    api_key_map = {'deepseek': config.DEEPSEEK_API_KEY, 'dashscope': config.DASHSCOPE_API_KEY,
-                   'zhipu': config.ZHIPU_API_KEY}
+    api_key_map = {
+        'deepseek': config.DEEPSEEK_API_KEY,
+        'dashscope': config.DASHSCOPE_API_KEY,
+        'zhipu': config.ZHIPU_API_KEY
+    }
     api_key = api_key_map.get(provider)
     if not api_key: raise ValueError(f"未能获取提供商 '{provider}' 的API密钥，请检查 .env 文件。")
-    client = OpenAI(api_key=api_key, base_url=provider_config["base_url"], timeout=config.API_TIMEOUT)
+    client = OpenAI(
+        api_key=api_key,
+        base_url=provider_config["base_url"],
+        timeout=config.API_TIMEOUT)
     _clients[provider] = client
     logger.info(f"客户端 '{provider}' 初始化成功。")
     return client
@@ -80,8 +86,12 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
 
         if provider == 'zhipu' and model == 'glm-4.5':
             logger.info("检测到 GLM-4.5 模型，启用深度思考模式 (仅输出最终结果)。")
-            payload: ZhipuChatPayload = {"model": model, "messages": messages, "stream": True,
-                                         "extra_body": {"thinking": {"type": "enabled"}}}
+            payload: ZhipuChatPayload = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                "extra_body": {"thinking": {"type": "enabled"}}
+            }
             completion = client.chat.completions.create(**payload)  # type: ignore
             for chunk in completion:
                 delta = chunk.choices[0].delta
@@ -90,8 +100,12 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
 
         elif provider == 'dashscope' and 'qwen' in model:
             logger.info(f"检测到 DashScope Qwen 系列模型 ({model})，启用思考模式。")
-            payload: DashScopeChatPayload = {"model": model, "messages": messages, "stream": True,
-                                             "extra_body": {"enable_thinking": True}}
+            payload: DashScopeChatPayload = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                "extra_body": {"enable_thinking": True}
+            }
             completion = client.chat.completions.create(**payload)  # type: ignore
             for chunk in completion:
                 if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
@@ -100,8 +114,13 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
         else:
             # 适用于 DeepSeek 和其他标准 OpenAI 接口的模型
             logger.info(f"使用标准模式调用模型: {model}")
-            payload: StandardChatPayload = {"model": model, "messages": messages, "stream": True, "max_tokens": 8000,
-                                            "temperature": 0.7}
+            payload: StandardChatPayload = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                "max_tokens": 8000,
+                "temperature": 0.7
+            }
             completion = client.chat.completions.create(**payload)  # type: ignore
             for chunk in completion:
                 if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
@@ -150,8 +169,11 @@ def check_solver_health() -> bool:
     try:
         client = get_client(provider)
         test_response = client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": "你好，请回复'OK'"}],
-            max_tokens=5, stream=False, timeout=20.0
+            model=model,
+            messages=[{"role": "user", "content": "你好，请回复'OK'"}],
+            max_tokens=5,
+            stream=False,
+            timeout=20.0
         )  # type: ignore
         if test_response and test_response.choices and test_response.choices[0].message.content:
             logger.info(f"健康检查成功，收到回复: {test_response.choices[0].message.content.strip()}")

@@ -26,8 +26,8 @@ QWEN_MODEL_NAME = "qwen-vl-max"
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
 # 统一配置用于文本合并、润色和标题生成的辅助模型。
 # GLM-4.5-Air 是一个速度快、性能强的优秀选择。或者deepseek_chat
-AUX_PROVIDER = "zhipu"  # deepseek or zhipu
-AUX_MODEL_NAME = "glm-4.5-air"  # deepseek-chat or glm-4.5-air
+AUX_PROVIDER = "deepseek"  # deepseek or zhipu
+AUX_MODEL_NAME = "deepseek-chat"  # deepseek-chat or glm-4.5-air
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 SOLVER_PROVIDER = "zhipu"
