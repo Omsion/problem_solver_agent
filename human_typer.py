@@ -69,8 +69,13 @@ class TypingSimulator:
 
             # 【优化2】鼠标光标跟随
             if MOUSE_FOLLOWS_CURSOR and start_pos:
-                new_y = start_pos[1] + (i * APPROX_LINE_HEIGHT)
-                pyautogui.moveTo(start_pos[0], new_y, duration=0.1)
+                # 使用相对移动，更健壮
+                if i > 0:
+                    pyautogui.move(0, APPROX_LINE_HEIGHT, duration=0.05)
+                else:
+                    # 对于第一行，确保鼠标在初始点击位置
+                    pyautogui.moveTo(start_pos[0], start_pos[1], duration=0.1)
+
 
             # 【优化1】绝对光标复位 + 智能缩进
             if i > 0:
@@ -131,7 +136,9 @@ def run_simulation_in_thread(content):
     except Exception as e:
         print(f"[线程错误] 在模拟过程中发生异常: {e}")
     finally:
+        # 【关键点3】当此函数结束，线程销毁，所有鼠标/键盘控制自然结束
         is_simulation_running = False
+        print("[状态] 模拟线程已结束，所有控制已释放。等待下一次触发...")
 
 
 def trigger_simulation():

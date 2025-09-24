@@ -255,35 +255,27 @@ class ImageGrouper:
             if not final_answer.strip() or "--- ERROR ---" in final_answer:
                 raise ValueError("从核心求解器收到空响应或错误信息。")
 
-            # --- 步骤 4:  智能标题生成工作流 ---
-            # 1. 从转录文本中提取题号
-            numbers = extract_question_numbers(transcribed_text)
-            number_prefix = format_number_prefix(numbers)
-            logger.info(f"提取到题号: {numbers} -> 格式化前缀: '{number_prefix}'")
+            #  采用由LLM直接驱动的智能文件名生成流程
+            logger.info("开始通过LLM生成智能文件名...")
+            title_prompt = config.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
 
-            # 2. 使用增强的提示词生成主题
-            full_context_for_title = f"题目内容:\n{transcribed_text}\n\n详细解答:\n{final_answer}"
-            title_prompt = config.TITLE_GENERATION_PROMPT.format(
-                number_prefix=number_prefix,
-                solution_text=full_context_for_title
-            )
-            topic_title = solver_client.ask_for_analysis(
+            # 调用辅助模型来生成文件名
+            filename_body = solver_client.ask_for_analysis(
                 title_prompt, provider=config.AUX_PROVIDER, model=config.AUX_MODEL_NAME
             )
 
-            # 3. 拼接成最终标题，并提供回退机制
-            if number_prefix and topic_title:
-                final_title = f"{number_prefix}_{topic_title}"
-            elif topic_title:
-                final_title = topic_title
-            else:
-                # 如果所有方法都失败，提供一个信息量比时间戳更多的回退标题
-                final_title = f"{final_problem_type}_Solution"
+            # 提供回退机制，确保总能生成一个有效的文件名
+            if not filename_body:
+                logger.warning("LLM未能生成文件名，将使用回退机制。")
+                # 尝试使用旧的、基于正则表达式的简单方法作为最后的防线
+                numbers = extract_question_numbers(transcribed_text)
+                number_prefix = format_number_prefix(numbers)
+                fallback_topic = f"{final_problem_type}_Solution"
+                filename_body = f"{number_prefix}_{fallback_topic}" if number_prefix else fallback_topic
 
-            logger.info(f"最终生成标题: '{final_title}'")
+            logger.info(f"最终生成文件名主体: '{filename_body}'")
 
-            # 4. 使用最终标题重命名文件
-            final_filename = f"{timestamp}_{sanitize_filename(final_title)}.txt"
+            final_filename = f"{timestamp}_{sanitize_filename(filename_body)}.txt"
             final_solution_path = config.SOLUTION_DIR / final_filename
             temp_solution_path.rename(final_solution_path)
             logger.info(f"[{thread_name}] 解答已成功保存至: {final_solution_path}")
