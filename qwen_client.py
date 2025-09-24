@@ -107,7 +107,7 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
         text = _call_qwen_api([path], config.TRANSCRIPTION_PROMPT)
         return index, text
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_index = {executor.submit(transcribe_single, i, p): i for i, p in enumerate(image_paths)}
 
         all_successful = True

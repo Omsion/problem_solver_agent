@@ -44,7 +44,7 @@ class ImageGrouper:
     一个状态化的核心类，用于管理图片的分组、AI处理流水线以及后续的归档工作。
     """
 
-    def __init__(self, num_workers: int = 2):
+    def __init__(self, num_workers: int = 4):
         """
         初始化ImageGrouper实例。
 
