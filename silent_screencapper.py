@@ -1,121 +1,115 @@
 # -*- coding: utf-8 -*-
 """
-silent_screencapper.py - 静默热键截图工具 (V1.0)
+silent_screencapper.py - 静默热键截图工具 (V3.0 - 窗口感知版)
 
 本文件是一个独立的后台应用程序，旨在提供一个通过全局热键进行
-静默截图的功能，并与主Agent项目无缝集成。
+智能、静默截图的功能，并与主Agent项目无缝集成。
 
-核心功能:
-1.  **后台运行**: 启动后，程序将持续在后台运行，等待热键事件。
-2.  **全局热键**: 监听全局热键 `Ctrl+Shift+X`。无论当前焦点在哪个窗口，
-    只要按下此组合键，即可触发截图。
-3.  **完全静默**: 截图过程不会显示任何GUI、通知或播放任何声音。
-4.  **自动保存**: 截图将以时间戳命名，并自动保存到主项目 `config.py`
-    中定义的 `MONITOR_DIR` 目录中。
-5.  **低资源占用**: 使用事件驱动的 `pynput` 库，CPU和内存占用极低。
-
-使用方法:
-1.  确保已安装所需库: pip install pynput pillow
-2.  将此文件放置在主Agent项目的根目录下。
-3.  在独立的终端中运行此脚本: python silent_screencapper.py
-4.  脚本将保持运行。按下 Ctrl+Shift+X 进行截图。
-5.  在终端中按 Ctrl+C 可以干净地停止此脚本。
+V3.0 版本更新:
+- 【核心功能】: 新增窗口感知能力。现在截图时会自动识别鼠标光标
+  所在的窗口，并只截取该窗口的内容。
+- 【健壮性】: 如果鼠标不在任何窗口上（例如在桌面），程序会自动回退
+  到截取整个屏幕，确保总能捕获到内容。
+- 【依赖变更】: 引入了 `pywin32` 库来实现与 Windows API 的交互。
+- 保持使用 `keyboard` 库以确保在现代终端中的兼容性。
 """
 
 import time
 from pathlib import Path
-from pynput import keyboard
+import keyboard
 from PIL import ImageGrab
 
-# 尝试从主项目中导入配置。
-# 这种设计使得此工具可以作为独立脚本运行，同时又能与主项目共享配置。
+# 【新增】: 导入 pywin32 库用于与 Windows API 交互
+# pywintypes 用于捕获特定的API错误
+try:
+    import win32gui
+    import pywintypes
+except ImportError:
+    print("错误: 缺少 'pywin32' 库。")
+    print("请在您的终端中运行: pip install pywin32")
+    exit(1)
+
+# 尝试从主项目中导入配置，实现无缝集成。
 try:
     import config
 
-    # 从配置中获取截图保存的目标目录
     SAVE_DIRECTORY = config.MONITOR_DIR
     print(f"成功加载配置，截图将保存至: {SAVE_DIRECTORY}")
 except (ImportError, AttributeError):
-    # 如果导入失败或配置不完整，则使用一个安全的回退路径。
+    # 如果主项目配置不存在，则提供一个安全的回退方案。
     SAVE_DIRECTORY = Path.home() / "silent_screenshots"
     print(f"警告: 无法从 'config.py' 加载配置。")
     print(f"将使用默认回退目录: {SAVE_DIRECTORY}")
 
-# 定义要监听的热键组合
-HOTKEY = {keyboard.Key.ctrl, keyboard.Key.shift, keyboard.KeyCode.from_char('x')}
-
-# 一个集合，用于跟踪当前按下的键
-current_keys = set()
+# 定义热键字符串
+HOTKEY_STRING = 'alt+x'
 
 
 def take_silent_screenshot():
     """
     执行核心的静默截图和保存操作。
+    此版本会自动检测鼠标下的窗口并仅截取该窗口。
     """
     try:
-        # 1. 生成一个基于当前时间的、独一无二的文件名。
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = f"Screenshot_{timestamp}.png"
+        bbox = None  # 初始化边界框为 None
 
-        # 2. 构造完整的文件保存路径。
+        # --- 步骤 1: 使用 Windows API 获取窗口边界 ---
+        try:
+            # 获取鼠标当前位置的 (x, y) 坐标
+            pos = win32gui.GetCursorPos()
+            # 根据坐标获取窗口句柄 (hwnd)
+            hwnd = win32gui.WindowFromPoint(pos)
+
+            # 如果 hwnd 不为 0 (表示找到了一个窗口)
+            if hwnd:
+                # 获取该窗口的边界矩形 (left, top, right, bottom)
+                bbox = win32gui.GetWindowRect(hwnd)
+                print(f"检测到窗口句柄 {hwnd}，将在边界 {bbox} 内截图。")
+            else:
+                # 如果鼠标不在任何窗口上，则回退到全屏截图
+                print("未检测到窗口，将进行全屏截图。")
+        except pywintypes.error as e:
+            # 捕获可能发生的API错误 (例如，窗口在获取句柄和截图之间被关闭)
+            print(f"Windows API 错误: {e} - 回退到全屏截图。")
+            bbox = None
+
+        # --- 步骤 2: 使用 Pillow 进行截图 ---
+        # 如果 bbox 有效，则只截取该区域；否则，grab() 默认截取全屏。
+        screenshot = ImageGrab.grab(bbox=bbox, all_screens=True)
+
+        # --- 步骤 3: 保存文件 ---
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        microsecond = f"{time.time():.6f}"[-6:]
+        filename = f"Screenshot_{timestamp}_{microsecond}.png"
         filepath = SAVE_DIRECTORY / filename
 
-        # 3. 确保保存目录存在。
-        #    `parents=True` 表示如果父目录不存在，也会一并创建。
-        #    `exist_ok=True` 表示如果目录已存在，不会引发错误。
         SAVE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-
-        # 4. 调用Pillow的ImageGrab来捕获全屏。这是实现静默的关键。
-        screenshot = ImageGrab.grab()
-
-        # 5. 保存截图文件。
         screenshot.save(filepath, "PNG")
 
-        # 6. 在控制台打印一条确认信息，以便于调试和确认操作成功。
-        #    这是脚本在截图时唯一会产生的输出。
-        print(f"截图成功! 已保存至: {filepath}")
+        print(f"热键触发! 截图已保存至: {filepath}")
 
     except Exception as e:
-        # 捕获所有可能的异常（如权限问题、磁盘已满等），并打印错误信息。
         print(f"截图失败: {e}")
-
-
-def on_key_press(key):
-    """
-    pynput 库的回调函数，在每次按键时被调用。
-    """
-    if key in HOTKEY:
-        current_keys.add(key)
-        # 检查当前按下的键是否构成了我们定义的热键组合
-        if all(k in current_keys for k in HOTKEY):
-            take_silent_screenshot()
-
-
-def on_key_release(key):
-    """
-    pynput 库的回调函数，在每次按键释放时被调用。
-    """
-    try:
-        current_keys.remove(key)
-    except KeyError:
-        pass  # 如果按键不在集合中，忽略错误
 
 
 def main():
     """
-    主执行函数：启动并管理热键监听器。
+    主执行函数：注册热键并启动监听。
     """
     print("... 静默截图工具已启动 ...")
-    print(f"[*] 正在监听热键: Ctrl + Shift + X")
-    print("[*] 按下热键即可截图。")
-    print("[*] 在此终端按 Ctrl + C 即可退出程序。")
 
-    # 创建并启动键盘监听器。
-    # on_press 和 on_release 是在发生相应事件时要调用的函数。
-    with keyboard.Listener(on_press=on_key_press, on_release=on_key_release) as listener:
-        # listener.join() 会阻塞主线程，使其持续运行以等待键盘事件。
-        # 这是使脚本能够“一直在后台运行”的关键。
-        listener.join()
+    try:
+        keyboard.add_hotkey(HOTKEY_STRING, take_silent_screenshot)
+
+        print(f"[*] 成功注册热键: {HOTKEY_STRING.upper()}")
+        print("[*] 将鼠标悬停在目标窗口上，然后按下热键即可截图。")
+        print("[*] 在此终端按 Ctrl + C 即可退出程序。")
+
+        keyboard.wait()
+
+    except Exception as e:
+        print(f"注册热键或启动监听时发生错误: {e}")
+        print("请确保您拥有足够的权限，或尝试以管理员身份运行此脚本。")
 
 
 if __name__ == "__main__":
