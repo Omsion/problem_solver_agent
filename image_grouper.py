@@ -33,7 +33,7 @@ from typing import List
 import config
 import qwen_client
 import solver_client  # 统一的、可切换的流式与非流式求解器
-from utils import setup_logger, sanitize_filename
+from utils import setup_logger, sanitize_filename, extract_question_numbers, format_number_prefix
 
 # 初始化全局日志记录器
 logger = setup_logger()
@@ -255,16 +255,35 @@ class ImageGrouper:
             if not final_answer.strip() or "--- ERROR ---" in final_answer:
                 raise ValueError("从核心求解器收到空响应或错误信息。")
 
-            # --- 步骤 4: 健壮的标题生成 (Robust Title Generation) ---
+            # --- 步骤 4:  智能标题生成工作流 ---
+            # 1. 从转录文本中提取题号
+            numbers = extract_question_numbers(transcribed_text)
+            number_prefix = format_number_prefix(numbers)
+            logger.info(f"提取到题号: {numbers} -> 格式化前缀: '{number_prefix}'")
+
+            # 2. 使用增强的提示词生成主题
             full_context_for_title = f"题目内容:\n{transcribed_text}\n\n详细解答:\n{final_answer}"
-            title_prompt = config.TITLE_GENERATION_PROMPT.format(solution_text=full_context_for_title)
-            title = solver_client.ask_for_analysis(
+            title_prompt = config.TITLE_GENERATION_PROMPT.format(
+                number_prefix=number_prefix,
+                solution_text=full_context_for_title
+            )
+            topic_title = solver_client.ask_for_analysis(
                 title_prompt, provider=config.AUX_PROVIDER, model=config.AUX_MODEL_NAME
             )
 
-            # --- 步骤 5: 原子化文件重命名 ---
-            # 只有在所有步骤都成功后，才将临时文件重命名为最终文件
-            final_filename = f"{timestamp}_{sanitize_filename(title) if title else group_to_process[0].stem + '_result'}.txt"
+            # 3. 拼接成最终标题，并提供回退机制
+            if number_prefix and topic_title:
+                final_title = f"{number_prefix}_{topic_title}"
+            elif topic_title:
+                final_title = topic_title
+            else:
+                # 如果所有方法都失败，提供一个信息量比时间戳更多的回退标题
+                final_title = f"{final_problem_type}_Solution"
+
+            logger.info(f"最终生成标题: '{final_title}'")
+
+            # 4. 使用最终标题重命名文件
+            final_filename = f"{timestamp}_{sanitize_filename(final_title)}.txt"
             final_solution_path = config.SOLUTION_DIR / final_filename
             temp_solution_path.rename(final_solution_path)
             logger.info(f"[{thread_name}] 解答已成功保存至: {final_solution_path}")

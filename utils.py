@@ -101,3 +101,40 @@ def preprocess_image_for_ocr(image_path: Path) -> bytes:
         logger.error(f"预处理图片 '{image_path.name}' 时发生严重错误: {e}")
         return None
 
+# 智能题号提取函数
+def extract_question_numbers(text: str) -> List[int]:
+    """
+    使用正则表达式从文本中提取所有以数字开头，并后跟点、顿号或空格的题号。
+    """
+    # 正则表达式:
+    # ^\s*       - 匹配一行的开始，后面可以有任意空格
+    # (\d+)      - 捕获一个或多个数字（这是我们的题号）
+    # [.\s、]    - 匹配一个点、一个空格或一个中文顿号
+    # re.MULTILINE - 使 `^` 能够匹配每一行的开头
+    matches = re.findall(r'^\s*(\d+)[.\s、]', text, re.MULTILINE)
+    # 转换为整数，去重，并排序
+    if not matches:
+        return []
+    return sorted(list(set(map(int, matches))))
+
+
+# 题号前缀格式化函数
+def format_number_prefix(numbers: List[int]) -> str:
+    """
+    根据提取出的题号列表，智能生成文件名所需的前缀。
+    - 单个题号: "16"
+    - 连续题号: "16-20"
+    - 不连续题号: "15,16,19"
+    """
+    if not numbers:
+        return ""
+    if len(numbers) == 1:
+        return str(numbers[0])
+
+    # 检查是否连续
+    is_consecutive = (numbers[-1] - numbers[0] == len(numbers) - 1)
+
+    if is_consecutive:
+        return f"{numbers[0]}-{numbers[-1]}"
+    else:
+        return ",".join(map(str, numbers))
