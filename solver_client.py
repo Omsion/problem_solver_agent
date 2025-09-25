@@ -73,23 +73,28 @@ def get_client(provider: str) -> OpenAI:
     return client
 
 
-def _prepare_messages(prompt_template: Dict[str, str], format_dict: Dict = None) -> List[Dict[str, Any]]:
+def _prepare_messages(prompt_string: str, format_dict: Dict = None) -> List[Dict[str, Any]]:
     """
-    一个辅助函数，用于从结构化的提示词模板准备 messages 列表。
+    一个辅助函数，用于从扁平化的提示词字符串准备 messages 列表。
     """
     if format_dict is None:
         format_dict = {}
 
-    # 格式化 user prompt
-    user_prompt = prompt_template.get("user", "").format(**format_dict)
+    # 使用传入的字典格式化用户提示字符串
+    formatted_prompt = prompt_string.format(**format_dict)
+
+    # 从格式化后的提示词中提取第一行作为 system prompt
+    lines = formatted_prompt.strip().split('\n')
+    system_content = lines[0]
+    user_content = '\n'.join(lines[1:]).strip()
 
     return [
-        {"role": "system", "content": prompt_template.get("system", "You are a helpful assistant.")},
-        {"role": "user", "content": user_prompt}
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content}
     ]
 
 
-def stream_solve(final_prompt_template: Dict[str, str], transcribed_text: str) -> Generator[str, None, None]:
+def stream_solve(prompt_template_string: str, transcribed_text: str) -> Generator[str, None, None]:
     """
     根据全局配置，流式调用指定的LLM进行问题求解。
     """
@@ -99,14 +104,12 @@ def stream_solve(final_prompt_template: Dict[str, str], transcribed_text: str) -
     try:
         client = get_client(provider)
         # 使用辅助函数准备 messages
-        messages = _prepare_messages(final_prompt_template, {"transcribed_text": transcribed_text})
+        messages = _prepare_messages(prompt_template_string, {"transcribed_text": transcribed_text})
 
         if provider == 'zhipu' and model == 'glm-4.5':
             logger.info("检测到 GLM-4.5 模型，启用深度思考模式 (仅输出最终结果)。")
             payload: ZhipuChatPayload = {
-                "model": model,
-                "messages": messages,
-                "stream": True,
+                "model": model, "messages": messages, "stream": True,
                 "extra_body": {"thinking": {"type": "enabled"}}
             }
             completion = client.chat.completions.create(**payload)  # type: ignore
@@ -130,11 +133,8 @@ def stream_solve(final_prompt_template: Dict[str, str], transcribed_text: str) -
             # 适用于 DeepSeek 和其他标准 OpenAI 接口的模型
             logger.info(f"使用标准模式调用模型: {model}")
             payload: StandardChatPayload = {
-                "model": model,
-                "messages": messages,
-                "stream": True,
-                "max_tokens": 8000,
-                "temperature": 0.7
+                "model": model, "messages": messages, "stream": True,
+                "max_tokens": 8000, "temperature": 0.7
             }
             completion = client.chat.completions.create(**payload)  # type: ignore
             for chunk in completion:
@@ -147,13 +147,12 @@ def stream_solve(final_prompt_template: Dict[str, str], transcribed_text: str) -
 
 
 #  用于辅助任务的非流式调用函数
-def ask_for_analysis(prompt_template: Dict[str, str], provider: str, model: str, format_dict: Dict = None) -> Union[
-    str, None]:
+def ask_for_analysis(prompt_template_string: str, provider: str, model: str, format_dict: Dict = None) -> Union[str, None]:
     logger.info(f"正在使用辅助模型 '{model}' (提供商: {provider}) 进行非流式分析...")
     try:
         client = get_client(provider)
         # 使用辅助函数准备 messages
-        messages = _prepare_messages(prompt_template, format_dict)
+        messages = _prepare_messages(prompt_template_string, format_dict)
 
         response = client.chat.completions.create(
             model=model, messages=messages, stream=False,
@@ -182,9 +181,7 @@ def check_solver_health() -> bool:
         test_response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": "你好，请回复'OK'"}],
-            max_tokens=5,
-            stream=False,
-            timeout=20.0
+            max_tokens=5, stream=False, timeout=20.0
         )  # type: ignore
         if test_response and test_response.choices and test_response.choices[0].message.content:
             logger.info(f"健康检查成功，收到回复: {test_response.choices[0].message.content.strip()}")

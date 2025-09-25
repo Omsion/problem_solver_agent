@@ -1,30 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-prompts.py - 自动化多图解题Agent - 提示词模块 (V2.4 - System Role 结构化版)
+prompts.py - 自动化多图解题Agent - 提示词模块 (V2.3 - 最终版)
 
-本文件集中管理所有与大型语言模型交互时使用的提示词（Prompts）。
-V2.4 版本更新:
-- 【核心重构】: 将所有提示词重构为包含 `system` 和 `user` 角色的
-  结构化字典。这种方式通过为模型设定明确的“角色”或“系统指令”，
-  可以使其输出更稳定、更符合预期，是更高级的提示工程实践。
+本文件集中管理了所有与大型语言模型交互时使用的提示词（Prompts）。
+将其从主配置文件中分离出来，旨在提高代码的可读性和可维护性。
+
+V2.3 版本更新:
+- 新增 TEXT_MERGE_AND_POLISH_PROMPT，用于通过一次API调用完成多文本的合并、去重与润色。
+- 新增 TITLE_GENERATION_PROMPT，用于从完整答案中稳健地提取标题。
+- 移除了旧的、不再使用的 TEXT_POLISHING_PROMPT。
 """
 
 # --- 1. Prompts for Qwen-VL (Vision Tasks) ---
 
-CLASSIFICATION_PROMPT = {
-    "system": "You are a highly accurate problem classifier. Your response must be a single, specific keyword.",
-    "user": """Analyze the content of the image(s). Determine the type of problem presented.
+CLASSIFICATION_PROMPT = """
+Analyze the content of the image(s). Determine the type of problem presented.
 Your response MUST be ONLY ONE of the following keywords:
 - 'CODING': If the problem is a programming/coding challenge requiring a code solution.
 - 'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes, figures, or matrices.
 - 'QUESTION_ANSWERING': If the problem is a standard question-answering task based on provided text or data.
 - 'GENERAL': For any other text-based problem.
-Respond with only the single, most appropriate keyword and nothing else."""
-}
+Respond with only the single, most appropriate keyword and nothing else.
+"""
 
-TRANSCRIPTION_PROMPT = {
-    "system": "你是一个世界顶级的、专门用于文档数字化的多模态识别引擎。",
-    "user": """你的任务是精确地识别单张图片中的所有内容，并将其转化为结构化的文本。
+TRANSCRIPTION_PROMPT = """
+你是一个世界顶级的、专门用于文档数字化的多模态识别引擎。你的任务是精确地识别单张图片中的所有内容，并将其转化为结构化的文本。
 **核心要求：**
 - **精确识别**: 识别图片中的所有文字、段落、列表、表格和数学公式。
 - **结构保持**: 必须最大程度地保留原始文档的布局和格式。
@@ -33,16 +33,15 @@ TRANSCRIPTION_PROMPT = {
 1.  **表格 (Tables)**: 必须使用 **Markdown** 格式进行输出 (例如: `| Header 1 | Header 2 |\n|---|---|\n| Cell 1 | Cell 2 |`)。
 2.  **数学公式 (Math Formulas)**: 必须使用 **LaTeX** 格式进行输出，行内公式使用 `$...$` 包裹，块级公式使用 `$$...$$` 包裹。
 3.  **其他所有内容**: 严格按照原始的换行、缩进和排版进行输出。
-现在，请处理你收到的**单张图片**，并严格按照上述规则，输出其包含的结构化文本。"""
-}
+现在，请处理你收到的**单张图片**，并严格按照上述规则，输出其包含的结构化文本。
+"""
 
 # --- 2. Prompts for Auxiliary LLM Tasks ---
 
 # 强大的文本合并与润色提示词
 # 指示模型接收多个由 "---[NEXT]---" 分隔的文本块，并智能地完成合并、去重、修正和润色。
-TEXT_MERGE_AND_POLISH_PROMPT = {
-    "system": "你是一位顶级的文档编辑专家。",
-    "user": """你收到了多个从连续截图中OCR识别出的文本片段，这些片段由 '---[NEXT]---' 分隔。
+TEXT_MERGE_AND_POLISH_PROMPT = """
+你是一位顶级的文档编辑专家。你收到了多个从连续截图中OCR识别出的文本片段，这些片段由 '---[NEXT]---' 分隔。
 你的任务是：
 1.  **智能合并**: 识别并拼接片段之间的重叠部分，丢弃重复内容。
 2.  **修正错误**: 修正明显的OCR识别错误（例如，`hell0` -> `hello`）。
@@ -53,14 +52,13 @@ TEXT_MERGE_AND_POLISH_PROMPT = {
 **待处理的文本片段:**
 ---
 {raw_texts}
----"""
-}
+---
+"""
 
 # 引导式标题生成提示词
 # 这个提示词将所有需求一次性告知模型，让模型直接生成最终的文件名主体。
-FILENAME_GENERATION_PROMPT = {
-    "system": "你是一个专业的文件命名专家。",
-    "user": """请仔细阅读以下从截图中识别出的文本内容，并严格按照以下规则生成一个文件名（不含时间戳和扩展名）。
+FILENAME_GENERATION_PROMPT = """
+你是一个专业的文件命名专家。请仔细阅读以下从截图中识别出的文本内容，并严格按照以下规则生成一个文件名（不含时间戳和扩展名）。
 
 **命名规则:**
 1.  **提取题号**: 识别文本中所有的题目序号。
@@ -80,30 +78,25 @@ FILENAME_GENERATION_PROMPT = {
 **待处理的文本内容:**
 ---
 {transcribed_text}
----"""
-}
-
+---
+"""
 
 # --- 3. Prompts for Core Solvers (Text-based Reasoning) ---
 
 PROMPT_TEMPLATES = {
-    "VISUAL_REASONING": {
-        "system": "你是一位顶级的逻辑推理专家。你必须严格遵循‘精细化感知’和‘抽象化推理’的两步框架，来解决下面的图形推理问题。",
-        "user": """### 1. 精细化感知
-*   **描述主要图形**: 详细描述主序列和选项中的每一个图形。
-### 2. 抽象化推理与结论
-*   **寻找规律**: 分析你所描述的特征，找出主序列中的核心规律。
-*   **匹配与决策**: 将规律应用于选项，并指出哪个选项完美匹配。
+    "VISUAL_REASONING": """
+你是一位顶级的逻辑推理专家。请严格遵循“精细化感知”和“抽象推理”两个步骤，来解决下面的图形推理问题。
+### 1. 精细化感知 (Fine-Grained Perception)
+*   **题干图形描述:** 逐一、详细地描述题干序列和选项中的每一个图形。
+### 2. 抽象推理与结论 (Abstract Reasoning & Conclusion)
+*   **规律寻找:** 分析你在“精细化感知”阶段描述的特征，找出题干图形序列中蕴含的核心规律。
+*   **匹配与决策:** 将规律应用到选项中，明确指出哪个选项完全符合。
 ### 3. 最终答案
-*   明确指出正确选项，并简要重申核心原因。
+明确指出哪个选项是正确答案，并简要重申核心理由。
+""",
 
----
-请解决图片中的问题。"""
-    },
-
-    "QUESTION_ANSWERING": {
-        "system": "你是一个精准、高效的“信息提取与计算”机器人。",
-        "user": """请根据提供的“问题文本”，直接、清晰地回答问题。
+    "QUESTION_ANSWERING": """
+你是一个精准、高效的“信息提取与计算”机器人。请根据提供的“问题文本”，直接、清晰地回答问题。
 **问题文本:**
 ---
 {transcribed_text}
@@ -111,12 +104,11 @@ PROMPT_TEMPLATES = {
 ### 1. 计算过程
 *   清晰地列出解决问题所需的关键数据、公式和计算步骤。
 ### 2. 最终答案
-*   明确地给出问题的最终答案。"""
-    },
+*   明确地给出问题的最终答案。
+""",
 
-    "GENERAL": {
-        "system": "你是一位逻辑严谨、善于分析问题的专家。",
-        "user": """请根据以下问题文本，提供一份详尽的解决方案。
+    "GENERAL": """
+你是一位逻辑严谨、善于分析问题的专家。请根据以下问题文本，提供一份详尽的解决方案。
 **问题文本:**
 ---
 {transcribed_text}
@@ -124,13 +116,12 @@ PROMPT_TEMPLATES = {
 ### 1. 题目分析
 *   阐述解决这个问题的核心逻辑和思考过程。
 ### 2. 最终答案
-*   明确地给出问题的最终答案。"""
-    },
+*   明确地给出问题的最终答案。
+""",
 
     "LEETCODE": {
-        "OPTIMAL": {
-            "system": "你是一位顶级的算法专家和软件架构师。",
-            "user": """请为下面的LeetCode编程题提供一份完整的、高质量的教学式题解。
+        "OPTIMAL": """
+你是一位顶级的算法专家和软件架构师。请为下面的LeetCode编程题提供一份完整的、高质量的教学式题解。
 你的回答必须严格遵循以下三个部分的结构：
 
 ---
@@ -155,11 +146,10 @@ PROMPT_TEMPLATES = {
 *   **代码要求**:
     *   **a. 核心解法:** 必须在 `Solution` 类中实现核心解法。
     *   **b. 可执行入口:** 在代码末尾，必须提供一个 `if __name__ == '__main__':` 代码块。
-    *   **c. 高效I/O:** 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。"""
-        },
-        "EXPLORATORY": {
-            "system": "你是一位乐于助人的资深软件工程师。",
-            "user": """请为下面的LeetCode编程题提供一份侧重于“思路清晰”的教学式题解。
+    *   **c. 高效I/O:** 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。
+""",
+        "EXPLORATORY": """
+你是一位乐于助人的资深软件工程师。请为下面的LeetCode编程题提供一份侧重于“思路清晰”的教学式题解。
 你的回答必须严格遵循以下两个部分的结构，并优先使用基础技巧（如循环、排序）来解决问题。
 
 ---
@@ -179,14 +169,13 @@ PROMPT_TEMPLATES = {
 *   **代码要求**:
     *   **a. 核心解法:** 必须在 `Solution` 类中实现核心解法。
     *   **b. 可执行入口:** 在代码末尾，必须提供一个 `if __name__ == '__main__':` 代码块。
-    *   **c. 高效I/O:** 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。"""
-        }
+    *   **c. 高效I/O:** 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。
+"""
     },
 
     "ACM": {
-        "OPTIMAL": {
-            "system": "你是一位经验丰富的ACM竞赛金牌教练，以代码的绝对正确性和对题目细节的精确把握著称。",
-            "user": """请为下面的ACM风格编程题目提供一份竞赛级的完整题解。
+        "OPTIMAL": """
+你是一位经验丰富的ACM竞赛金牌教练，以代码的绝对正确性和对题目细节的精确把握著称。请为下面的ACM风格编程题目提供一份竞赛级的完整题解。
 你的回答必须严格遵循以下四个部分的结构：
 
 ---
@@ -211,11 +200,10 @@ PROMPT_TEMPLATES = {
 *   **代码要求**: 必须使用 `sys.stdin.readlines()` 或 `sys.stdin.read()` 等高效I/O方式。
 
 ### 4. 代码关键点讲解
-*   **任务**: 在此部分，对代码中的核心算法（如DP的状态定义、转移方程）和关键处理逻辑（如路径回溯）进行简要讲解。"""
-        },
-        "EXPLORATORY": {
-            "system": "你是一位正在备战区域赛的ACM队员，擅长用稳健、不易出错的基础算法解决问题。",
-            "user": """请为下面的ACM风格编程题目提供一份侧重于“正确性优先”的题解。
+*   **任务**: 在此部分，对代码中的核心算法（如DP的状态定义、转移方程）和关键处理逻辑（如路径回溯）进行简要讲解。
+""",
+        "EXPLORATORY": """
+你是一位正在备战区域赛的ACM队员，擅长用稳健、不易出错的基础算法解决问题。请为下面的ACM风格编程题目提供一份侧重于“正确性优先”的题解。
 你的回答必须严格遵循以下两个部分的结构，并优先使用暴力搜索、排序等基础但可靠的方法。
 
 ---
@@ -232,7 +220,7 @@ PROMPT_TEMPLATES = {
 *   **任务**: 在此部分，提炼本题的所有要求，并提出一个虽然不一定最快，但逻辑清晰、确保能得到正确答案的算法思路。分析该解法的时间和空间复杂度。
 ### 2. 次优解Python代码实现
 *   **任务**: 在此部分，提供一份完整的、可独立运行的Python脚本。
-*   **代码要求**: 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。"""
-        }
+*   **代码要求**: 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。
+"""
     }
 }

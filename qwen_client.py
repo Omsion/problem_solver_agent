@@ -40,22 +40,27 @@ except Exception as e:
     qwen_client = None
 
 
-def _call_qwen_api(image_paths: List[Path], prompt_template: Dict[str, str], model_name: str, stream: bool = False,
+def _call_qwen_api(image_paths: List[Path], user_prompt: str, model_name: str, stream: bool = False,
                    extra_params: Dict = None) -> Union[str, Generator[str, None, None], None]:
+    """
+    重构后的核心API调用函数，直接接收一个格式化好的用户提示字符串。
+    """
     if not qwen_client:
         logger.error("Qwen-VL客户端未初始化，API调用中止。")
         return None
 
-    # 构建包含 system 和 user 角色的 messages 列表
-    messages = [{"role": "system", "content": prompt_template.get("system", "You are a helpful assistant.")}]
-
     # 构建 user message，它可以包含文本和多张图片
-    user_content = [{"type": "text", "text": prompt_template.get("user", "")}]
+    user_content = [{"type": "text", "text": user_prompt}]
     for image_path in image_paths:
         base64_image = encode_image_to_base64(image_path)
         if base64_image:
             user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
-    messages.append({"role": "user", "content": user_content})
+
+    # 构建完整的 messages 列表，包含一个通用的 system message
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": user_content}
+    ]
 
     payload: VisionCompletionPayload = {
         "model": model_name,
@@ -85,13 +90,13 @@ def _call_qwen_api(image_paths: List[Path], prompt_template: Dict[str, str], mod
         if stream:
             def error_generator():
                 yield f"\n\n--- ERROR in qwen_client ---\n{e}\n--- END ERROR ---\n"
-
             return error_generator()
         return None
 
 
 def classify_problem_type(image_paths: List[Path]) -> str:
     logger.info("步骤 1: 正在进行问题类型分类...")
+    # 直接传递字符串提示词
     response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT, config.QWEN_MODEL_NAME, stream=False)
     valid_types = ["CODING", "VISUAL_REASONING", "QUESTION_ANSWERING", "GENERAL"]
     if isinstance(response, str) and response in valid_types:
@@ -104,6 +109,7 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
     transcriptions = [""] * len(image_paths)
 
     def transcribe_single(index, path):
+        # 直接传递字符串提示词
         return index, _call_qwen_api([path], config.TRANSCRIPTION_PROMPT, config.QWEN_MODEL_NAME, stream=False)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
@@ -119,7 +125,7 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
                     all_successful = False
                     logger.error(f"  - 并行转录失败，图片 {index + 1}/{len(image_paths)}。")
             except Exception as e:
-                all_successful = False;
+                all_successful = False
                 logger.error(f"转录线程池任务执行时发生异常: {e}")
         if not all_successful: return None
     return transcriptions
