@@ -211,9 +211,11 @@ class ImageGrouper:
 
                 # 2.2 使用强大的LLM进行智能合并与润色
                 raw_texts_joined = "\n---[NEXT]---\n".join(raw_transcriptions)
-                merge_prompt = config.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
                 polished_text = solver_client.ask_for_analysis(
-                    merge_prompt, provider=config.AUX_PROVIDER, model=config.AUX_MODEL_NAME
+                    config.TEXT_MERGE_AND_POLISH_PROMPT,
+                    provider=config.AUX_PROVIDER,
+                    model=config.AUX_MODEL_NAME,
+                    format_dict={"raw_texts": raw_texts_joined}
                 )
                 if not polished_text: raise ValueError("LLM合并与润色步骤失败。")
                 transcribed_text = polished_text
@@ -223,15 +225,13 @@ class ImageGrouper:
             # --- 步骤 3: 核心求解 (Core Solving) ---
             # 使用原子化写入模式：先写入临时文件
             with open(temp_solution_path, 'w', encoding='utf-8') as f:
+                # 【优化】: 统一处理所有任务的流式响应
                 if problem_type == "VISUAL_REASONING":
-                    final_problem_type = problem_type
                     # 调用专用的视觉推理函数
-                    final_answer = qwen_client.solve_visual_reasoning_problem(group_to_process)
-                    if not final_answer: raise ValueError("视觉推理模型未能返回有效答案。")
+                    final_problem_type = problem_type
                     transcribed_text = "N/A (Visual Task)"
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
-                    f.write(final_answer)
-
+                    response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
                 else:  # CODING, GENERAL, QUESTION_ANSWERING
                     if problem_type == "CODING":
                         final_problem_type = "LEETCODE" if "leetcode" in transcribed_text.lower() else "ACM"
@@ -246,11 +246,16 @@ class ImageGrouper:
 
                     # 传递结构化的 prompt 模板
                     response_stream = solver_client.stream_solve(prompt_template, transcribed_text)
-                    final_answer = "".join(list(response_stream))
-                    f.write(final_answer)
+
+                if not response_stream:
+                    raise ValueError(f"未能从 {problem_type} 求解器获取响应流。")
+
+                final_answer_chunks = [chunk for chunk in response_stream]
+                final_answer = "".join(final_answer_chunks)
+                f.write(final_answer)
 
             if not final_answer.strip() or "--- ERROR ---" in final_answer:
-                raise ValueError("从核心求解器收到空响应或错误信息。")
+                raise ValueError(f"从核心求解器收到空响应或错误信息: {final_answer}")
 
             #  采用由LLM直接驱动的智能文件名生成流程
             logger.info("开始通过LLM生成智能文件名...")
