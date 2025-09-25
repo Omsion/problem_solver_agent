@@ -83,14 +83,9 @@ def _prepare_messages(prompt_string: str, format_dict: Dict = None) -> List[Dict
     # 使用传入的字典格式化用户提示字符串
     formatted_prompt = prompt_string.format(**format_dict)
 
-    # 从格式化后的提示词中提取第一行作为 system prompt
-    lines = formatted_prompt.strip().split('\n')
-    system_content = lines[0]
-    user_content = '\n'.join(lines[1:]).strip()
-
+    # 直接返回只包含 user 角色的消息列表
     return [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_content}
+        {"role": "user", "content": formatted_prompt}
     ]
 
 

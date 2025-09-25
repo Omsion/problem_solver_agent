@@ -56,9 +56,8 @@ def _call_qwen_api(image_paths: List[Path], user_prompt: str, model_name: str, s
         if base64_image:
             user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
 
-    # 构建完整的 messages 列表，包含一个通用的 system message
+    # 构建只包含 "user" 角色的 messages 列表
     messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": user_content}
     ]
 
@@ -79,7 +78,6 @@ def _call_qwen_api(image_paths: List[Path], user_prompt: str, model_name: str, s
                 for chunk in completion:
                     if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                         yield chunk.choices[0].delta.content
-
             return stream_generator()
         else:
             return completion.choices[0].message.content.strip() if completion.choices[0].message.content else None
