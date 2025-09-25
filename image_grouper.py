@@ -225,13 +225,10 @@ class ImageGrouper:
             with open(temp_solution_path, 'w', encoding='utf-8') as f:
                 if problem_type == "VISUAL_REASONING":
                     final_problem_type = problem_type
-                    prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
-                    if not prompt_template: raise ValueError(f"缺少 {problem_type} 的提示词模板")
-
-                    final_answer = qwen_client.solve_visual_problem(group_to_process, prompt_template)
+                    # 调用专用的视觉推理函数
+                    final_answer = qwen_client.solve_visual_reasoning_problem(group_to_process)
                     if not final_answer: raise ValueError("视觉推理模型未能返回有效答案。")
-
-                    transcribed_text = "N/A (Visual Task)"  # 为文件头和标题生成提供上下文
+                    transcribed_text = "N/A (Visual Task)"
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
                     f.write(final_answer)
 
@@ -248,7 +245,8 @@ class ImageGrouper:
                     final_prompt = prompt_template.format(transcribed_text=transcribed_text)
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
 
-                    response_stream = solver_client.stream_solve(final_prompt)
+                    #传递结构化的 prompt 模板
+                    response_stream = solver_client.stream_solve(prompt_template, transcribed_text)
                     final_answer = "".join(list(response_stream))
                     f.write(final_answer)
 
@@ -261,7 +259,10 @@ class ImageGrouper:
 
             # 调用辅助模型来生成文件名
             filename_body = solver_client.ask_for_analysis(
-                title_prompt, provider=config.AUX_PROVIDER, model=config.AUX_MODEL_NAME
+                config.FILENAME_GENERATION_PROMPT,
+                provider=config.AUX_PROVIDER,
+                model=config.AUX_MODEL_NAME,
+                format_dict={"transcribed_text": transcribed_text}
             )
 
             # 提供回退机制，确保总能生成一个有效的文件名

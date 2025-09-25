@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-自动化多图解题Agent - 配置文件 (V2.1 - 统一客户端版)
+自动化多图解题Agent - 配置文件 (V2.2 - 多模型/多端点版)
 """
 import os
 from pathlib import Path
@@ -22,23 +22,20 @@ RETRY_DELAY = 10
 # --- 2. 视觉模型配置 (Qwen-VL) ---
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_MODEL_NAME = "qwen-vl-max"
+# 专用于视觉推理的、更强大的思考模型
+QWEN_VL_THINKING_MODEL_NAME = "qwen3-vl-235b-a22b-thinking"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
-# 统一配置用于文本合并、润色和标题生成的辅助模型。
-# GLM-4.5-Air 是一个速度快、性能强的优秀选择。或者deepseek_chat
-AUX_PROVIDER = "deepseek"  # deepseek or zhipu
-AUX_MODEL_NAME = "deepseek-chat"  # deepseek-chat or glm-4.5-air
+AUX_PROVIDER = "deepseek"
+AUX_MODEL_NAME = "deepseek-chat"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 SOLVER_PROVIDER = "zhipu"
 SOLVER_CONFIG = {
-    "deepseek": {
-        "model": "deepseek-reasoner",
-        "base_url": "https://api.deepseek.com/v1"
-    },
+    "deepseek": { "model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1" },
     "dashscope": {
-        "model": "qwen2-72b-instruct",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        "model": "qwen3-max",
+        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     },
     "zhipu": {
         "model": "glm-4.5",
@@ -60,7 +57,6 @@ SOLUTION_DIR = ROOT_DIR / "solutions"
 # --- 7. Agent 行为配置 ---
 GROUP_TIMEOUT = 8.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
-
 
 # --- 8. 初始化功能 ---
 def initialize_directories():

@@ -73,7 +73,23 @@ def get_client(provider: str) -> OpenAI:
     return client
 
 
-def stream_solve(final_prompt: str) -> Generator[str, None, None]:
+def _prepare_messages(prompt_template: Dict[str, str], format_dict: Dict = None) -> List[Dict[str, Any]]:
+    """
+    一个辅助函数，用于从结构化的提示词模板准备 messages 列表。
+    """
+    if format_dict is None:
+        format_dict = {}
+
+    # 格式化 user prompt
+    user_prompt = prompt_template.get("user", "").format(**format_dict)
+
+    return [
+        {"role": "system", "content": prompt_template.get("system", "You are a helpful assistant.")},
+        {"role": "user", "content": user_prompt}
+    ]
+
+
+def stream_solve(final_prompt_template: Dict[str, str], transcribed_text: str) -> Generator[str, None, None]:
     """
     根据全局配置，流式调用指定的LLM进行问题求解。
     """
@@ -82,7 +98,8 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
     logger.info(f"Step 2.2: 使用模型 '{model}' (提供商: {provider}) 进行流式求解...")
     try:
         client = get_client(provider)
-        messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
+        # 使用辅助函数准备 messages
+        messages = _prepare_messages(final_prompt_template, {"transcribed_text": transcribed_text})
 
         if provider == 'zhipu' and model == 'glm-4.5':
             logger.info("检测到 GLM-4.5 模型，启用深度思考模式 (仅输出最终结果)。")
@@ -99,12 +116,10 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
                     yield delta.content
 
         elif provider == 'dashscope' and 'qwen' in model:
-            logger.info(f"检测到 DashScope Qwen 系列模型 ({model})，启用思考模式。")
+            logger.info(f"检测到 DashScope Qwen 系列模型 ({model})，启用思考模式并设置 result_format。")
             payload: DashScopeChatPayload = {
-                "model": model,
-                "messages": messages,
-                "stream": True,
-                "extra_body": {"enable_thinking": True}
+                "model": model, "messages": messages, "stream": True,
+                "extra_body": {"enable_thinking": True, "result_format": "message"}
             }
             completion = client.chat.completions.create(**payload)  # type: ignore
             for chunk in completion:
@@ -132,26 +147,22 @@ def stream_solve(final_prompt: str) -> Generator[str, None, None]:
 
 
 #  用于辅助任务的非流式调用函数
-def ask_for_analysis(prompt: str, provider: str, model: str) -> Union[str, None]:
-    """
-    对指定的模型进行一次非流式的API调用，并立即返回完整的文本结果。
-    专用于文本合并、标题生成等辅助任务。
-    """
+def ask_for_analysis(prompt_template: Dict[str, str], provider: str, model: str, format_dict: Dict = None) -> Union[
+    str, None]:
     logger.info(f"正在使用辅助模型 '{model}' (提供商: {provider}) 进行非流式分析...")
     try:
         client = get_client(provider)
+        # 使用辅助函数准备 messages
+        messages = _prepare_messages(prompt_template, format_dict)
+
         response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            temperature=0.7,
-            timeout=120.0
+            model=model, messages=messages, stream=False,
+            temperature=0.2, timeout=120.0
         )  # type: ignore
 
         if response and response.choices and response.choices[0].message.content:
             return response.choices[0].message.content.strip()
         else:
-            logger.warning(f"从 '{model}' 收到空响应或无效结构。")
             return None
     except Exception as e:
         logger.error(f"调用辅助模型 '{model}' 进行分析时发生错误: {e}", exc_info=True)

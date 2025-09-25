@@ -44,7 +44,7 @@ except Exception as e:
     qwen_client = None
 
 
-def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
+def _call_qwen_api(image_paths: List[Path], prompt_template: Dict[str, str], model_name: str, extra_params: Dict = None) -> Union[str, None]:
     """
     通用的Qwen-VL API调用函数，是本模块所有功能的核心。
     """
@@ -52,33 +52,34 @@ def _call_qwen_api(image_paths: List[Path], prompt: str) -> Union[str, None]:
         logger.error("Qwen-VL客户端未初始化，API调用中止。")
         return None
 
-    content_payload = [{"type": "text", "text": prompt}]
+        # 【优化】: 构建包含 system 和 user 角色的 messages 列表
+    messages = [
+        {"role": "system", "content": prompt_template.get("system", "You are a helpful assistant.")}
+    ]
+
+    # 构建 user message，它可以包含文本和多张图片
+    user_content = [{"type": "text", "text": prompt_template.get("user", "")}]
     for image_path in image_paths:
         base64_image = encode_image_to_base64(image_path)
         if base64_image:
-            content_payload.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-            })
-        else:
-            logger.warning(f"编码或读取图片失败，已跳过: {image_path.name}")
+            user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
 
-    if len(content_payload) <= 1:
-        logger.error("没有有效的图片可发送至Qwen-VL，API调用中止。")
-        return None
+    messages.append({"role": "user", "content": user_content})
 
-    payload: VisionCompletionPayload = {
-        "model": config.QWEN_MODEL_NAME,
-        "messages": [{"role": "user", "content": content_payload}],
-        "max_tokens": 8192
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": 8192,
+        "stream": False  # 视觉模型通常不使用流式
     }
+    if extra_params:
+        payload.update(extra_params)
 
     try:
-        completion = qwen_client.chat.completions.create(**payload)
-        response_text = completion.choices[0].message.content
-        return response_text.strip() if response_text else None
+        completion = qwen_client.chat.completions.create(**payload)  # type: ignore
+        return completion.choices[0].message.content.strip() if completion.choices[0].message.content else None
     except Exception as e:
-        logger.error(f"调用Qwen-VL API时发生错误: {e}", exc_info=True)
+        logger.error(f"调用模型 '{model_name}' 时发生错误: {e}", exc_info=True)
         return None
 
 
@@ -131,10 +132,19 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
     logger.info("所有图片独立转录完成。")
     return transcriptions
 
-
-def solve_visual_problem(image_paths: List[Path], prompt_template: str) -> Union[str, None]:
+# 专门用于视觉推理的函数
+def solve_visual_reasoning_problem(image_paths: List[Path]) -> Union[str, None]:
     """
-    直接进行视觉推理求解。
+    调用专用的 `qwen3-vl-thinking` 模型来解决视觉推理问题。
     """
-    logger.info("步骤 2.2: 正在直接进行视觉推理求解...")
-    return _call_qwen_api(image_paths, prompt_template)
+    logger.info(f"步骤 2.2: 正在使用专用视觉思考模型 '{config.QWEN_VL_THINKING_MODEL_NAME}' 进行求解...")
+    # 根据API文档，传递 thinking_budget 参数
+    extra_params = {
+        "extra_body": {"thinking_budget": 4000}
+    }
+    return _call_qwen_api(
+        image_paths,
+        config.PROMPT_TEMPLATES["VISUAL_REASONING"],
+        config.QWEN_VL_THINKING_MODEL_NAME,
+        extra_params
+    )

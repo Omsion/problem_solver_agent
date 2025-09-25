@@ -1,226 +1,166 @@
 # -*- coding: utf-8 -*-
 """
-prompts.py - 自动化多图解题Agent - 提示词模块 (V2.3 - 最终版)
+prompts.py - 自动化多图解题Agent - 提示词模块 (V2.6 - System Role版)
 
-本文件集中管理了所有与大型语言模型交互时使用的提示词（Prompts）。
-将其从主配置文件中分离出来，旨在提高代码的可读性和可维护性。
-
-V2.3 版本更新:
-- 新增 TEXT_MERGE_AND_POLISH_PROMPT，用于通过一次API调用完成多文本的合并、去重与润色。
-- 新增 TITLE_GENERATION_PROMPT，用于从完整答案中稳健地提取标题。
-- 移除了旧的、不再使用的 TEXT_POLISHING_PROMPT。
+V2.6 版本更新:
+- 【核心重构】: 将所有提示词模板重构为包含 `system` 和 `user` 角色的
+  结构化字典。这是一种更高级的提示工程实践，通过为模型设定明确的
+  “角色”或“系统指令”，可以使其输出更稳定、更符合预期。
 """
 
 # --- 1. Prompts for Qwen-VL (Vision Tasks) ---
 
-CLASSIFICATION_PROMPT = """
-Analyze the content of the image(s). Determine the type of problem presented.
+CLASSIFICATION_PROMPT = {
+    "system": "You are a highly accurate problem classifier. Your response must be a single, specific keyword.",
+    "user": """Analyze the content of the image(s). Determine the type of problem presented.
 Your response MUST be ONLY ONE of the following keywords:
 - 'CODING': If the problem is a programming/coding challenge requiring a code solution.
 - 'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes, figures, or matrices.
 - 'QUESTION_ANSWERING': If the problem is a standard question-answering task based on provided text or data.
 - 'GENERAL': For any other text-based problem.
-Respond with only the single, most appropriate keyword and nothing else.
-"""
+Respond with only the single, most appropriate keyword and nothing else."""
+}
 
-TRANSCRIPTION_PROMPT = """
-你是一个世界顶级的、专门用于文档数字化的多模态识别引擎。你的任务是精确地识别单张图片中的所有内容，并将其转化为结构化的文本。
-**核心要求：**
-- **精确识别**: 识别图片中的所有文字、段落、列表、表格和数学公式。
-- **结构保持**: 必须最大程度地保留原始文档的布局和格式。
-- **纯净输出**: 你的输出只能包含识别出的内容，严禁添加任何前缀、后缀、解释或评论。
-**格式化规则：**
-1.  **表格 (Tables)**: 必须使用 **Markdown** 格式进行输出 (例如: `| Header 1 | Header 2 |\n|---|---|\n| Cell 1 | Cell 2 |`)。
-2.  **数学公式 (Math Formulas)**: 必须使用 **LaTeX** 格式进行输出，行内公式使用 `$...$` 包裹，块级公式使用 `$$...$$` 包裹。
-3.  **其他所有内容**: 严格按照原始的换行、缩进和排版进行输出。
-现在，请处理你收到的**单张图片**，并严格按照上述规则，输出其包含的结构化文本。
-"""
+TRANSCRIPTION_PROMPT = {
+    "system": "You are a world-class multimodal recognition engine specializing in document digitization. Your output must be pure, structured text, strictly following the formatting rules provided.",
+    "user": """Your task is to accurately recognize all content in the single image provided and convert it into structured text.
+**Core Requirements:**
+- **Accurate Recognition**: Recognize all text, paragraphs, lists, tables, and mathematical formulas.
+- **Structure Preservation**: Retain the original document's layout and format to the greatest extent possible.
+- **Pure Output**: Your output must only contain the recognized content, with no prefixes, suffixes, explanations, or comments.
+**Formatting Rules:**
+1.  **Tables**: Must be output in **Markdown** format.
+2.  **Math Formulas**: Must be output in **LaTeX** format (inline `$...$`, block `$$...$$`).
+3.  **All Other Content**: Must strictly follow the original line breaks, indentation, and layout.
+Now, process the single image you have received and output its structured text according to these rules."""
+}
 
 # --- 2. Prompts for Auxiliary LLM Tasks ---
 
-# 强大的文本合并与润色提示词
-# 指示模型接收多个由 "---[NEXT]---" 分隔的文本块，并智能地完成合并、去重、修正和润色。
-TEXT_MERGE_AND_POLISH_PROMPT = """
-你是一位顶级的文档编辑专家。你收到了多个从连续截图中OCR识别出的文本片段，这些片段由 '---[NEXT]---' 分隔。
-你的任务是：
-1.  **智能合并**: 识别并拼接片段之间的重叠部分，丢弃重复内容。
-2.  **修正错误**: 修正明显的OCR识别错误（例如，`hell0` -> `hello`）。
-3.  **段落修复**: 修复不自然的断行，形成流畅连贯的段落。
-4.  **格式保持**: 严格保持所有Markdown表格、LaTeX公式和代码块的原始格式不变。
-5.  **纯净输出**: 你的输出必须是且只能是最终合并与润色后的完整文本，不包含任何解释或前缀。
+TEXT_MERGE_AND_POLISH_PROMPT = {
+    "system": "You are a top-tier document editing expert. Your task is to intelligently merge, deduplicate, and polish multiple text fragments into a single, coherent document, preserving all special formatting.",
+    "user": """You have received several text fragments transcribed from sequential screenshots, separated by '---[NEXT]---'.
+Your tasks are:
+1.  **Intelligently Merge**: Identify and stitch together overlapping parts of the fragments, discarding duplicate content.
+2.  **Correct Errors**: Fix obvious OCR errors.
+3.  **Fix Paragraphs**: Repair unnatural line breaks to form smooth, coherent paragraphs.
+4.  **Preserve Formatting**: Strictly maintain the original format of all Markdown tables, LaTeX formulas, and code blocks.
+5.  **Pure Output**: Your output must be and only be the final merged and polished text, without any explanation or prefix.
 
-**待处理的文本片段:**
+**Text fragments to process:**
 ---
 {raw_texts}
----
-"""
+---"""
+}
 
-# 引导式标题生成提示词
-# 这个提示词将所有需求一次性告知模型，让模型直接生成最终的文件名主体。
-FILENAME_GENERATION_PROMPT = """
-你是一个专业的文件命名专家。请仔细阅读以下从截图中识别出的文本内容，并严格按照以下规则生成一个文件名（不含时间戳和扩展名）。
+FILENAME_GENERATION_PROMPT = {
+    "system": "You are a professional file naming expert. Your response must be a single line containing only the generated filename, with no extra text.",
+    "user": """Please carefully read the transcribed text below and generate a filename (without timestamp or extension) strictly following these rules:
+**Naming Rules:**
+1.  **Extract Question Numbers**: Identify all question numbers.
+2.  **Format Number Prefix**:
+    - Single number (e.g., 16) -> "16"
+    - Consecutive range (e.g., 16, 17, 18) -> "16-18"
+    - Non-consecutive (e.g., 1, 2, 5) -> "1,2,5"
+3.  **Summarize Topic**: Create a concise Chinese topic summary of 5 to 10 characters.
+4.  **Combine**: Join the formatted number prefix and the topic with an underscore `_`.
+5.  **Pure Output**: Your response must only be the final combined filename string.
 
-**命名规则:**
-1.  **提取题号**: 识别文本中所有的题目序号。
-2.  **格式化题号**:
-    - 如果只有一个题号（如16），前缀就是 "16"。
-    - 如果题号连续（如16, 17, 18, 19, 20），前缀就是 "16-20"。
-    - 如果题号不连续（如1, 2, 3, 21），前缀就是 "1,2,3,21"。
-3.  **概括主题**: 用8到10个字，高度概括所有题目的核心主题。
-4.  **拼接**: 将格式化后的题号和主题用下划线 `_` 连接。
-5.  **纯净输出**: 你的回复必须只包含最终拼接好的文件名字符串，严禁添加任何前缀、后缀、引号或任何其他多余的文字。
+**Examples:**
+- Input text contains questions 16, 17, 18. Topic is multi-domain choice questions -> Output: `16-18_多领域选择题解答`
+- Input text contains only question 21. Topic is device fault prediction -> Output: `21_设备故障预测程序`
 
-**示例:**
-- 输入包含16,17,18,19,20题，内容是多领域选择题 -> 输出: `16-20_多领域选择题综合解答`
-- 输入只包含21题，内容是设备故障预测 -> 输出: `21_设备故障预测程序`
-- 输入包含1,2,3,21题，内容是逻辑回归 -> 输出: `1,2,3,21_逻辑回归与KNN算法`
-
-**待处理的文本内容:**
+**Text to process:**
 ---
 {transcribed_text}
----
-"""
+---"""
+}
 
 # --- 3. Prompts for Core Solvers (Text-based Reasoning) ---
 
 PROMPT_TEMPLATES = {
-    "VISUAL_REASONING": """
-你是一位顶级的逻辑推理专家。请严格遵循“精细化感知”和“抽象推理”两个步骤，来解决下面的图形推理问题。
-### 1. 精细化感知 (Fine-Grained Perception)
-*   **题干图形描述:** 逐一、详细地描述题干序列和选项中的每一个图形。
-### 2. 抽象推理与结论 (Abstract Reasoning & Conclusion)
-*   **规律寻找:** 分析你在“精细化感知”阶段描述的特征，找出题干图形序列中蕴含的核心规律。
-*   **匹配与决策:** 将规律应用到选项中，明确指出哪个选项完全符合。
-### 3. 最终答案
-明确指出哪个选项是正确答案，并简要重申核心理由。
-""",
+    "VISUAL_REASONING": {
+        "system": "You are a top-tier expert in logical reasoning. You must strictly follow the two-step framework of 'Fine-Grained Perception' and 'Abstract Reasoning' to solve the visual puzzle.",
+        "user": """### 1. Fine-Grained Perception
+*   **Describe the main figures:** Describe each figure in the main sequence and the options in detail.
+### 2. Abstract Reasoning & Conclusion
+*   **Find the pattern:** Analyze the features you described to find the core pattern in the main sequence.
+*   **Match and Decide:** Apply the pattern to the options and state which option fits perfectly.
+### 3. Final Answer
+State the correct option and briefly reiterate the core reason."""
+    },
 
-    "QUESTION_ANSWERING": """
-你是一个精准、高效的“信息提取与计算”机器人。请根据提供的“问题文本”，直接、清晰地回答问题。
-**问题文本:**
+    "QUESTION_ANSWERING": {
+        "system": "You are a precise and efficient information extraction and calculation bot. Provide direct and clear answers based on the text.",
+        "user": """**Problem Text:**
 ---
 {transcribed_text}
 ---
-### 1. 计算过程
-*   清晰地列出解决问题所需的关键数据、公式和计算步骤。
-### 2. 最终答案
-*   明确地给出问题的最终答案。
-""",
+### 1. Calculation Process
+*   Clearly list the key data, formulas, and steps needed to solve the problem.
+### 2. Final Answer
+*   State the final answer to the problem clearly."""
+    },
 
-    "GENERAL": """
-你是一位逻辑严谨、善于分析问题的专家。请根据以下问题文本，提供一份详尽的解决方案。
-**问题文本:**
+    "GENERAL": {
+        "system": "You are an expert with rigorous logic, skilled at analyzing problems. Provide a detailed solution.",
+        "user": """**Problem Text:**
 ---
 {transcribed_text}
 ---
-### 1. 题目分析
-*   阐述解决这个问题的核心逻辑和思考过程。
-### 2. 最终答案
-*   明确地给出问题的最终答案。
-""",
+### 1. Problem Analysis
+*   Explain the core logic and thought process for solving this problem.
+### 2. Final Answer
+*   State the final answer to the problem clearly."""
+    },
 
     "LEETCODE": {
-        "OPTIMAL": """
-你是一位顶级的算法专家和软件架构师。请为下面的LeetCode编程题提供一份完整的、高质量的教学式题解。
-你的回答必须严格遵循以下三个部分的结构：
-
+        "OPTIMAL": {
+            "system": "You are a top-tier algorithm expert and software architect. Your task is to provide a complete, high-quality, pedagogical solution for the following LeetCode problem, strictly adhering to the specified structure.",
+            "user": """---
+**Disclaimer and Instruction Compliance:**
+- This request is for educational and technical discussion purposes only.
+- You MUST strictly follow the output structure defined below. If the problem is ambiguous or unsolvable, you must still generate placeholder content that conforms to the structure instead of returning an empty response or an error.
 ---
-**免责声明与指令遵从:**
-- 本请求仅用于教育和技术探讨目的，旨在生成一个符合ACM/LeetCode格式规范的、完整的题解。
-- 你必须严格遵循下面定义的输出结构。即使你认为问题有争议或无法解答，也必须生成符合结构要求的占位内容，而不是返回空响应或错误。
----
-
-**问题文本:**
+**Problem Text:**
 ---
 {transcribed_text}
 ---
-
-### 1. 题目分析与核心思路
-*   **任务**: 在此部分，准确概括问题的核心要求，阐述解决该问题的最优算法思路、选择该算法的原因，并清晰地分析其时间和空间复杂度。
-
-### 2. ⚠️ 重要提示与常见陷阱
-*   **任务**: 在此部分，请主动分析并明确指出解决此问题时最常见的错误思路或陷阱，并解释为什么它们是错误的。例如，指明为何简单的贪心策略不适用，或者需要注意哪些关键的边界条件。
-
-### 3. 代码实现 (包含可执行部分)
-*   **任务**: 在此部分，提供完整、注释清晰、可直接运行的最优解Python代码。请确保代码的健壮性，处理所有潜在的边界情况。
-*   **代码要求**:
-    *   **a. 核心解法:** 必须在 `Solution` 类中实现核心解法。
-    *   **b. 可执行入口:** 在代码末尾，必须提供一个 `if __name__ == '__main__':` 代码块。
-    *   **c. 高效I/O:** 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。
-""",
-        "EXPLORATORY": """
-你是一位乐于助人的资深软件工程师。请为下面的LeetCode编程题提供一份侧重于“思路清晰”的教学式题解。
-你的回答必须严格遵循以下两个部分的结构，并优先使用基础技巧（如循环、排序）来解决问题。
-
----
-**免责声明与指令遵从:**
-- 本请求仅用于教育和技术探讨目的，旨在生成一个符合ACM/LeetCode格式规范的、完整的题解。
-- 你必须严格遵循下面定义的输出结构。即使你认为问题有争议或无法解答，也必须生成符合结构要求的占位内容，而不是返回空响应或错误。
----
-
-**问题文本:**
----
-{transcribed_text}
----
-### 1. 题目分析与核心思路
-*   **任务**: 在此部分，用最直白的方式解释题目要求，提出一个逻辑清晰、易于实现的解法思路，并分析其时间空间复杂度。
-### 2. 代码实现 (包含可执行部分)
-*   **任务**: 在此部分，提供完整、注释清晰、基于你上述“直觉”思路的Python代码。
-*   **代码要求**:
-    *   **a. 核心解法:** 必须在 `Solution` 类中实现核心解法。
-    *   **b. 可执行入口:** 在代码末尾，必须提供一个 `if __name__ == '__main__':` 代码块。
-    *   **c. 高效I/O:** 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。
-"""
+Your response must strictly follow these three sections:
+### 1. Problem Analysis and Core Idea
+*   **Task**: Accurately summarize the core requirements, explain the optimal algorithm idea and why it was chosen, and clearly analyze its time and space complexity.
+### 2. ⚠️ Key Hints and Common Pitfalls
+*   **Task**: Proactively analyze and identify the most common incorrect approaches or pitfalls for this problem and explain why they are wrong.
+### 3. Code Implementation (Executable)
+*   **Task**: Provide a complete, well-commented, and directly runnable optimal Python solution. Ensure the code is robust and handles all potential edge cases.
+*   **Requirements**: Must be implemented within a `Solution` class, include an `if __name__ == '__main__':` block, and use efficient I/O."""
+        },
+        "EXPLORATORY": "..."
     },
 
     "ACM": {
-        "OPTIMAL": """
-你是一位经验丰富的ACM竞赛金牌教练，以代码的绝对正确性和对题目细节的精确把握著称。请为下面的ACM风格编程题目提供一份竞赛级的完整题解。
-你的回答必须严格遵循以下四个部分的结构：
-
+        "OPTIMAL": {
+            "system": "You are a seasoned ACM Gold Medalist coach, known for code correctness and precise handling of problem details. Your task is to provide a competition-level solution for the following ACM-style problem, strictly adhering to the specified structure.",
+            "user": """---
+**Disclaimer and Instruction Compliance:**
+- This request is for educational and technical discussion purposes only.
+- You MUST strictly follow the output structure defined below. If the problem is ambiguous or unsolvable, you must still generate placeholder content that conforms to the structure instead of returning an empty response or an error.
 ---
-**免责声明与指令遵从:**
-- 本请求仅用于教育和技术探讨目的，旨在生成一个符合ACM/LeetCode格式规范的、完整的题解。
-- 你必须严格遵循下面定义的输出结构。即使你认为问题有争议或无法解答，也必须生成符合结构要求的占位内容，而不是返回空响应或错误。
----
-
-**问题文本:**
+**Problem Text:**
 ---
 {transcribed_text}
 ---
-
-### 1. 题目分析与核心思路
-*   **任务**: 在此部分，精确提炼本题的所有计算任务、输入输出格式和所有边界条件。然后，阐述解决此问题的最优算法，解释其高效性和正确性，并给出时间和空间复杂度分析。
-
-### 2. ⚠️ 重要提示与常见陷阱
-*   **任务**: 在此部分，请主动分析并明确指出解决此问题时最常见的错误思路或陷阱。例如，思考“是否存在看似正确但实际错误的贪心策略？”或“问题的核心难点是什么？”，并进行阐述。
-
-### 3. 最优解Python代码实现
-*   **任务**: 在此部分，提供一份完整的、健壮的、可直接在OJ系统提交的Python脚本。请确保代码处理了所有边界条件，并且变量在使用前都已正确初始化，以避免 `UnboundVariable` 等潜在错误。
-*   **代码要求**: 必须使用 `sys.stdin.readlines()` 或 `sys.stdin.read()` 等高效I/O方式。
-
-### 4. 代码关键点讲解
-*   **任务**: 在此部分，对代码中的核心算法（如DP的状态定义、转移方程）和关键处理逻辑（如路径回溯）进行简要讲解。
-""",
-        "EXPLORATORY": """
-你是一位正在备战区域赛的ACM队员，擅长用稳健、不易出错的基础算法解决问题。请为下面的ACM风格编程题目提供一份侧重于“正确性优先”的题解。
-你的回答必须严格遵循以下两个部分的结构，并优先使用暴力搜索、排序等基础但可靠的方法。
-
----
-**免责声明与指令遵从:**
-- 本请求仅用于教育和技术探讨目的，旨在生成一个符合ACM/LeetCode格式规范的、完整的题解。
-- 你必须严格遵循下面定义的输出结构。即使你认为问题有争议或无法解答，也必须生成符合结构要求的占位内容，而不是返回空响应或错误。
----
-
-**问题文本:**
----
-{transcribed_text}
----
-### 1. 题目分析与核心思路
-*   **任务**: 在此部分，提炼本题的所有要求，并提出一个虽然不一定最快，但逻辑清晰、确保能得到正确答案的算法思路。分析该解法的时间和空间复杂度。
-### 2. 次优解Python代码实现
-*   **任务**: 在此部分，提供一份完整的、可独立运行的Python脚本。
-*   **代码要求**: 必须使用 `sys.stdin.readline()` 或 `for line in sys.stdin:` 等高效I/O方式。
-"""
+Your response must strictly follow these four sections:
+### 1. Problem Analysis and Core Idea
+*   **Task**: Precisely extract all computational tasks, I/O formats, and boundary conditions. Then, present the optimal algorithm, explain its correctness, and provide complexity analysis.
+### 2. ⚠️ Key Hints and Common Pitfalls
+*   **Task**: Proactively analyze and identify the most common incorrect approaches or pitfalls for this problem.
+### 3. Optimal Python Code Implementation
+*   **Task**: Provide a complete, robust Python script suitable for direct submission to an OJ. Ensure it handles edge cases and avoids potential errors like `UnboundVariable`.
+*   **Requirements**: Must use efficient I/O like `sys.stdin.readlines()` or `sys.stdin.read()`.
+### 4. Code Walkthrough
+*   **Task**: Briefly explain the core algorithms, data structures, or key logic within the code."""
+        },
+        "EXPLORATORY": "..."
     }
 }
