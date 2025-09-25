@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 
-"""
+r"""
 项目名称: 真实打字模拟器 (最终形态：智能注释剥离)
 描述:       1. 新增“注释剥离”模式，利用`tokenize`模块精确移除所有Python注释。
             2. 采用“绝对空格注入”策略，彻底解决所有缩进问题。
             3. 引入“隐藏/恢复鼠标光标”功能，提供最干净、无干扰的视觉体验。
 作者:       [Your Name/Agent]
 依赖库:     keyboard, pyperclip, pyautogui
-运行方式:   在管理员终端中执行 python human_typer.py
+运行方式:   在管理员终端中执行 :
+python human_typer.py
+conda activate llm && cd /d D:\Users\wzw\Pictures\problem_solver_agent && python human_typer.py
 """
 
 import time
@@ -195,14 +197,14 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup)
 
     print("=" * 50)
-    print("  真实打字模拟器已启动... (智能注释剥离版)")
-    print(f"  当前模式: {'代码完美 (无错误)' if PERFECT_CODE_MODE else '真人模拟(100%修正)'}")
-    print(f"  隐藏光标: {'开启' if HIDE_MOUSE_CURSOR else '关闭'}")
-    print(f"  剥离注释: {'开启' if STRIP_COMMENTS_MODE else '关闭'}")
-    print("  用法：复制任意文本，将鼠标光标置于目标位置，然后按下 Ctrl + V")
-    print("  按 ESC 键可随时退出本程序。")
-    print("  (请确保本终端以管理员身份运行)")
-    print("=" * 50)
+    # print("  真实打字模拟器已启动... (智能注释剥离版)")
+    # print(f"  当前模式: {'代码完美 (无错误)' if PERFECT_CODE_MODE else '真人模拟(100%修正)'}")
+    # print(f"  隐藏光标: {'开启' if HIDE_MOUSE_CURSOR else '关闭'}")
+    # print(f"  剥离注释: {'开启' if STRIP_COMMENTS_MODE else '关闭'}")
+    # print("  用法：复制任意文本，将鼠标光标置于目标位置，然后按下 Ctrl + V")
+    # print("  按 ESC 键可随时退出本程序。")
+    # print("  (请确保本终端以管理员身份运行)")
+    # print("=" * 50)
 
     keyboard.add_hotkey('ctrl+v', trigger_simulation, suppress=True)
     keyboard.wait('esc')

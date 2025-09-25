@@ -30,9 +30,9 @@ AUX_PROVIDER = "deepseek"
 AUX_MODEL_NAME = "deepseek-chat"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
-SOLVER_PROVIDER = "dashscope"
+SOLVER_PROVIDER = "dashscope"  # or zhipu
 SOLVER_CONFIG = {
-    "deepseek": { "model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1" },
+    "deepseek": {"model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1"},
     "dashscope": {
         "model": "qwen3-max",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -57,6 +57,7 @@ SOLUTION_DIR = ROOT_DIR / "solutions"
 # --- 7. Agent 行为配置 ---
 GROUP_TIMEOUT = 8.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
+
 
 # --- 8. 初始化功能 ---
 def initialize_directories():
