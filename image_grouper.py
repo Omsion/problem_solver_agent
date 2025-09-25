@@ -242,10 +242,9 @@ class ImageGrouper:
 
                     if not prompt_template: raise ValueError(f"缺少 '{final_problem_type}' 的提示词模板。")
 
-                    final_prompt = prompt_template.format(transcribed_text=transcribed_text)
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
 
-                    #传递结构化的 prompt 模板
+                    # 传递结构化的 prompt 模板
                     response_stream = solver_client.stream_solve(prompt_template, transcribed_text)
                     final_answer = "".join(list(response_stream))
                     f.write(final_answer)
@@ -255,9 +254,6 @@ class ImageGrouper:
 
             #  采用由LLM直接驱动的智能文件名生成流程
             logger.info("开始通过LLM生成智能文件名...")
-            title_prompt = config.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
-
-            # 调用辅助模型来生成文件名
             filename_body = solver_client.ask_for_analysis(
                 config.FILENAME_GENERATION_PROMPT,
                 provider=config.AUX_PROVIDER,

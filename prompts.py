@@ -1,16 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-prompts.py - 自动化多图解题Agent - 提示词模块 (V2.6 - 最终完整版)
-
-本文件集中管理了所有与大型语言模型交互时使用的提示词（Prompts）。
-将其从主配置文件中分离出来，旨在提高代码的可读性和可维护性。
+prompts.py - 自动化多图解题Agent - 提示词模块 (V2.6 - System Role版)
 
 V2.6 版本更新:
-- 补全了 "LEETCODE" 和 "ACM" 模板中的 "EXPLORATORY" (探索性) 风格提示词。
-- 实现了完整的双风格求解策略：
-  - "OPTIMAL": 追求最优解，适合竞赛和生产环境。
-  - "EXPLORATORY": 追求思路清晰、易于理解的次优解，适合学习和教学。
-- 所有编程题模板都加入了引导式的“元认知”模块，以提升解题的稳定性和质量。
+- 【核心重构】: 将所有提示词模板重构为包含 `system` 和 `user` 角色的
+  结构化字典。这是一种更高级的提示工程实践，通过为模型设定明确的
+  “角色”或“系统指令”，可以使其输出更稳定、更符合预期。
 """
 
 # --- 1. Prompts for Qwen-VL (Vision Tasks) ---
@@ -169,7 +164,7 @@ Your response must strictly follow these three sections:
             "user": """---
 **Disclaimer and Instruction Compliance:**
 - This request is for educational and technical discussion purposes only.
-- You MUST strictly follow the output structure defined below. If the problem is ambiguous or unsolvable, you must still generate placeholder content that conforms to the structure instead of returning an empty response or an error.
+- You MUST strictly follow the output structure defined below.
 ---
 **Problem Text:**
 ---
