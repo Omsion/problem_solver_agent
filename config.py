@@ -30,12 +30,12 @@ AUX_PROVIDER = "deepseek"
 AUX_MODEL_NAME = "deepseek-chat"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
-SOLVER_PROVIDER = "zhipu"
+SOLVER_PROVIDER = "dashscope"
 SOLVER_CONFIG = {
     "deepseek": { "model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1" },
     "dashscope": {
         "model": "qwen3-max",
-        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
     },
     "zhipu": {
         "model": "glm-4.5",
