@@ -135,7 +135,13 @@ def solve_visual_reasoning_problem(image_paths: List[Path]) -> Union[Generator[s
     调用专用的 `qwen3-vl-thinking` 模型来解决视觉推理问题。
     """
     logger.info(f"步骤 2.2: 正在使用专用视觉思考模型 '{config.QWEN_VL_THINKING_MODEL_NAME}' 进行求解...")
-    extra_params = {"extra_body": {"thinking_budget": 4000}}
+
+    # 在此处添加 top_p 和 temperature 参数
+    extra_params = {
+        "extra_body": {"thinking_budget": 4000},
+        "top_p": 0.8,
+        "temperature": 0.7
+    }
 
     # 强制使用流式调用 (stream=True)
     return _call_qwen_api(

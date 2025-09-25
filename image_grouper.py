@@ -211,11 +211,11 @@ class ImageGrouper:
 
                 # 2.2 使用强大的LLM进行智能合并与润色
                 raw_texts_joined = "\n---[NEXT]---\n".join(raw_transcriptions)
+                merge_polish_prompt = config.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
                 polished_text = solver_client.ask_for_analysis(
-                    config.TEXT_MERGE_AND_POLISH_PROMPT,
+                    merge_polish_prompt,
                     provider=config.AUX_PROVIDER,
-                    model=config.AUX_MODEL_NAME,
-                    format_dict={"raw_texts": raw_texts_joined}
+                    model=config.AUX_MODEL_NAME
                 )
                 if not polished_text: raise ValueError("LLM合并与润色步骤失败。")
                 transcribed_text = polished_text
@@ -225,12 +225,13 @@ class ImageGrouper:
             # --- 步骤 3: 核心求解 (Core Solving) ---
             # 使用原子化写入模式：先写入临时文件
             with open(temp_solution_path, 'w', encoding='utf-8') as f:
-                # 【优化】: 统一处理所有任务的流式响应
+                # 统一处理所有任务的流式响应
                 if problem_type == "VISUAL_REASONING":
                     # 调用专用的视觉推理函数
                     final_problem_type = problem_type
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
                     response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
+
                 else:  # CODING, GENERAL, QUESTION_ANSWERING
                     if problem_type == "CODING":
                         final_problem_type = "LEETCODE" if "leetcode" in transcribed_text.lower() else "ACM"
@@ -243,8 +244,8 @@ class ImageGrouper:
 
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
 
-                    # 传递结构化的 prompt 模板
-                    response_stream = solver_client.stream_solve(prompt_template, transcribed_text)
+                    final_solve_prompt = prompt_template.format(transcribed_text=transcribed_text)
+                    response_stream = solver_client.stream_solve(final_solve_prompt)
 
                 if not response_stream:
                     raise ValueError(f"未能从 {problem_type} 求解器获取响应流。")
@@ -258,11 +259,13 @@ class ImageGrouper:
 
             #  采用由LLM直接驱动的智能文件名生成流程
             logger.info("开始通过LLM生成智能文件名...")
+            filename_gen_prompt = config.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
+
+            # 调用辅助模型来生成文件名
             filename_body = solver_client.ask_for_analysis(
-                config.FILENAME_GENERATION_PROMPT,
+                filename_gen_prompt,
                 provider=config.AUX_PROVIDER,
-                model=config.AUX_MODEL_NAME,
-                format_dict={"transcribed_text": transcribed_text}
+                model=config.AUX_MODEL_NAME
             )
 
             # 提供回退机制，确保总能生成一个有效的文件名
