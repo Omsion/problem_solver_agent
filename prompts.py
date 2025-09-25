@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-prompts.py - 自动化多图解题Agent - 提示词模块 (V2.6 - System Role版)
+prompts.py - 自动化多图解题Agent - 提示词模块 (V2.6 - 最终完整版)
+
+本文件集中管理了所有与大型语言模型交互时使用的提示词（Prompts）。
+将其从主配置文件中分离出来，旨在提高代码的可读性和可维护性。
 
 V2.6 版本更新:
-- 【核心重构】: 将所有提示词模板重构为包含 `system` 和 `user` 角色的
-  结构化字典。这是一种更高级的提示工程实践，通过为模型设定明确的
-  “角色”或“系统指令”，可以使其输出更稳定、更符合预期。
+- 补全了 "LEETCODE" 和 "ACM" 模板中的 "EXPLORATORY" (探索性) 风格提示词。
+- 实现了完整的双风格求解策略：
+  - "OPTIMAL": 追求最优解，适合竞赛和生产环境。
+  - "EXPLORATORY": 追求思路清晰、易于理解的次优解，适合学习和教学。
+- 所有编程题模板都加入了引导式的“元认知”模块，以提升解题的稳定性和质量。
 """
 
 # --- 1. Prompts for Qwen-VL (Vision Tasks) ---
@@ -132,10 +137,30 @@ Your response must strictly follow these three sections:
 ### 2. ⚠️ Key Hints and Common Pitfalls
 *   **Task**: Proactively analyze and identify the most common incorrect approaches or pitfalls for this problem and explain why they are wrong.
 ### 3. Code Implementation (Executable)
-*   **Task**: Provide a complete, well-commented, and directly runnable optimal Python solution. Ensure the code is robust and handles all potential edge cases.
+*   **Task**: Provide a complete, well-commented, and directly runnable optimal Python solution.
 *   **Requirements**: Must be implemented within a `Solution` class, include an `if __name__ == '__main__':` block, and use efficient I/O."""
         },
-        "EXPLORATORY": "..."
+        "EXPLORATORY": {
+            "system": "You are a helpful senior software engineer, skilled at explaining problems in the most intuitive way. Your task is to provide an easy-to-understand solution, prioritizing clarity over optimal performance.",
+            "user": """---
+**Disclaimer and Instruction Compliance:**
+- This request is for educational and technical discussion purposes only.
+- You MUST strictly follow the output structure defined below.
+---
+**Problem Text:**
+---
+{transcribed_text}
+---
+Your response must strictly follow these three sections:
+### 1. Problem Analysis and Core Idea
+*   **Task**: Explain the problem requirements in the simplest terms. Propose a clear, intuitive, and easy-to-implement solution. **Prioritize basic techniques like loops or simple recursion over complex algorithms.** Analyze its time and space complexity.
+### 2. Code Implementation (Executable)
+*   **Task**: Provide a complete, well-commented Python solution based on the intuitive idea from the analysis.
+*   **Requirements**: Must be implemented within a `Solution` class, include an `if __name__ == '__main__':` block, and use efficient I/O.
+### 3. Optimization Path (Optional but Recommended)
+*   **Task**: Briefly suggest how this intuitive solution could be optimized towards a more performant one.
+"""
+        }
     },
 
     "ACM": {
@@ -161,6 +186,26 @@ Your response must strictly follow these four sections:
 ### 4. Code Walkthrough
 *   **Task**: Briefly explain the core algorithms, data structures, or key logic within the code."""
         },
-        "EXPLORATORY": "..."
+        "EXPLORATORY": {
+            "system": "You are an ACM contestant preparing for regionals, adept at solving problems with robust, less error-prone basic algorithms. Your goal is correctness and clarity first.",
+            "user": """---
+**Disclaimer and Instruction Compliance:**
+- This request is for educational and technical discussion purposes only.
+- You MUST strictly follow the output structure defined below.
+---
+**Problem Text:**
+---
+{transcribed_text}
+---
+Your response must strictly follow these three sections:
+### 1. Problem Analysis and Core Idea
+*   **Task**: Extract all problem requirements. Propose a solution that, while not necessarily the fastest, is logically clear and guaranteed to be correct. **Prioritize reliable methods like brute-force search or straightforward data structures.** Analyze its complexity and evaluate if it might time out.
+### 2. Correct-First Python Code Implementation
+*   **Task**: Provide a complete, standalone Python script based on your robust, correct-first approach.
+*   **Requirements**: Must use efficient I/O like `sys.stdin.readlines()` or `sys.stdin.read()`.
+### 3. Path to Optimization
+*   **Task**: Briefly describe the potential performance bottlenecks in your solution and suggest what kind of more advanced algorithms or data structures could lead to an optimal solution.
+"""
+        }
     }
 }
