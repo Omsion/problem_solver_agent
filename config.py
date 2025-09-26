@@ -34,6 +34,7 @@ AUX_MODEL_NAME = "deepseek-chat"
 SOLVER_ROUTING_CONFIG = {
     # 为编程类问题指定使用 'dashscope' 供应商
     "CODING_SOLVER": "dashscope",
+
     # 为所有其他问题指定一个默认的求解器
     "DEFAULT_SOLVER": "zhipu"
 }
@@ -50,7 +51,6 @@ SOLVER_CONFIG = {
     "zhipu": {
         "model": "glm-4.5",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
-        "air_model": "glm-4.5-air"
     }
 }
 

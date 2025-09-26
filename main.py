@@ -34,7 +34,7 @@ def main():
     # 遍历所有在 config 中定义的求解器并逐一检查健康状况
     for provider, details in config.SOLVER_CONFIG.items():
         try:
-            model_to_check = details.get("air_model") or details["model"]
+            model_to_check = details["model"]
             if solver_client.check_solver_health(provider, model_to_check):
                 logger.info(f"✓ 核心求解器 '{provider}' API连接测试通过")
             else:

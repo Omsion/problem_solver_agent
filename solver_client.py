@@ -199,7 +199,7 @@ def check_solver_health(provider: str, model: str) -> bool:
                     logger.info(f"健康检查成功，收到回复: {content.strip()}")
                     return True
                 else:
-                    # 有些模型可能返回空内容但请求成功
+                    # 有些思考推理类的模型对于简单问答可能返回空内容，但请求成功
                     logger.info("健康检查成功（空回复但API调用成功）")
                     return True
             else:
