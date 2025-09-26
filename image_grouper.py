@@ -204,7 +204,7 @@ class ImageGrouper:
 
             # --- 步骤 2: 文本化 (Textualization) ---
             # 对于所有需要文本理解的任务，都需要先将图片内容转化为高质量文本。
-            if problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING", "VISUAL_REASONING"]:
+            if problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING", "VISUAL_REASONING", "MULTIPLE_CHOICE"]:
                 # 2.1 并行、独立地转录每张图片
                 raw_transcriptions = qwen_client.transcribe_images_raw(group_to_process)
                 if not raw_transcriptions: raise ValueError("独立文字转录步骤返回了空结果。")
