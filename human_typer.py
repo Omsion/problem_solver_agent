@@ -104,7 +104,15 @@ class TypingSimulator:
         for i, line in enumerate(lines):
             if random.random() < PAUSE_CHANCE: time.sleep(random.uniform(MIN_PAUSE_DURATION, MAX_PAUSE_DURATION))
             if i > 0:
-                keyboard.send('enter')
+                # 步骤 1: 发送 'esc' 键信号，强制关闭任何自动补全的提示框。
+                keyboard.send('esc')
+                # 给予IDE一个极短的反应时间来关闭窗口
+                time.sleep(0.03)
+
+                # 步骤 2: 现在可以安全地写入换行符，因为它只会执行换行操作。
+                # keyboard.send('enter')
+                keyboard.write('\n')
+
                 time.sleep(0.02)
                 keyboard.send('home')
                 time.sleep(0.02)
