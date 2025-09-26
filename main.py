@@ -30,16 +30,19 @@ def main():
     else:
         logger.info("✓ Qwen-VL API密钥配置正常")
 
-    logger.info(f"----- 检查核心求解器: {config.SOLVER_PROVIDER} -----")
-    try:
-        if solver_client.check_solver_health():
-            logger.info(f"✓ 核心求解器 '{config.SOLVER_PROVIDER}' API连接测试通过")
-        else:
-            logger.error(f"✗ 核心求解器 '{config.SOLVER_PROVIDER}' API连接测试失败")
+    logger.info(f"----- 检查所有已配置的核心求解器 -----")
+    # 遍历所有在 config 中定义的求解器并逐一检查健康状况
+    for provider, details in config.SOLVER_CONFIG.items():
+        try:
+            model_to_check = details.get("air_model") or details["model"]
+            if solver_client.check_solver_health(provider, model_to_check):
+                logger.info(f"✓ 核心求解器 '{provider}' API连接测试通过")
+            else:
+                logger.error(f"✗ 核心求解器 '{provider}' API连接测试失败")
+                all_apis_ok = False
+        except Exception as e:
+            logger.error(f"核心求解器 '{provider}' API连接测试异常: {e}")
             all_apis_ok = False
-    except Exception as e:
-        logger.error(f"核心求解器 '{config.SOLVER_PROVIDER}' API连接测试异常: {e}")
-        all_apis_ok = False
 
     if not all_apis_ok:
         logger.critical("API配置或健康检查失败，程序退出。")
@@ -50,9 +53,9 @@ def main():
     logger.info(f"视觉OCR模型: {config.QWEN_MODEL_NAME}")
     logger.info(f"视觉图像推理模型: {config.QWEN_VL_THINKING_MODEL_NAME}")
     logger.info("核心求解器: [根据问题类型动态选择]")
-    logger.info("  - 编程类问题 -> dashscope (qwen3-max)")
-    logger.info("  - 其他问题 -> zhipu (glm-4.5)")
-
+    # 从新的配置中读取并显示路由规则
+    logger.info(f"  - 编程类问题 -> {config.SOLVER_ROUTING_CONFIG['CODING_SOLVER']}")
+    logger.info(f"  - 其他问题 -> {config.SOLVER_ROUTING_CONFIG['DEFAULT_SOLVER']}")
     logger.info(f"辅助模型: {config.AUX_PROVIDER} -> {config.AUX_MODEL_NAME}")
     logger.info("=" * 50)
 

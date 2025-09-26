@@ -158,13 +158,11 @@ def ask_for_analysis(final_prompt: str, provider: str, model: str) -> Union[str,
 
 
 # 统一的、动态的健康检查函数
-def check_solver_health() -> bool:
+def check_solver_health(provider: str, model: str) -> bool:
     """
-    对当前在 config.py 中配置的核心求解器进行一次快速的健康检查。
+    对【动态传入】的求解器进行一次快速的健康检查。
     """
-    provider = config.SOLVER_PROVIDER
-    model = config.SOLVER_MODEL_NAME
-    logger.info(f"正在对当前求解器 '{provider}' ({model}) 进行健康检查...")
+    logger.info(f"正在对求解器 '{provider}' ({model}) 进行健康检查...")
     try:
         client = get_client(provider)
         test_response = client.chat.completions.create(

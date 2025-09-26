@@ -30,11 +30,19 @@ AUX_PROVIDER = "deepseek"
 AUX_MODEL_NAME = "deepseek-chat"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
+# 配置字典，用于定义问题类型到求解器的映射规则。
+SOLVER_ROUTING_CONFIG = {
+    # 为编程类问题指定使用 'dashscope' 供应商
+    "CODING_SOLVER": "dashscope",
+    # 为所有其他问题指定一个默认的求解器
+    "DEFAULT_SOLVER": "zhipu"
+}
+
 SOLVER_CONFIG = {
     "deepseek": {"model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1"},
     "dashscope": {
         "model": "qwen3-max",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     },
     "zhipu": {
         "model": "glm-4.5",

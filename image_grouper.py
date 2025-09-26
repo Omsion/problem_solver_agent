@@ -180,15 +180,68 @@ class ImageGrouper:
         f.write(f"Final Solution {style}:\n")
         f.flush()
 
+    def _textualize_problem(self, group: List[Path]) -> str:
+        """执行OCR和文本合并润色，返回最终的文本化结果。"""
+        raw_transcriptions = qwen_client.transcribe_images_raw(group)
+        if not raw_transcriptions:
+            raise ValueError("独立文字转录步骤返回了空结果。")
+
+        raw_texts_joined = "\n---[NEXT]---\n".join(raw_transcriptions)
+        merge_polish_prompt = config.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
+
+        polished_text = solver_client.ask_for_analysis(
+            merge_polish_prompt,
+            provider=config.AUX_PROVIDER,
+            model=config.AUX_MODEL_NAME
+        )
+        if not polished_text:
+            raise ValueError("LLM合并与润色步骤失败。")
+
+        if not self._is_transcription_valid(polished_text):
+            raise ValueError("合并后的文本质量检查未通过。")
+
+        return polished_text
+
+    def _determine_solver(self, final_problem_type: str) -> (str, str):
+        """根据最终问题类型和config中的路由规则，决定使用哪个求解器。"""
+        if final_problem_type in ["LEETCODE", "ACM"]:
+            provider = config.SOLVER_ROUTING_CONFIG["CODING_SOLVER"]
+        else:
+            provider = config.SOLVER_ROUTING_CONFIG["DEFAULT_SOLVER"]
+
+        model = config.SOLVER_CONFIG[provider]["model"]
+        logger.info(f"智能调度：为问题类型 '{final_problem_type}' 动态选择求解器 -> {provider} ({model})")
+        return provider, model
+
+    def _generate_final_filename(self, transcribed_text: str, final_problem_type: str, timestamp: str) -> Path:
+        """调用LLM生成文件名主体，并处理回退逻辑。"""
+        logger.info("开始通过LLM生成智能文件名...")
+        filename_gen_prompt = config.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
+
+        filename_body = solver_client.ask_for_analysis(
+            filename_gen_prompt,
+            provider=config.AUX_PROVIDER,
+            model=config.AUX_MODEL_NAME
+        )
+
+        if not filename_body:
+            logger.warning("LLM未能生成文件名，将使用回退机制。")
+            numbers = extract_question_numbers(transcribed_text)
+            number_prefix = format_number_prefix(numbers)
+            fallback_topic = f"{final_problem_type}_Solution"
+            filename_body = f"{number_prefix}_{fallback_topic}" if number_prefix else fallback_topic
+
+        logger.info(f"最终生成文件名主体: '{filename_body}'")
+        final_filename = f"{timestamp}_{sanitize_filename(filename_body)}.txt"
+        return config.SOLUTION_DIR / final_filename
+
     def _execute_pipeline(self, group_to_process: List[Path]):
         """
-        封装了完整的AI处理和文件归档流水线，由每个工作线程独立调用。
+        重构后的流水线，现在作为一个协调者，调用各个子流程。
         """
         thread_name = current_thread().name
         lock_file_path = config.SOLUTION_DIR / f".{group_to_process[0].stem}.lock"
         transcribed_text = "N/A"
-        final_answer = ""
-        # 初始化一个临时路径，以便在异常处理中也能访问到
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         temp_solution_path = config.SOLUTION_DIR / f"{timestamp}_{group_to_process[0].stem}_inprogress.txt"
 
@@ -197,81 +250,54 @@ class ImageGrouper:
             return
 
         try:
-            lock_file_path.touch()  # 创建锁文件，表示处理开始
+            lock_file_path.touch()
 
-            # --- 步骤 1: 问题分类 ---
+            # 步骤 1: 问题分类
             problem_type = qwen_client.classify_problem_type(group_to_process)
             logger.info(f"[{thread_name}] 初步分类结果: {problem_type}")
 
-            # --- 步骤 2: 文本化 (Textualization) ---
-            # 对于所有需要文本理解的任务，都需要先将图片内容转化为高质量文本。
+            # 步骤 2: 文本化 (如果需要)
             if problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING", "VISUAL_REASONING", "MULTIPLE_CHOICE"]:
-                # 2.1 并行、独立地转录每张图片
-                raw_transcriptions = qwen_client.transcribe_images_raw(group_to_process)
-                if not raw_transcriptions: raise ValueError("独立文字转录步骤返回了空结果。")
+                transcribed_text = self._textualize_problem(group_to_process)
 
-                # 2.2 使用强大的LLM进行智能合并与润色
-                raw_texts_joined = "\n---[NEXT]---\n".join(raw_transcriptions)
-                merge_polish_prompt = config.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
-                polished_text = solver_client.ask_for_analysis(
-                    merge_polish_prompt,
-                    provider=config.AUX_PROVIDER,
-                    model=config.AUX_MODEL_NAME
-                )
-                if not polished_text: raise ValueError("LLM合并与润色步骤失败。")
-                transcribed_text = polished_text
-
-                if not self._is_transcription_valid(transcribed_text): raise ValueError("合并后的文本质量检查未通过。")
-
-            # --- 步骤 3: 核心求解 (Core Solving) ---
-            # 使用原子化写入模式：先写入临时文件
+            # 步骤 3: 核心求解
             with open(temp_solution_path, 'w', encoding='utf-8') as f:
-                # 统一处理所有任务的流式响应
                 if problem_type == "VISUAL_REASONING":
-                    # 调用专用的视觉推理函数
-                    final_problem_type = problem_type
-                    self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
+                    final_problem_type = "VISUAL_REASONING"
+                    # 视觉推理使用专用模型，不经过动态求解器
+                    self._write_solution_header(f, thread_name, group_to_process,
+                                                final_problem_type, transcribed_text,
+                                                solver_provider="Qwen-VL",
+                                                solver_model=config.QWEN_VL_THINKING_MODEL_NAME)
                     response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
-
-
-                else:  # CODING, GENERAL, QUESTION_ANSWERING, MULTIPLE_CHOICE
+                else:
+                    # 确定最终问题类型
                     if problem_type == "CODING":
                         final_problem_type = "LEETCODE" if "leetcode" in transcribed_text.lower() else "ACM"
-                        prompt_template = config.PROMPT_TEMPLATES[final_problem_type][config.SOLUTION_STYLE]
-
-                    elif problem_type == "MULTIPLE_CHOICE":
-                        final_problem_type = problem_type
-                        prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
-
-                    else: # GENERAL, QUESTION_ANSWERING
-                        final_problem_type = problem_type
-                        prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
-
-                    if final_problem_type in ["LEETCODE", "ACM"]:
-                        # 对于编程题，使用 dashscope (qwen3-max)
-                        solver_provider = "dashscope"
-                        solver_model = config.SOLVER_CONFIG[solver_provider]["model"]
                     else:
-                        # 对于所有其他类型的题目，使用 zhipu (glm-4.5)
-                        solver_provider = "zhipu"
-                        solver_model = config.SOLVER_CONFIG[solver_provider]["model"]
+                        final_problem_type = problem_type
 
-                    logger.info(
-                        f"智能调度：为问题类型 '{final_problem_type}' 动态选择求解器 -> "
-                        f"{solver_provider} ({solver_model})")
+                    # 动态选择求解器
+                    solver_provider, solver_model = self._determine_solver(final_problem_type)
 
-                    if not prompt_template: raise ValueError(f"缺少 '{final_problem_type}' 的提示词模板。")
+                    # 获取提示词模板
+                    prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
+                    if final_problem_type in ["LEETCODE", "ACM"]:
+                        prompt_template = prompt_template[config.SOLUTION_STYLE]
 
-                    self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text,
-                                                solver_provider=solver_provider, solver_model=solver_model)
+                    if not prompt_template:
+                        raise ValueError(f"缺少 '{final_problem_type}' 的提示词模板。")
+
+                    self._write_solution_header(f, thread_name, group_to_process,
+                                                final_problem_type, transcribed_text,
+                                                solver_provider, solver_model)
+
                     final_solve_prompt = prompt_template.format(transcribed_text=transcribed_text)
                     response_stream = solver_client.stream_solve(final_solve_prompt,
                                                                  provider=solver_provider,
                                                                  model=solver_model)
 
-                if not response_stream:
-                    raise ValueError(f"未能从 {problem_type} 求解器获取响应流。")
-
+                # 流式写入文件
                 final_answer_chunks = [chunk for chunk in response_stream]
                 final_answer = "".join(final_answer_chunks)
                 f.write(final_answer)
@@ -279,47 +305,18 @@ class ImageGrouper:
             if not final_answer.strip() or "--- ERROR ---" in final_answer:
                 raise ValueError(f"从核心求解器收到空响应或错误信息: {final_answer}")
 
-            #  采用由LLM直接驱动的智能文件名生成流程
-            logger.info("开始通过LLM生成智能文件名...")
-            filename_gen_prompt = config.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
-
-            # 调用辅助模型来生成文件名
-            filename_body = solver_client.ask_for_analysis(
-                filename_gen_prompt,
-                provider=config.AUX_PROVIDER,
-                model=config.AUX_MODEL_NAME
-            )
-
-            # 提供回退机制，确保总能生成一个有效的文件名
-            if not filename_body:
-                logger.warning("LLM未能生成文件名，将使用回退机制。")
-                # 尝试使用旧的、基于正则表达式的简单方法作为最后的防线
-                numbers = extract_question_numbers(transcribed_text)
-                number_prefix = format_number_prefix(numbers)
-                fallback_topic = f"{final_problem_type}_Solution"
-                filename_body = f"{number_prefix}_{fallback_topic}" if number_prefix else fallback_topic
-
-            logger.info(f"最终生成文件名主体: '{filename_body}'")
-
-            final_filename = f"{timestamp}_{sanitize_filename(filename_body)}.txt"
-            final_solution_path = config.SOLUTION_DIR / final_filename
+            # 步骤 4: 文件名生成与重命名
+            final_solution_path = self._generate_final_filename(transcribed_text, final_problem_type, timestamp)
             temp_solution_path.rename(final_solution_path)
             logger.info(f"[{thread_name}] 解答已成功保存至: {final_solution_path}")
 
         except Exception as e:
             logger.error(f"[{thread_name}] 处理流水线时发生错误: {e}", exc_info=True)
             self._write_failure_log(group_to_process, str(e), transcribed_text)
-            # 清理可能残留的临时文件，防止留下垃圾文件
-            if temp_solution_path.exists():
-                try:
-                    temp_solution_path.unlink()
-                except OSError:
-                    pass
+            if temp_solution_path.exists(): temp_solution_path.unlink()
         finally:
-            # --- 步骤 6: 清理 ---
-            # 无论成功或失败，都移除文件锁并归档图片
+            # 步骤 5: 清理
             if lock_file_path.exists(): lock_file_path.unlink()
-
             logger.info(f"[{thread_name}] 开始归档已处理的图片...")
             for img_path in group_to_process:
                 if img_path.exists():
