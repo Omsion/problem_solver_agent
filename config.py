@@ -30,7 +30,7 @@ AUX_PROVIDER = "deepseek"
 AUX_MODEL_NAME = "deepseek-chat"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
-SOLVER_PROVIDER = "dashscope"  # or zhipu
+SOLVER_PROVIDER = "zhipu"  # dashscope or zhipu
 SOLVER_CONFIG = {
     "deepseek": {"model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1"},
     "dashscope": {

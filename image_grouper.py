@@ -232,11 +232,16 @@ class ImageGrouper:
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
                     response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
 
-                else:  # CODING, GENERAL, QUESTION_ANSWERING
+                else:  # CODING, GENERAL, QUESTION_ANSWERING, MULTIPLE_CHOICE
                     if problem_type == "CODING":
                         final_problem_type = "LEETCODE" if "leetcode" in transcribed_text.lower() else "ACM"
                         prompt_template = config.PROMPT_TEMPLATES[final_problem_type][config.SOLUTION_STYLE]
-                    else:
+
+                    elif problem_type == "MULTIPLE_CHOICE":
+                        final_problem_type = problem_type
+                        prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
+
+                    else: # GENERAL, QUESTION_ANSWERING
                         final_problem_type = problem_type
                         prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
 

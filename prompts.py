@@ -14,12 +14,14 @@ V2.3 版本更新:
 # --- 1. Prompts for Qwen-VL (Vision Tasks) ---
 
 CLASSIFICATION_PROMPT = """
-Analyze the content of the image(s). Determine the type of problem presented.
-Your response MUST be ONLY ONE of the following keywords:
-- 'CODING': If the problem is a programming/coding challenge requiring a code solution.
-- 'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes, figures, or matrices.
-- 'QUESTION_ANSWERING': If the problem is a standard question-answering task based on provided text or data.
-- 'GENERAL': For any other text-based problem.
+Analyze the content of the image(s). Your response MUST be ONLY ONE of the following keywords based on this priority order:
+
+1.  **'MULTIPLE_CHOICE'**: If the problem consists of one or more questions, each followed by options (e.g., A, B, C, D). This classification takes the HIGHEST priority. If you see such options, you MUST choose this, even if the questions involve code or figures.
+2.  'CODING': If the problem is a programming challenge requiring a complete code solution (like ACM or LeetCode), AND it is NOT a multiple-choice question.
+3.  'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes or figures, AND it is NOT a multiple-choice question.
+4.  'QUESTION_ANSWERING': For standard question-answering tasks based on provided text or data, which are NOT multiple-choice.
+5.  'GENERAL': For any other text-based problem.
+
 Respond with only the single, most appropriate keyword and nothing else.
 """
 
@@ -84,6 +86,30 @@ FILENAME_GENERATION_PROMPT = """
 # --- 3. Prompts for Core Solvers (Text-based Reasoning) ---
 
 PROMPT_TEMPLATES = {
+ # 为新的问题类型提供一个专门的、结构化的解答指令。
+    "MULTIPLE_CHOICE": """
+你是一位全知全能的、严谨的学科专家。你的任务是准确地解答下面文本中列出的所有选择题（包括单选和多选）。
+请严格按照以下格式输出你的答案：
+
+---
+**问题文本:**
+---
+{transcribed_text}
+---
+
+### 综合解答
+
+**【第一题题号，例如：1.】**
+- **正确选项**: [在此处填写正确选项，例如：B]
+- **解析**: [在此处提供简洁、清晰、一针见血的解析，说明为什么这个选项是正确的，以及为什么其他选项是错误的。]
+
+**【第二题题号，例如：2.】**
+- **正确选项**: [在此处填写正确选项，例如：D]
+- **解析**: [解析内容...]
+
+(根据题目数量，继续以相同的格式进行解答...)
+""",
+
     "VISUAL_REASONING": """
 你是一位顶级的逻辑推理专家。请严格遵循“精细化感知”和“抽象推理”两个步骤，来解决下面的图形推理问题。
 ### 1. 精细化感知 (Fine-Grained Perception)

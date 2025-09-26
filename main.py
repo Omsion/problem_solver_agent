@@ -47,7 +47,8 @@ def main():
 
     logger.info("=" * 50)
     logger.info(f"监控目录: {config.MONITOR_DIR}")
-    logger.info(f"视觉模型: {config.QWEN_MODEL_NAME}")
+    logger.info(f"视觉OCR模型: {config.QWEN_MODEL_NAME}")
+    logger.info(f"视觉图像推理模型: {config.QWEN_VL_THINKING_MODEL_NAME}")
     logger.info(f"核心求解器: {config.SOLVER_PROVIDER} -> {config.SOLVER_MODEL_NAME}")
     logger.info(f"辅助模型: {config.AUX_PROVIDER} -> {config.AUX_MODEL_NAME}")
     logger.info("=" * 50)
