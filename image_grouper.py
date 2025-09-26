@@ -141,7 +141,7 @@ class ImageGrouper:
         """
         对转录和合并后的文本进行基本合理性检查。
         """
-        if not text or len(text) < 50:
+        if not text or len(text) < 5:
             logger.error(f"转录/合并后文本质量检测失败: 文本为空或过短 (长度: {len(text)})。")
             return False
         logger.info("转录/合并后文本质量检测通过。")
