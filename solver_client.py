@@ -161,28 +161,55 @@ def ask_for_analysis(final_prompt: str, provider: str, model: str) -> Union[str,
 def check_solver_health(provider: str, model: str) -> bool:
     """
     对【动态传入】的求解器进行一次快速的健康检查。
+    增强错误处理，适应不同API的响应结构。
     """
     logger.info(f"正在对求解器 '{provider}' ({model}) 进行健康检查...")
     try:
         client = get_client(provider)
-        messages_for_check = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "你好，请回复'OK'"}
-        ]
+
+        # 为不同提供商使用不同的测试消息
+        if provider == 'deepseek' and 'reasoner' in model:
+            # DeepSeek Reasoner 模型需要更简单的提示
+            messages_for_check = [
+                {"role": "user", "content": "Say 'OK' if you're working."}
+            ]
+        else:
+            messages_for_check = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "你好，请回复'OK'"}
+            ]
 
         test_response = client.chat.completions.create(
             model=model,
-            messages=messages_for_check,  # 使用新的消息列表
-            max_tokens=5,
+            messages=messages_for_check,
+            max_tokens=10,
             stream=False,
             timeout=20.0
-        )  # type: ignore
-        if test_response and test_response.choices and test_response.choices[0].message.content:
-            logger.info(f"健康检查成功，收到回复: {test_response.choices[0].message.content.strip()}")
-            return True
+        )
+
+        # 更宽松的响应检查
+        if test_response and test_response.choices:
+            # 检查是否有消息内容
+            if (hasattr(test_response.choices[0], 'message') and
+                    test_response.choices[0].message and
+                    hasattr(test_response.choices[0].message, 'content')):
+
+                content = test_response.choices[0].message.content
+                if content:
+                    logger.info(f"健康检查成功，收到回复: {content.strip()}")
+                    return True
+                else:
+                    # 有些模型可能返回空内容但请求成功
+                    logger.info("健康检查成功（空回复但API调用成功）")
+                    return True
+            else:
+                # 响应结构不同但请求成功
+                logger.info("健康检查成功（非标准响应结构但API调用成功）")
+                return True
         else:
             logger.warning("健康检查失败: API响应结构异常。")
             return False
+
     except Exception as e:
         logger.error(f"健康检查失败: 调用API时发生异常: {e}")
         return False
