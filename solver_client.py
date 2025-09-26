@@ -165,9 +165,14 @@ def check_solver_health(provider: str, model: str) -> bool:
     logger.info(f"正在对求解器 '{provider}' ({model}) 进行健康检查...")
     try:
         client = get_client(provider)
+        messages_for_check = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "你好，请回复'OK'"}
+        ]
+
         test_response = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": "你好，请回复'OK'"}],
+            messages=messages_for_check,  # 使用新的消息列表
             max_tokens=5,
             stream=False,
             timeout=20.0

@@ -39,10 +39,13 @@ SOLVER_ROUTING_CONFIG = {
 }
 
 SOLVER_CONFIG = {
-    "deepseek": {"model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1"},
+    "deepseek": {
+        "model": "deepseek-reasoner",
+        "base_url": "https://api.deepseek.com/v1"},
+
     "dashscope": {
         "model": "qwen3-max",
-        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
     },
     "zhipu": {
         "model": "glm-4.5",
