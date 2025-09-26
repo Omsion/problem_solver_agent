@@ -163,14 +163,15 @@ class ImageGrouper:
         logger.info(f"[{thread_name}] 失败日志已保存至: {failure_path}")
 
     def _write_solution_header(self, f, thread_name: str, group: List[Path], final_problem_type: str,
-                               transcribed_text: str):
+                               transcribed_text: str, solver_provider: str, solver_model: str):
         """
         DRY (Don't Repeat Yourself) 辅助函数，用于写入标准的解决方案文件头。
         """
         f.write(f"Processed on {thread_name}:\n- " + "\n- ".join(p.name for p in group) + "\n\n")
         f.write("=" * 50 + "\n")
         f.write(f"Detected Problem Type: {final_problem_type}\n")
-        f.write(f"Selected Solver: {config.SOLVER_PROVIDER} ({config.SOLVER_MODEL_NAME})\n")
+        # 使用传入的参数，而不是全局config
+        f.write(f"Selected Solver: {solver_provider} ({solver_model})\n")
         f.write(f"Auxiliary Model: {config.AUX_PROVIDER} ({config.AUX_MODEL_NAME})\n")
         f.write("=" * 50 + "\n\n")
         f.write("Transcribed & Polished Text:\n" + transcribed_text + "\n\n")
@@ -232,6 +233,7 @@ class ImageGrouper:
                     self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
                     response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
 
+
                 else:  # CODING, GENERAL, QUESTION_ANSWERING, MULTIPLE_CHOICE
                     if problem_type == "CODING":
                         final_problem_type = "LEETCODE" if "leetcode" in transcribed_text.lower() else "ACM"
@@ -245,12 +247,27 @@ class ImageGrouper:
                         final_problem_type = problem_type
                         prompt_template = config.PROMPT_TEMPLATES.get(problem_type)
 
+                    if final_problem_type in ["LEETCODE", "ACM"]:
+                        # 对于编程题，使用 dashscope (qwen3-max)
+                        solver_provider = "dashscope"
+                        solver_model = config.SOLVER_CONFIG[solver_provider]["model"]
+                    else:
+                        # 对于所有其他类型的题目，使用 zhipu (glm-4.5)
+                        solver_provider = "zhipu"
+                        solver_model = config.SOLVER_CONFIG[solver_provider]["model"]
+
+                    logger.info(
+                        f"智能调度：为问题类型 '{final_problem_type}' 动态选择求解器 -> "
+                        f"{solver_provider} ({solver_model})")
+
                     if not prompt_template: raise ValueError(f"缺少 '{final_problem_type}' 的提示词模板。")
 
-                    self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text)
-
+                    self._write_solution_header(f, thread_name, group_to_process, final_problem_type, transcribed_text,
+                                                solver_provider=solver_provider, solver_model=solver_model)
                     final_solve_prompt = prompt_template.format(transcribed_text=transcribed_text)
-                    response_stream = solver_client.stream_solve(final_solve_prompt)
+                    response_stream = solver_client.stream_solve(final_solve_prompt,
+                                                                 provider=solver_provider,
+                                                                 model=solver_model)
 
                 if not response_stream:
                     raise ValueError(f"未能从 {problem_type} 求解器获取响应流。")

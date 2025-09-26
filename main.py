@@ -49,7 +49,10 @@ def main():
     logger.info(f"监控目录: {config.MONITOR_DIR}")
     logger.info(f"视觉OCR模型: {config.QWEN_MODEL_NAME}")
     logger.info(f"视觉图像推理模型: {config.QWEN_VL_THINKING_MODEL_NAME}")
-    logger.info(f"核心求解器: {config.SOLVER_PROVIDER} -> {config.SOLVER_MODEL_NAME}")
+    logger.info("核心求解器: [根据问题类型动态选择]")
+    logger.info("  - 编程类问题 -> dashscope (qwen3-max)")
+    logger.info("  - 其他问题 -> zhipu (glm-4.5)")
+
     logger.info(f"辅助模型: {config.AUX_PROVIDER} -> {config.AUX_MODEL_NAME}")
     logger.info("=" * 50)
 

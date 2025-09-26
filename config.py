@@ -30,7 +30,6 @@ AUX_PROVIDER = "deepseek"
 AUX_MODEL_NAME = "deepseek-chat"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
-SOLVER_PROVIDER = "zhipu"  # dashscope or zhipu
 SOLVER_CONFIG = {
     "deepseek": {"model": "deepseek-reasoner", "base_url": "https://api.deepseek.com/v1"},
     "dashscope": {
@@ -43,7 +42,6 @@ SOLVER_CONFIG = {
         "air_model": "glm-4.5-air"
     }
 }
-SOLVER_MODEL_NAME = SOLVER_CONFIG[SOLVER_PROVIDER]["model"]
 
 # --- 5. 求解风格配置 ---
 SOLUTION_STYLE = "OPTIMAL"

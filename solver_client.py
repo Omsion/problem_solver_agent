@@ -73,13 +73,11 @@ def get_client(provider: str) -> OpenAI:
     return client
 
 
-def stream_solve(final_prompt: str) -> Generator[str, None, None]:
+def stream_solve(final_prompt: str, provider: str, model: str) -> Generator[str, None, None]:
     """
-    根据全局配置，流式调用指定的LLM进行问题求解。
+    根据【动态传入】的 provider 和 model，流式调用指定的LLM进行问题求解。
     """
-    provider = config.SOLVER_PROVIDER
-    model = config.SOLVER_MODEL_NAME
-    logger.info(f"Step 2.2: 使用模型 '{model}' (提供商: {provider}) 进行流式求解...")
+    logger.info(f"Step 2.2: 使用动态选择的模型 '{model}' (提供商: {provider}) 进行流式求解...")
     try:
         client = get_client(provider)
         messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
