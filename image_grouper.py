@@ -153,7 +153,7 @@ class ImageGrouper:
         """
         thread_name = current_thread().name
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = f"{timestamp}_{group[0].stem}_FAILED.txt"
+        filename = f"{timestamp}_{group[0].stem}_FAILED.md"
         failure_path = config.SOLUTION_DIR / filename
         with open(failure_path, 'w', encoding='utf-8') as f:
             f.write(f"Processed on {thread_name}:\n- " + "\n- ".join(p.name for p in group) + "\n\n")
@@ -232,7 +232,7 @@ class ImageGrouper:
             filename_body = f"{number_prefix}_{fallback_topic}" if number_prefix else fallback_topic
 
         logger.info(f"最终生成文件名主体: '{filename_body}'")
-        final_filename = f"{timestamp}_{sanitize_filename(filename_body)}.txt"
+        final_filename = f"{timestamp}_{sanitize_filename(filename_body)}.md"
         return config.SOLUTION_DIR / final_filename
 
     def _execute_pipeline(self, group_to_process: List[Path]):
@@ -243,7 +243,7 @@ class ImageGrouper:
         lock_file_path = config.SOLUTION_DIR / f".{group_to_process[0].stem}.lock"
         transcribed_text = "N/A"
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        temp_solution_path = config.SOLUTION_DIR / f"{timestamp}_{group_to_process[0].stem}_inprogress.txt"
+        temp_solution_path = config.SOLUTION_DIR / f"{timestamp}_{group_to_process[0].stem}_inprogress.md"
 
         if lock_file_path.exists():
             logger.warning(f"[{thread_name}] 发现锁文件，跳过处理以防重复: {lock_file_path.name}")
