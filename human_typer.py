@@ -10,6 +10,7 @@ r"""
 运行方式:   在管理员终端中执行 :
 python human_typer.py
 conda activate llm && cd /d D:\Users\wzw\Pictures\problem_solver_agent && python human_typer.py
+F4/insert键位不影响在网页IDE上进行模拟输出
 """
 
 import time
