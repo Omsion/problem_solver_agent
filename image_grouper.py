@@ -44,12 +44,12 @@ class ImageGrouper:
     一个状态化的核心类，用于管理图片的分组、AI处理流水线以及后续的归档工作。
     """
 
-    def __init__(self, num_workers: int = 4):
+    def __init__(self, num_workers: int = 8):
         """
         初始化ImageGrouper实例。
 
         Args:
-            num_workers (int): 要启动的后台工作线程（消费者）的数量。默认为2。
+            num_workers (int): 要启动的后台工作线程（消费者）的数量。默认为8。
         """
         self.current_group: List[Path] = []
         self.timer: Timer | None = None
