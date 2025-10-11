@@ -99,8 +99,10 @@ def press_win_prtscr():
 def main():
     """主执行函数：使用 keyboard 库注册热键并启动监听。"""
     try:
-        # 使用 keyboard.add_hotkey 来监听，回调函数是我们的模拟按键函数
-        keyboard.add_hotkey(HOTKEY_STRING, press_win_prtscr, suppress=True)
+        # ---【核心修改点：移除 suppress=True】---
+        # 我们不再抑制原始热键，以避免与 SendInput 的底层冲突，
+        # 从而确保模拟按键能够100%成功注入。
+        keyboard.add_hotkey(HOTKEY_STRING, press_win_prtscr)
 
         print("\n... 系统级热键重映射器已启动 ...")
         print(f"[*] 成功注册监听热键: {HOTKEY_STRING.upper()}")
