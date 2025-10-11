@@ -68,25 +68,8 @@ GROUP_TIMEOUT = 8.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 # 8. 全局热键配置 (用于 silent_screencapper.py)
-# --------------------------------------------------------------------------
-# 您可以在此处自定义截图热键。如果遇到冲突，请尝试不同的组合。
-#
-# 可用的修饰键 (可以组合使用，用 | 连接):
-#   - MOD_ALT: Alt 键
-#   - MOD_CONTROL: Ctrl 键
-#   - MOD_SHIFT: Shift 键
-#   - MOD_WIN: Win 键 (Windows徽标键)
-#
-# 示例:
-#   - Alt + X: HOTKEY_MODIFIERS = 1
-#   - Ctrl + Q: HOTKEY_MODIFIERS = 2, HOTKEY_VK = ord('Q')
-#   - Ctrl + Shift + Z: HOTKEY_MODIFIERS = 2 | 4, HOTKEY_VK = ord('Z')
-# --------------------------------------------------------------------------
 HOTKEY_CONFIG = {
-    # 将修饰键改为 Alt (值为 1)
-    "MODIFIERS": 1,
-    "VK": ord('X'),
-    "STRING": "Alt + X"
+    "STRING": "alt+x"
 }
 
 # --- 9. 初始化功能 ---
