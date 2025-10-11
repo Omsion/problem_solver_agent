@@ -69,7 +69,6 @@ ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 # 8. 全局热键配置 (用于 silent_screencapper.py)
 HOTKEY_CONFIG = {
-    # ---【核心修改点：为轮询机制定义热键】---
     # 定义一个或多个修饰键的虚拟键码列表
     "MODIFIERS_VK": [0x12],  # 0x12 is VK_MENU, which represents the Alt key
     # 定义主键的虚拟键码
