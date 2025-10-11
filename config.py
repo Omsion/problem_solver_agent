@@ -83,12 +83,11 @@ ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 #   - Ctrl + Shift + Z: HOTKEY_MODIFIERS = 2 | 4, HOTKEY_VK = ord('Z')
 # --------------------------------------------------------------------------
 HOTKEY_CONFIG = {
-    # 推荐使用 Ctrl + Shift + X，因为它很少被占用
-    "MODIFIERS": 2 | 4,  # 2 for Ctrl, 4 for Shift
-    "VK": ord('X'),      # 'X' 键的虚拟键码
-    "STRING": "Ctrl + Shift + X" # 用于日志输出
+    # 将修饰键改为 Alt (值为 1)
+    "MODIFIERS": 1,
+    "VK": ord('X'),
+    "STRING": "Alt + X"
 }
-
 
 # --- 9. 初始化功能 ---
 def initialize_directories():
