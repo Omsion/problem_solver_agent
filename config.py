@@ -67,8 +67,30 @@ SOLUTION_DIR = ROOT_DIR / "solutions"
 GROUP_TIMEOUT = 8.0
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
+# 8. 全局热键配置 (用于 silent_screencapper.py)
+# --------------------------------------------------------------------------
+# 您可以在此处自定义截图热键。如果遇到冲突，请尝试不同的组合。
+#
+# 可用的修饰键 (可以组合使用，用 | 连接):
+#   - MOD_ALT: Alt 键
+#   - MOD_CONTROL: Ctrl 键
+#   - MOD_SHIFT: Shift 键
+#   - MOD_WIN: Win 键 (Windows徽标键)
+#
+# 示例:
+#   - Alt + X: HOTKEY_MODIFIERS = 1
+#   - Ctrl + Q: HOTKEY_MODIFIERS = 2, HOTKEY_VK = ord('Q')
+#   - Ctrl + Shift + Z: HOTKEY_MODIFIERS = 2 | 4, HOTKEY_VK = ord('Z')
+# --------------------------------------------------------------------------
+HOTKEY_CONFIG = {
+    # 推荐使用 Ctrl + Shift + X，因为它很少被占用
+    "MODIFIERS": 2 | 4,  # 2 for Ctrl, 4 for Shift
+    "VK": ord('X'),      # 'X' 键的虚拟键码
+    "STRING": "Ctrl + Shift + X" # 用于日志输出
+}
 
-# --- 8. 初始化功能 ---
+
+# --- 9. 初始化功能 ---
 def initialize_directories():
     print("正在初始化目录结构...")
     for dir_path in [PROCESSED_DIR, SOLUTION_DIR]:

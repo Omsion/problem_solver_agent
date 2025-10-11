@@ -1,22 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-silent_screencapper.py - 静默热键截图工具 (V7.1 - ctypes 终极版)
+r"""
+silent_screencapper.py - 静默热键截图工具 (V7.2 - 配置驱动版)
 
 本文件是一个独立的后台应用程序，旨在提供一个通过全局热键进行
 智能、静默截图的功能，并与主Agent项目无缝集成。
 
-V7.1 版本更新:
-- 【核心重构】: 放弃了 `keyboard` 和 `win32gui` 的部分封装，转而完全使用
-  Python 内置的 `ctypes` 库直接调用 Windows User32.dll 的原生 API
-  (RegisterHotKey, UnregisterHotKey)。
-- 【解决痛点】:
-  1.  **解决热键冲突**: 将默认热键从 'Alt+X' 修改为 'Ctrl+Shift+X'，
-      这是一个极少被占用的组合，从根本上避免了“热键已被占用”的错误。
-  2.  **提升权限兼容性**: ctypes 调用方式结合“以管理员身份运行”的指引，
-      可以确保热键具有最高的系统响应优先级，无法被上层应用屏蔽。
-- 【代码一致性】: 所有底层API调用（DPI设置、热键注册/注销）现在均通过
-  ctypes 完成，风格统一且更接近Windows底层。
-- 【修复IDE警告】: 统一的调用方式有助于减少或消除部分IDE的静态检查警告。
+V7.2 版本更新:
+- 【核心重构】: 将热键的定义完全移至 config.py 文件中。
+- 【解决痛点】: 用户现在可以通过修改配置文件轻松更换热键，以解决
+  因热键冲突导致的“无法注册热键”错误，无需再修改本文件代码。
+- 【健壮性提升】: 增加了配置加载失败时的回退逻辑，确保脚本在
+  独立运行时也能使用一个默认热键。
+conda activate llm && python D:\Users\wzw\Pictures\problem_solver_agent\silent_screencapper.py
 """
 
 import time
@@ -71,13 +66,26 @@ except (ImportError, AttributeError):
     SAVE_DIRECTORY = Path.home() / "silent_screenshots"
     print(f"警告: 无法加载配置，将使用默认目录: {SAVE_DIRECTORY}")
 
-# ---【核心修改点 2：更改热键定义】---
+# ---从 config 文件读取热键定义---
 HOTKEY_ID_SCREENSHOT = 1
-# MOD_CONTROL (Ctrl) = 2, MOD_SHIFT (Shift) = 4. 组合起来是 6。
-HOTKEY_MODIFIERS = win32con.MOD_CONTROL | win32con.MOD_SHIFT
-HOTKEY_VK = ord('X')
-HOTKEY_STRING = 'Ctrl + Shift + X'  # 用于日志输出
+# 从 config.py 中导入热键配置
+try:
+    import win32con  # 确保 win32con 被导入
 
+    # 将 config.py 中定义的数字转换为 win32con 中对应的常量
+    # 注意：这是一个示例，更健壮的做法是在 config.py 中直接使用 win32con.MOD_*
+    # 但为了简化 config 文件，我们在这里进行转换。
+    # 实际上，直接使用数字是完全可以的。
+    # MOD_ALT=1, MOD_CONTROL=2, MOD_SHIFT=4, MOD_WIN=8
+
+    HOTKEY_MODIFIERS = config.HOTKEY_CONFIG["MODIFIERS"]
+    HOTKEY_VK = config.HOTKEY_CONFIG["VK"]
+    HOTKEY_STRING = config.HOTKEY_CONFIG["STRING"]
+except (ImportError, AttributeError):
+    print("警告: 无法从 config.py 加载热键配置，将使用默认值 (Ctrl+Shift+X)。")
+    HOTKEY_MODIFIERS = 2 | 4  # MOD_CONTROL | MOD_SHIFT
+    HOTKEY_VK = ord('X')
+    HOTKEY_STRING = 'Ctrl + Shift + X'
 
 
 def take_screenshot():
