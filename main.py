@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 main.py - 自动化多图解题Agent主程序入口
+conda activate llm && python D:\Users\wzw\Pictures\problem_solver_agent\main.py
 """
 
 import sys
