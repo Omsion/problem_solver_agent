@@ -160,10 +160,11 @@ def main():
         print("\n... 静默截图工具已启动 ...")
         print(f"[*] 成功注册监听热键: {HOTKEY_STRING.upper()}")
         print(f"[*] 按下此热键将直接捕获屏幕并保存。")
-        print("[*] 在此终端按 'ESC' 键可随时退出程序。")
+        print("[*] 程序正在后台运行，请在本终端按 'Ctrl+C' 来终止程序。")
         print("[!] 重要提示: 为确保热键在所有应用中生效，请务必以【管理员身份】运行此脚本！")
 
-        keyboard.wait('esc')
+        while True:
+            time.sleep(1)
 
     except Exception as e:
         print(f"程序运行时发生错误: {e}")
