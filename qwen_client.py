@@ -95,7 +95,8 @@ def _call_qwen_api(image_paths: List[Path], user_prompt: str, model_name: str, s
 def classify_problem_type(image_paths: List[Path]) -> str:
     logger.info("步骤 1: 正在进行问题类型分类...")
     response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT, config.QWEN_MODEL_NAME, stream=False)
-    valid_types = ["CODING", "VISUAL_REASONING", "QUESTION_ANSWERING", "GENERAL", "MULTIPLE_CHOICE"]
+    valid_types = ["CODING", "VISUAL_REASONING", "QUESTION_ANSWERING", "GENERAL", "MULTIPLE_CHOICE",
+                   "FILL_IN_THE_BLANKS"]
 
     if isinstance(response, str) and response in valid_types:
         logger.info(f"分类成功，识别类型为: {response}")

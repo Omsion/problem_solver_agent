@@ -257,7 +257,9 @@ class ImageGrouper:
             logger.info(f"[{thread_name}] 初步分类结果: {problem_type}")
 
             # 步骤 2: 文本化 (如果需要)
-            if problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING", "VISUAL_REASONING", "MULTIPLE_CHOICE"]:
+            if problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING",
+                                "VISUAL_REASONING", "MULTIPLE_CHOICE",
+                                "FILL_IN_THE_BLANKS"]:
                 transcribed_text = self._textualize_problem(group_to_process)
 
             # 步骤 3: 核心求解

@@ -17,12 +17,12 @@ V3.0 版本更新:
 CLASSIFICATION_PROMPT = """
 Analyze the content of the image(s). Your response MUST be ONLY ONE of the following keywords based on this priority order:
 
-1.  **'MULTIPLE_CHOICE'**: If the problem consists of one or more questions, each followed by options (e.g., A, B, C, D). This classification takes the HIGHEST priority. If you see such options, you MUST choose this, even if the questions involve code or figures.
-2.  'CODING': If the problem is a programming challenge requiring a complete code solution (like ACM or LeetCode), AND it is NOT a multiple-choice question.
-3.  'VISUAL_REASONING': If the problem requires finding a pattern in a sequence of shapes or figures, AND it is NOT a multiple-choice question.
-4.  'QUESTION_ANSWERING': For standard question-answering tasks based on provided text or data, which are NOT multiple-choice.
-5.  'GENERAL': For any other text-based problem.
-
+1.  **'MULTIPLE_CHOICE'**: If the problem consists of one or more questions, each followed by options (e.g., A, B, C, D). This classification takes the HIGHEST priority.
+2.  **'FILL_IN_THE_BLANKS'**: If the problem is a fill-in-the-blanks question, often containing numbered placeholders, underscores, or text like "请输入答案". This takes second priority.
+3.  'CODING': If the problem is a programming challenge (like ACM/LeetCode) AND it is NOT a multiple-choice or fill-in-the-blanks question.
+4.  'VISUAL_REASONING': If the problem requires finding a pattern in shapes or figures, AND it is NOT a multiple-choice question.
+5.  'QUESTION_ANSWERING': For tasks that ask a question about a given context, but are NOT fill-in-the-blanks or multiple-choice.
+6.  'GENERAL': For any other text-based problem.
 Respond with only the single, most appropriate keyword and nothing else.
 """
 
@@ -103,6 +103,41 @@ FILENAME_GENERATION_PROMPT = """
 # --- 3. Prompts for Core Solvers (Text-based Reasoning) ---
 
 PROMPT_TEMPLATES = {
+    "FILL_IN_THE_BLANKS": """
+# 角色/任务
+你是一位知识渊博的、精确的学科专家。你的任务是根据你的内部知识库，准确地回答下面的填空题。
+
+# 核心原则
+1.  **知识驱动**: 你必须使用你自己的知识来回答问题，而不是仅仅依赖于问题文本。
+2.  **精准回答**: 答案应该是最标准、最简洁的专业术语或数值。
+3.  **完整性**: 必须回答所有的空格，并提供简要的知识点解析。
+
+# CoT (Chain of Thoughts) - 执行步骤
+1.  **识别主题**: 分析题目 "单片机的存储器包括..."，确定核心主题是“微控制器的内存组成”。
+2.  **知识检索**: 调动你关于计算机体系结构和微控制器的知识。回忆标准的单片机（如8051）内存结构。
+3.  **匹配答案**: 将检索到的知识与题目中的空格进行匹配。典型的单片机存储器分为程序存储器（ROM）和数据存储器（RAM）。
+4.  **构建答案**: 将“程序存储器”和“数据存储器”填入对应的位置，并附上简要解释。
+
+# 输出规范
+- 严格按照以下Markdown格式进行输出。
+- 为每个空格提供答案，并在最后提供一个总的“知识点解析”。
+
+---
+**问题文本:**
+---
+{transcribed_text}
+---
+
+### 综合解答
+
+*   **1**: [此处填写第一个空的答案]
+*   **2**: [此处填写第二个空的答案]
+*   ... (根据空格数量继续)
+
+#### 知识点解析
+[在此处提供一个关于正确答案的简洁、清晰的背景知识说明。]
+""",
+
     "MULTIPLE_CHOICE": """
 # 角色/任务
 你是一位全知全能的、严谨的学科专家。你的任务是准确地解答下面文本中列出的所有选择题（包括单选和多选）。
