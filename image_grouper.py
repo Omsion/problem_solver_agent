@@ -167,15 +167,19 @@ class ImageGrouper:
         """
         DRY (Don't Repeat Yourself) 辅助函数，用于写入标准的解决方案文件头。
         """
+        # 写入处理的线程和截图文件列表
         f.write(f"Processed on {thread_name}:\n- " + "\n- ".join(p.name for p in group) + "\n\n")
         f.write("=" * 50 + "\n")
-        f.write(f"Detected Problem Type: {final_problem_type}\n")
-        # 使用传入的参数，而不是全局config
-        f.write(f"Selected Solver: {solver_provider} ({solver_model})\n")
-        f.write(f"Auxiliary Model: {config.AUX_PROVIDER} ({config.AUX_MODEL_NAME})\n")
+
+        # 为元数据信息添加项目符号 (-) 和额外的空行
+        f.write(f"- Detected Problem Type: {final_problem_type}\n")
+        f.write(f"- Selected Solver: {solver_provider} ({solver_model})\n")
+        f.write(f"- Auxiliary Model: {config.AUX_PROVIDER} ({config.AUX_MODEL_NAME})\n\n")  # <-- 修改点：在末尾增加了一个换行符 \n
         f.write("=" * 50 + "\n\n")
+
         f.write("Transcribed & Polished Text:\n" + transcribed_text + "\n\n")
         f.write("=" * 50 + "\n\n")
+
         style = f"(Style: {config.SOLUTION_STYLE})" if final_problem_type in ["LEETCODE", "ACM"] else ""
         f.write(f"Final Solution {style}:\n")
         f.flush()
