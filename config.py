@@ -16,8 +16,8 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 
 API_TIMEOUT = 600.0
-MAX_RETRIES = 2
-RETRY_DELAY = 10
+MAX_RETRIES = 3  # <-- 新增：设置最大重试次数 (例如，3次代表总共会尝试4次)
+RETRY_DELAY = 10   # <-- 新增：设置每次重试前的等待时间（秒）
 
 # --- 2. 视觉模型配置 (Qwen-VL) ---
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
