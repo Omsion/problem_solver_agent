@@ -71,7 +71,8 @@ except Exception:
 
 # --- 配置加载 ---
 try:
-    import config
+    from problem_solver_agent import config
+
     SAVE_DIRECTORY = config.MONITOR_DIR
     print(f"配置加载成功，截图将保存至: {SAVE_DIRECTORY}")
 except (ImportError, AttributeError):
