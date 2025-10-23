@@ -17,7 +17,7 @@ from typing_extensions import TypedDict
 from openai import OpenAI, APIConnectionError, APITimeoutError
 
 from . import config
-from .utils import setup_logger
+from .utils import setup_logger, encode_image_to_base64
 
 logger = setup_logger()
 
