@@ -1,3 +1,77 @@
-/problem-solver-agent-for-gemini.txt
-/.env
+# ==============================================================================
+# --- 自动化多图解题Agent - Git忽略配置文件 ---
+# ==============================================================================
+# 此文件用于告诉Git哪些文件和目录不应被纳入版本控制。
+
+# --- 1. 凭证与敏感信息 (Credentials & Sensitive Information) ---
+# 永远不要将包含API密钥或其他机密的文件提交到版本控制！
+.env
+
+
+# --- 2. 项目特定的生成文件 (Project-Specific Generated Files) ---
+# 忽略由 aggregate_for_gemini.py 脚本生成的聚合文本文件
+problem-solver-agent-for-gemini.txt
+
+# 忽略由Agent运行时生成的目录。
+# 注意: 这些路径由 config.py 中的 ROOT_DIR 决定。
+# 如果 ROOT_DIR 指向仓库外部，这些规则仅作为安全保障。
+/processed/
 /solutions/
+
+
+# --- 3. Python 缓存与依赖 (Python Cache & Dependencies) ---
+# 字节码和缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境文件夹 (常见名称)
+venv/
+.venv/
+env/
+.env/ # 注意：这也会匹配根目录的 .env 文件，是双重保障
+ENV/
+env.bak/
+venv.bak/
+
+# 分发、打包和安装程序产生的文件
+build/
+dist/
+*.egg-info/
+*.egg
+
+
+# --- 4. IDE 与编辑器配置 (IDE & Editor Configuration) ---
+# PyCharm
+.idea/
+
+# Visual Studio Code
+.vscode/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Claude
+.claude/
+
+# Vim
+*.swp
+*~
+
+
+# --- 5. 操作系统生成文件 (Operating System Generated Files) ---
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
