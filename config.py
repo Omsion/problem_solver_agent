@@ -76,6 +76,8 @@ HOTKEY_CONFIG = {
     # 用于日志输出的字符串
     "STRING": "Alt + X"
 }
+REMOTE_TRIGGER_PORT = 5555
+
 # --- 9. 初始化功能 ---
 def initialize_directories():
     print("正在初始化目录结构...")
