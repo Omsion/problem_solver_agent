@@ -11,9 +11,9 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # 从项目中导入配置和核心处理器
-import config
-from image_grouper import ImageGrouper
-from utils import setup_logger
+from . import config
+from .image_grouper import ImageGrouper
+from .utils import setup_logger
 
 # 初始化日志记录器
 logger = setup_logger()

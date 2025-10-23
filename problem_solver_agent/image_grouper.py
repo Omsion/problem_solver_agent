@@ -30,10 +30,10 @@ from queue import Queue
 from typing import List
 
 # 导入项目模块
-import config
-import qwen_client
-import solver_client  # 统一的、可切换的流式与非流式求解器
-from utils import setup_logger, sanitize_filename, extract_question_numbers, format_number_prefix
+from . import config
+from . import qwen_client
+from . import solver_client
+from .utils import setup_logger, sanitize_filename, extract_question_numbers, format_number_prefix
 
 # 初始化全局日志记录器
 logger = setup_logger()

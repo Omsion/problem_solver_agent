@@ -41,38 +41,24 @@ import time
 import ctypes
 from pathlib import Path
 import threading
+import sys
 
-try:
-    from PIL import Image
-except ImportError:
-    print("错误: 缺少 'Pillow' 库。请以管理员身份运行: pip install Pillow")
-    exit(1)
+# 将项目根目录（tools/的上级目录）添加到Python的模块搜索路径
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-try:
-    import keyboard
-except ImportError:
-    print("错误: 缺少 'keyboard' 库。请以管理员身份运行: pip install keyboard")
-    exit(1)
-
-try:
-    import win32gui
-    import win32api
-    import win32con
-    import win32ui
-except ImportError:
-    print("错误: 缺少 'pywin32' 库。请运行: pip install pywin32")
-    exit(1)
+from PIL import Image
+import keyboard
+import win32gui
+import win32api
+import win32con
+import win32ui
 
 # --- DPI 感知设置 ---
-try:
-    ctypes.windll.user32.SetProcessDPIAware()
-except Exception:
-    pass
+ctypes.windll.user32.SetProcessDPIAware()
 
 # --- 配置加载 ---
 try:
     from problem_solver_agent import config
-
     SAVE_DIRECTORY = config.MONITOR_DIR
     print(f"配置加载成功，截图将保存至: {SAVE_DIRECTORY}")
 except (ImportError, AttributeError):
@@ -80,9 +66,10 @@ except (ImportError, AttributeError):
     print(f"警告: 无法加载主配置文件，将使用默认目录: {SAVE_DIRECTORY}")
 
 try:
+    # config 已经在上面导入了，这里可以直接使用
     HOTKEY_STRING = config.HOTKEY_CONFIG["STRING"]
     print(f"成功从 config.py 加载热键配置: {HOTKEY_STRING}")
-except (ImportError, AttributeError, KeyError):
+except (NameError, AttributeError, KeyError): # NameError 是因为如果上面导入失败，config就不存在
     print("警告: 无法从 config.py 加载热键配置，将使用默认值 'alt+x'。")
     HOTKEY_STRING = 'alt+x'
 

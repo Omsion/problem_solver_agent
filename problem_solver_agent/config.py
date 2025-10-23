@@ -5,7 +5,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from prompts import *
+from .prompts import *
 
 # --- 0. 基础设置 ---
 load_dotenv()

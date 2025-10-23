@@ -5,11 +5,11 @@ conda activate llm && python D:\Users\wzw\Pictures\problem_solver_agent\main.py
 """
 
 import sys
-import config
-import file_monitor
-from image_grouper import ImageGrouper
-from utils import setup_logger
-import solver_client
+from . import config
+from . import file_monitor
+from .image_grouper import ImageGrouper
+from .utils import setup_logger
+from . import solver_client
 
 def main():
     """主执行函数 """

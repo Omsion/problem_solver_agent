@@ -16,8 +16,8 @@ from typing import List, Union, Dict, Any, Generator
 from typing_extensions import TypedDict
 from openai import OpenAI, APIConnectionError, APITimeoutError
 
-import config
-from utils import setup_logger, encode_image_to_base64
+from . import config
+from .utils import setup_logger
 
 logger = setup_logger()
 

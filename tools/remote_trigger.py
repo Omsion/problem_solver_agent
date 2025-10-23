@@ -22,34 +22,18 @@ import threading
 import socket
 import sys
 
-# --- 依赖库导入与检查 ---
-# (为确保脚本独立运行，保留了完整的依赖检查逻辑)
-try:
-    from flask import Flask, jsonify, render_template_string
-except ImportError:
-    print("错误: 缺少 'Flask' 库。请以管理员身份运行: pip install Flask")
-    sys.exit(1)
-try:
-    import qrcode
-except ImportError:
-    print("错误: 缺少 'qrcode' 库。请以管理员身份运行: pip install qrcode")
-    sys.exit(1)
-try:
-    from PIL import Image
-except ImportError:
-    print("错误: 缺少 'Pillow' 库。请以管理员身份运行: pip install Pillow")
-    sys.exit(1)
-try:
-    import win32gui, win32api, win32con, win32ui
-except ImportError:
-    print("错误: 缺少 'pywin32' 库。请运行: pip install pywin32")
-    sys.exit(1)
+# 将项目根目录（tools/的上级目录）添加到Python的模块搜索路径
+# 这样才能正确地找到 'problem_solver_agent' 这个包
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+# --- 依赖库导入 ---
+from flask import Flask, jsonify, render_template_string
+import qrcode
+from PIL import Image
+import win32gui, win32api, win32con, win32ui
 
 # --- DPI 感知设置 ---
-try:
-    ctypes.windll.user32.SetProcessDPIAware()
-except Exception as e:
-    print(f"警告: 设置DPI感知失败: {e}")
+ctypes.windll.user32.SetProcessDPIAware()
 
 # ==============================================================================
 # --- 【核心优化点】健壮的配置加载与验证 ---
@@ -58,20 +42,7 @@ SAVE_DIRECTORY = None
 PORT = None
 
 try:
-    # 步骤 1: 定位并动态加载 config.py 模块
-    # 这种方式比修改 sys.path 更可靠，能确保在任何执行环境下都找到正确的配置文件。
-    script_dir = Path(__file__).resolve().parent
-    config_path = script_dir / "config.py"
-    if not config_path.is_file():
-        raise ImportError(f"配置文件未在预期位置找到: {config_path}")
-
-    spec = importlib.util.spec_from_file_location("config", config_path)
-    if spec is None:
-        raise ImportError(f"无法为 {config_path} 创建模块规范。")
-
-    config = importlib.util.module_from_spec(spec)
-    sys.modules["config"] = config
-    spec.loader.exec_module(config)
+    from problem_solver_agent import config  # 现在可以这样导入了
     print("主配置文件 config.py 加载成功。")
 
     # 步骤 2: 【逐项检查】必需的配置，并提供清晰的回退逻辑
