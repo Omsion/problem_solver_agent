@@ -16,8 +16,8 @@ import time
 from openai import OpenAI, APIConnectionError, APITimeoutError
 from typing import Generator, Dict, Any, List, Union
 from typing_extensions import TypedDict
-import config
-from utils import setup_logger
+from . import config
+from .utils import setup_logger
 
 logger = setup_logger()
 

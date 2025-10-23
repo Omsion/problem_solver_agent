@@ -33,8 +33,7 @@ V9.1 版本更新:
 - **结果一致性**: 截图文件被保存到主Agent监控的同一目录下，
   完美复现了 `Win+PrtSc` 的最终效果。
 ---------------------------------------------------------------------------
-conda activate llm && python D:\Users\wzw\Pictures\problem_solver_agent\silent_screencapper.py
-
+conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python tools/silent_screencapper.py
 """
 
 import time

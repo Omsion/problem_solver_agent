@@ -13,6 +13,8 @@ V12.0 版本更新:
   一个安全的默认值，而不是给出一个模糊的加载失败警告。
 - 【代码清晰度】: 增加了详细的注释，解释了配置加载、检查、回退的每一步，
   使代码更易于理解和维护。
+
+conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python tools/remote_trigger.py
 """
 import importlib
 import time
