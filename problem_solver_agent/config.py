@@ -17,11 +17,11 @@ ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 
 API_TIMEOUT = 600.0
 MAX_RETRIES = 3  # <-- 新增：设置最大重试次数 (例如，3次代表总共会尝试4次)
-RETRY_DELAY = 10   # <-- 新增：设置每次重试前的等待时间（秒）
+RETRY_DELAY = 10  # <-- 新增：设置每次重试前的等待时间（秒）
 
 # --- 2. 视觉模型配置 (Qwen-VL) ---
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-QWEN_MODEL_NAME = "qwen-vl-max"
+QWEN_MODEL_NAME = "qwen3-vl-flash"  # qwen3-vl-235b-a22b-instruct
 # 专用于视觉推理的、更强大的思考模型
 QWEN_VL_THINKING_MODEL_NAME = "qwen3-vl-235b-a22b-thinking"
 
@@ -77,6 +77,7 @@ HOTKEY_CONFIG = {
     "STRING": "Alt + X"
 }
 REMOTE_TRIGGER_PORT = 5555
+
 
 # --- 9. 初始化功能 ---
 def initialize_directories():
