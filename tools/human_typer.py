@@ -43,11 +43,20 @@ STRIP_COMMENTS_MODE = True
 ERROR_RATE = 0.2
 
 # --- 打字速度与节奏配置 (始终生效) ---
-MIN_TYPING_DELAY = 0.1
-MAX_TYPING_DELAY = 0.3
+# 真实人较慢打字速度
+MIN_TYPING_DELAY = 0.25
+MAX_TYPING_DELAY = 0.50
 PAUSE_CHANCE = 0.2
-MIN_PAUSE_DURATION = 0.5
-MAX_PAUSE_DURATION = 1.2
+MIN_PAUSE_DURATION = 0.99
+MAX_PAUSE_DURATION = 1.9
+
+# 较快打字速度
+# MIN_TYPING_DELAY = 0.1
+# MAX_TYPING_DELAY = 0.3
+# PAUSE_CHANCE = 0.2
+# MIN_PAUSE_DURATION = 0.5
+# MAX_PAUSE_DURATION = 1.2
+
 
 # ==============================================================================
 # --- 键盘布局定义 ---
