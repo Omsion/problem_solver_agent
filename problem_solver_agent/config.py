@@ -55,7 +55,7 @@ SOLVER_CONFIG = {
 }
 
 # --- 5. 求解风格配置 ---
-SOLUTION_STYLE = "OPTIMAL"
+SOLUTION_STYLE = "EXPLORATORY"# 'EXPLORATORY' or 'OPTIMAL'
 
 # --- 6. 核心文件路径配置 ---
 ROOT_DIR = Path(r"D:\Users\wzw\Pictures")
