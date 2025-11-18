@@ -241,8 +241,10 @@ class ImageGrouper:
 
     def _execute_pipeline(self, group_to_process: List[Path]):
         """
-        重构后的流水线，现在作为一个协调者，调用各个子流程。
+        处理单个任务（图片组）的完整工作流。
+        (V2.5 - 增加了对ML/DL编程题的智能分流逻辑)
         """
+        # --- 0. 初始化 ---
         thread_name = current_thread().name
         lock_file_path = config.SOLUTION_DIR / f".{group_to_process[0].stem}.lock"
         transcribed_text = "N/A"
@@ -256,29 +258,58 @@ class ImageGrouper:
         try:
             lock_file_path.touch()
 
-            # 步骤 1: 问题分类
+            # --- 步骤 1: 初步视觉分类 ---
+            # 使用多模态模型对图片内容进行快速的初步分类。
             problem_type = qwen_client.classify_problem_type(group_to_process)
-            logger.info(f"[{thread_name}] 初步分类结果: {problem_type}")
+            logger.info(f"[{thread_name}] 初步视觉分类结果: {problem_type}")
 
-            # 步骤 2: 文本化 (如果需要)
-            if problem_type in ["CODING", "GENERAL", "QUESTION_ANSWERING",
-                                "VISUAL_REASONING", "MULTIPLE_CHOICE",
-                                "FILL_IN_THE_BLANKS"]:
+            # --- 步骤 2: 文本化 ---
+            # 对于所有非纯视觉推理的任务，都进行高精度OCR。
+            if problem_type != "VISUAL_REASONING":
                 transcribed_text = self._textualize_problem(group_to_process)
 
-            # 步骤 3: 核心求解
+            # --- 步骤 2.5: 智能重分类与分流 (核心优化点) ---
+            # 定义一组可能被视觉模型误判的、基于文本的类型。
+            reclassifiable_types = {"GENERAL", "FILL_IN_THE_BLANKS", "QUESTION_ANSWERING", "CODING"}
+
+            if problem_type in reclassifiable_types and transcribed_text != "N/A":
+                # 定义两组关键词，用于更精确地判断编程题的子类型。
+                ml_keywords = ['numpy', 'torch', 'tensorflow', 'mlp', 'transformer', '注意力', 'normalization', 'norm',
+                               'cnn', 'rnn', '神经网络', '感知机', '反向传播', '前向传播']
+                coding_keywords = ['手撕', '算法', 'leetcode', 'acm', '代码', '函数', '实现', '编程']
+
+                text_lower = transcribed_text.lower()
+
+                # **优先判断**是否为机器学习/深度学习编程题。
+                is_ml_coding = any(keyword in text_lower for keyword in ml_keywords)
+                # 判断是否为通用编程题。
+                is_general_coding = any(keyword in text_lower for keyword in coding_keywords)
+
+                if is_ml_coding:
+                    # 如果检测到ML/DL关键词，无论初步分类是什么，都强制覆盖为 'ML_CODING'。
+                    logger.info(f"[{thread_name}] 智能分流：检测到ML/DL关键词。问题类型精确定义为 'ML_CODING'。")
+                    problem_type = "ML_CODING"
+                elif is_general_coding:
+                    # 如果不是ML题，但包含通用编程关键词，且初步分类不是 'CODING'，则进行修正。
+                    if problem_type != "CODING":
+                        logger.info(
+                            f"[{thread_name}] 智能重分类：在 '{problem_type}' 类型中检测到编程关键词。覆盖为 'CODING'。")
+                        problem_type = "CODING"
+
+            # --- 步骤 3: 核心求解 ---
             with open(temp_solution_path, 'w', encoding='utf-8') as f:
                 if problem_type == "VISUAL_REASONING":
                     final_problem_type = "VISUAL_REASONING"
-                    # 视觉推理使用专用模型，不经过动态求解器
                     self._write_solution_header(f, thread_name, group_to_process,
                                                 final_problem_type, transcribed_text,
                                                 solver_provider="Qwen-VL",
                                                 solver_model=config.QWEN_VL_THINKING_MODEL_NAME)
                     response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
                 else:
-                    # 确定最终问题类型
-                    if problem_type == "CODING":
+                    # 根据最终确定的 problem_type，映射到最终的问题类型
+                    if problem_type == "ML_CODING":
+                        final_problem_type = "ML_CODING"
+                    elif problem_type == "CODING":
                         final_problem_type = "LEETCODE" if "leetcode" in transcribed_text.lower() else "ACM"
                     else:
                         final_problem_type = problem_type
@@ -286,43 +317,49 @@ class ImageGrouper:
                     # 动态选择求解器
                     solver_provider, solver_model = self._determine_solver(final_problem_type)
 
-                    # 获取提示词模板
+                    # 获取对应的Prompt模板
                     prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
-                    if final_problem_type in ["LEETCODE", "ACM"]:
+                    if final_problem_type in ["LEETCODE", "ACM", "ML_CODING"]:  # 将ML_CODING加入此列表
                         prompt_template = prompt_template[config.SOLUTION_STYLE]
 
                     if not prompt_template:
                         raise ValueError(f"缺少 '{final_problem_type}' 的提示词模板。")
 
+                    # 写入文件头
                     self._write_solution_header(f, thread_name, group_to_process,
                                                 final_problem_type, transcribed_text,
                                                 solver_provider, solver_model)
 
+                    # 发起求解请求
                     final_solve_prompt = prompt_template.format(transcribed_text=transcribed_text)
                     response_stream = solver_client.stream_solve(final_solve_prompt,
                                                                  provider=solver_provider,
                                                                  model=solver_model)
 
-                # 流式写入文件
+                # 将流式响应写入临时文件
                 final_answer_chunks = [chunk for chunk in response_stream]
                 final_answer = "".join(final_answer_chunks)
                 f.write(final_answer)
 
+            # 检查求解是否成功
             if not final_answer.strip() or "--- ERROR ---" in final_answer:
                 raise ValueError(f"从核心求解器收到空响应或错误信息: {final_answer}")
 
-            # 步骤 4: 文件名生成与重命名
+            # --- 步骤 4: 文件名生成与重命名 ---
             final_solution_path = self._generate_final_filename(transcribed_text, final_problem_type, timestamp)
             temp_solution_path.rename(final_solution_path)
             logger.info(f"[{thread_name}] 解答已成功保存至: {final_solution_path}")
 
         except Exception as e:
+            # --- 异常处理 ---
             logger.error(f"[{thread_name}] 处理流水线时发生错误: {e}", exc_info=True)
             self._write_failure_log(group_to_process, str(e), transcribed_text)
-            if temp_solution_path.exists(): temp_solution_path.unlink()
+            if temp_solution_path.exists():
+                temp_solution_path.unlink()
         finally:
-            # 步骤 5: 清理
-            if lock_file_path.exists(): lock_file_path.unlink()
+            # --- 步骤 5: 清理与归档 ---
+            if lock_file_path.exists():
+                lock_file_path.unlink()
             logger.info(f"[{thread_name}] 开始归档已处理的图片...")
             for img_path in group_to_process:
                 if img_path.exists():
