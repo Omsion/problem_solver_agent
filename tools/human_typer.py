@@ -75,60 +75,52 @@ KEYBOARD_LAYOUT = {'q': ['w', 'a'], 'w': ['q', 's', 'e'], 'e': ['w', 'd', 'r'], 
 
 
 # ==============================================================================
-# --- 【新增】代码处理工具函数 (优化版) ---
+# --- 【核心修改点】代码净化工具函数 (V2.1) ---
 # ==============================================================================
+
 def _strip_docstrings(source_code: str) -> str:
     """
-    使用 ast 模块精确地移除所有函数、类和模块的文档字符串。
-    需要 Python 3.9+ 才能使用 ast.unparse。
+    使用 ast 模块精确识别文档字符串的行号，并从原始文本中移除它们，以保留格式。
     """
     try:
         tree = ast.parse(source_code)
+        docstring_lines = set()
 
-        # 定义一个转换器类来遍历和修改AST
-        class DocstringRemover(ast.NodeTransformer):
-            def visit_FunctionDef(self, node):
-                if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
-                    node.body = node.body[1:]
-                return self.generic_visit(node)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef, ast.Module)):
+                # ast.get_docstring() 是一个安全的方式来获取文档字符串节点
+                docstring_node = ast.get_docstring(node, clean=False)
+                if docstring_node:
+                    # 找到文档字符串所在的表达式节点
+                    if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
+                        expr_node = node.body[0]
+                        # 记录从开始到结束的所有行号
+                        start_line = expr_node.lineno
+                        end_line = expr_node.end_lineno
+                        docstring_lines.update(range(start_line, end_line + 1))
 
-            def visit_ClassDef(self, node):
-                return self.visit_FunctionDef(node)  # 类和函数的处理逻辑相同
+        if not docstring_lines:
+            return source_code
 
-            def visit_Module(self, node):
-                return self.visit_FunctionDef(node)  # 模块的处理逻辑也相同
-
-            visit_AsyncFunctionDef = visit_FunctionDef  # 异步函数也一样处理
-
-        # 应用转换并生成新代码
-        transformer = DocstringRemover()
-        new_tree = transformer.visit(tree)
-        ast.fix_missing_locations(new_tree)
-        return ast.unparse(new_tree)
-    except (SyntaxError, AttributeError):
-        # 如果代码不完整或 ast.unparse 不可用，则优雅地回退
-        return source_code
-    except Exception as e:
-        print(f"[警告] 文档字符串剥离过程中发生未知错误: {e}")
+        original_lines = source_code.splitlines()
+        # 只保留不在 docstring_lines 集合中的行
+        result_lines = [line for i, line in enumerate(original_lines, 1) if i not in docstring_lines]
+        return '\n'.join(result_lines)
+    except Exception:
+        # 如果解析失败，优雅地回退到原始代码
         return source_code
 
 
 def _strip_hash_comments(code_string: str) -> str:
-    """使用 tokenize 模块移除所有单行 # 注释并清理行尾空格。"""
+    """使用 tokenize 模块移除所有单行 # 注释，同时保留空行。"""
     try:
         tokens = tokenize.generate_tokens(io.StringIO(code_string).readline)
+        # 只过滤掉 COMMENT 类型的 token
         non_comment_tokens = [t for t in tokens if t.type != tokenize.COMMENT]
-        code_without_comments = tokenize.untokenize(non_comment_tokens)
-        lines = code_without_comments.splitlines()
-        stripped_lines = [line.rstrip() for line in lines]
-        # 移除因删除注释而产生的空行
-        final_lines = [line for line in stripped_lines if line]
-        return '\n'.join(final_lines)
-    except tokenize.TokenError as e:
-        print(f"[警告] 单行注释剥离失败，将返回原始文本。错误: {e}")
-        return code_string
-    except Exception as e:
-        print(f"[警告] 注释剥离过程中发生未知错误: {e}")
+        # untokenize 会保留原始的换行和空行结构
+        return tokenize.untokenize(non_comment_tokens)
+    except Exception:
+        # 如果解析失败，优雅地回退
         return code_string
 
 
@@ -138,12 +130,10 @@ def process_code_for_typing(source_code: str) -> str:
     """
     processed_code = source_code
 
-    # 阶段一：剥离文档字符串
     if STRIP_DOCSTRINGS_MODE:
         print("[策略] 文档字符串剥离模式已开启，正在处理...")
         processed_code = _strip_docstrings(processed_code)
 
-    # 阶段二：剥离单行注释
     if STRIP_COMMENTS_MODE:
         print("[策略] 单行注释剥离模式已开启，正在处理...")
         processed_code = _strip_hash_comments(processed_code)
@@ -152,19 +142,21 @@ def process_code_for_typing(source_code: str) -> str:
 
 
 # ==============================================================================
-# --- 核心模拟器与触发逻辑 (已更新) ---
+# --- 核心模拟器与触发逻辑 (保持不变) ---
 # ==============================================================================
 class TypingSimulator:
     def simulate_typing(self, text_to_type: str):
         print(f"\n--- 开始模拟输入 (模式: {'代码完美' if PERFECT_CODE_MODE else '真人模拟(100%修正)'}) ---")
         lines = text_to_type.splitlines()
         for i, line in enumerate(lines):
-            if not line.strip():  # 如果是空行，则只打印换行符
+            # 保持原有的空行处理逻辑
+            if not line.strip() and i > 0:
                 keyboard.write('\n')
                 time.sleep(random.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY))
                 continue
 
             if random.random() < PAUSE_CHANCE: time.sleep(random.uniform(MIN_PAUSE_DURATION, MAX_PAUSE_DURATION))
+
             if i > 0:
                 keyboard.send('esc')
                 time.sleep(0.03)
@@ -205,10 +197,7 @@ def run_simulation_in_thread(content):
         pyautogui.click()
         time.sleep(0.1)
 
-        # 1. 基础预处理
         processed_content = content.replace('\r\n', '\n').expandtabs(4)
-
-        # 2. 【核心修改点】调用新的两阶段代码净化函数
         processed_content = process_code_for_typing(processed_content)
 
         simulator = TypingSimulator()
@@ -252,12 +241,12 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
     print("=" * 50)
-    # print("  真实打字模拟器已启动... (智能净化版)")
-    # print(f"  - 剥离文档字符串: {'开启' if STRIP_DOCSTRINGS_MODE else '关闭'}")
-    # print(f"  - 剥离单行注释: {'开启' if STRIP_COMMENTS_MODE else '关闭'}")
-    # print("  用法：复制任意Python代码，将光标置于目标位置，然后按下 Ctrl + V")
-    # print("  按 ESC 键可随时退出本程序。")
-    # print("  (请确保本终端以管理员身份运行)")
+    print("  真实打字模拟器已启动... (V2.1 - 格式保持版)")
+    print(f"  - 剥离文档字符串: {'开启' if STRIP_DOCSTRINGS_MODE else '关闭'}")
+    print(f"  - 剥离单行注释: {'开启' if STRIP_COMMENTS_MODE else '关闭'}")
+    print("  用法：复制任意Python代码，将光标置于目标位置，然后按下 Ctrl + V")
+    print("  按 ESC 键可随时退出本程序。")
+    print("  (请确保本终端以管理员身份运行)")
     print("=" * 50)
     keyboard.add_hotkey('ctrl+v', trigger_simulation, suppress=True)
     keyboard.wait('esc')
