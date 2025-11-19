@@ -274,8 +274,9 @@ class ImageGrouper:
 
             if problem_type in reclassifiable_types and transcribed_text != "N/A":
                 # 定义两组关键词，用于更精确地判断编程题的子类型。
-                ml_keywords = ['numpy', 'torch', 'tensorflow', 'mlp', 'transformer', '注意力', 'normalization', 'norm',
-                               'cnn', 'rnn', '神经网络', '感知机', '反向传播', '前向传播']
+                ml_keywords = ['numpy', 'torch', 'tensorflow', 'mlp', 'transformer', '注意力',
+                               'normalization', 'norm', 'cnn', 'rnn', '神经网络', '感知机',
+                               '反向传播', '前向传播', 'mnist', 'cifar']
                 coding_keywords = ['手撕', '算法', 'leetcode', 'acm', '代码', '函数', '实现', '编程']
 
                 text_lower = transcribed_text.lower()
