@@ -47,18 +47,18 @@ ERROR_RATE = 0.2
 
 # --- 打字速度与节奏配置 (始终生效) ---
 # 真实人较慢打字速度
-MIN_TYPING_DELAY = 0.25
-MAX_TYPING_DELAY = 0.50
-PAUSE_CHANCE = 0.2
-MIN_PAUSE_DURATION = 0.99
-MAX_PAUSE_DURATION = 1.9
+# MIN_TYPING_DELAY = 0.25
+# MAX_TYPING_DELAY = 0.50
+# PAUSE_CHANCE = 0.2
+# MIN_PAUSE_DURATION = 0.99
+# MAX_PAUSE_DURATION = 1.9
 
 # 较快打字速度
-# MIN_TYPING_DELAY = 0.1
-# MAX_TYPING_DELAY = 0.3
-# PAUSE_CHANCE = 0.2
-# MIN_PAUSE_DURATION = 0.5
-# MAX_PAUSE_DURATION = 1.2
+MIN_TYPING_DELAY = 0.1
+MAX_TYPING_DELAY = 0.3
+PAUSE_CHANCE = 0.2
+MIN_PAUSE_DURATION = 0.5
+MAX_PAUSE_DURATION = 1.2
 
 
 # ==============================================================================
@@ -241,12 +241,12 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
     print("=" * 50)
-    print("  真实打字模拟器已启动... (V2.1 - 格式保持版)")
-    print(f"  - 剥离文档字符串: {'开启' if STRIP_DOCSTRINGS_MODE else '关闭'}")
-    print(f"  - 剥离单行注释: {'开启' if STRIP_COMMENTS_MODE else '关闭'}")
-    print("  用法：复制任意Python代码，将光标置于目标位置，然后按下 Ctrl + V")
-    print("  按 ESC 键可随时退出本程序。")
-    print("  (请确保本终端以管理员身份运行)")
+    # print("  真实打字模拟器已启动... (V2.1 - 格式保持版)")
+    # print(f"  - 剥离文档字符串: {'开启' if STRIP_DOCSTRINGS_MODE else '关闭'}")
+    # print(f"  - 剥离单行注释: {'开启' if STRIP_COMMENTS_MODE else '关闭'}")
+    # print("  用法：复制任意Python代码，将光标置于目标位置，然后按下 Ctrl + V")
+    # print("  按 ESC 键可随时退出本程序。")
+    # print("  (请确保本终端以管理员身份运行)")
     print("=" * 50)
     keyboard.add_hotkey('ctrl+v', trigger_simulation, suppress=True)
     keyboard.wait('esc')
