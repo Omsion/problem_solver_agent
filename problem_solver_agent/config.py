@@ -93,6 +93,7 @@ REMOTE_TRIGGER_PORT = 5555
 
 # --- 9. 初始化功能 ---
 def initialize_directories():
+    """初始化项目所需的目录结构。"""
     print("正在初始化目录结构...")
     for dir_path in [PROCESSED_DIR, SOLUTION_DIR]:
         try:
@@ -101,3 +102,92 @@ def initialize_directories():
         except OSError as e:
             print(f"创建目录 '{dir_path}' 时发生错误: {e}")
             exit(1)
+
+
+def validate_config() -> None:
+    """
+    验证所有必需的配置项是否有效。
+
+    检查项目：
+    1. API 密钥是否已设置
+    2. 关键路径是否存在或可创建
+    3. 配置值是否在合理范围内
+
+    Raises:
+        ValueError: 当配置验证失败时抛出，包含详细的错误信息
+        OSError: 当路径操作失败时抛出
+
+    Example:
+        >>> try:
+        ...     validate_config()
+        ... except ValueError as e:
+        ...     print(f"配置错误: {e}")
+    """
+    errors = []
+    warnings = []
+
+    # --- 验证 API 密钥 ---
+    if not DASHSCOPE_API_KEY:
+        errors.append("DASHSCOPE_API_KEY 未设置，请在 .env 文件中配置")
+    if not DEEPSEEK_API_KEY:
+        errors.append("DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置")
+    if not ZHIPU_API_KEY:
+        errors.append("ZHIPU_API_KEY 未设置，请在 .env 文件中配置")
+
+    # --- 验证 API 超时设置 ---
+    if API_TIMEOUT < 10:
+        warnings.append(f"API_TIMEOUT ({API_TIMEOUT}s) 设置过小，可能导致大模型调用超时")
+    if API_TIMEOUT > 3600:
+        warnings.append(f"API_TIMEOUT ({API_TIMEOUT}s) 设置过大，建议在合理范围内")
+
+    # --- 验证重试设置 ---
+    if MAX_RETRIES < 0:
+        errors.append(f"MAX_RETRIES ({MAX_RETRIES}) 不能为负数")
+    if MAX_RETRIES > 10:
+        warnings.append(f"MAX_RETRIES ({MAX_RETRIES}) 设置过大，可能导致长时间等待")
+    if RETRY_DELAY < 0:
+        errors.append(f"RETRY_DELAY ({RETRY_DELAY}s) 不能为负数")
+
+    # --- 验证路径配置 ---
+    if not ROOT_DIR.exists():
+        try:
+            ROOT_DIR.mkdir(parents=True, exist_ok=True)
+            warnings.append(f"ROOT_DIR 不存在，已自动创建: {ROOT_DIR}")
+        except OSError as e:
+            errors.append(f"无法创建 ROOT_DIR: {ROOT_DIR}, 错误: {e}")
+
+    if not MONITOR_DIR.exists():
+        try:
+            MONITOR_DIR.mkdir(parents=True, exist_ok=True)
+            warnings.append(f"MONITOR_DIR 不存在，已自动创建: {MONITOR_DIR}")
+        except OSError as e:
+            errors.append(f"无法创建 MONITOR_DIR: {MONITOR_DIR}, 错误: {e}")
+
+    # --- 验证求解器配置 ---
+    for provider, config in SOLVER_CONFIG.items():
+        if "model" not in config or not config["model"]:
+            errors.append(f"求解器 '{provider}' 缺少 model 配置")
+        if "base_url" not in config or not config["base_url"]:
+            errors.append(f"求解器 '{provider}' 缺少 base_url 配置")
+
+    # --- 验证路由配置 ---
+    if "CODING_SOLVER" not in SOLVER_ROUTING_CONFIG:
+        errors.append("SOLVER_ROUTING_CONFIG 中缺少 'CODING_SOLVER' 配置")
+    if "DEFAULT_SOLVER" not in SOLVER_ROUTING_CONFIG:
+        errors.append("SOLVER_ROUTING_CONFIG 中缺少 'DEFAULT_SOLVER' 配置")
+
+    # --- 输出结果 ---
+    if warnings:
+        print("\n配置警告：")
+        for warning in warnings:
+            print(f"  ⚠️  {warning}")
+        print()
+
+    if errors:
+        print("\n配置错误：")
+        for error in errors:
+            print(f"  ❌ {error}")
+        raise ValueError("\n配置验证失败，请修复上述错误后重试。")
+
+    print("✅ 配置验证通过。")
+
