@@ -23,13 +23,33 @@ from .prompts import (
 load_dotenv()
 
 # --- 1. API 密钥与通用设置 ---
+# 从环境变量读取 API 密钥（推荐方式：使用 .env 文件）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 
+# API 超时时间（秒）
+# 说明：单次 API 调用的最大等待时间
+# 建议：30-1200 (0.5分钟 - 20分钟)
+# - 简单任务：60-120秒
+# - 复杂推理：300-600秒
+# - 注意：超时时间过长可能导致用户长时间等待无响应
 API_TIMEOUT = 600.0
-MAX_RETRIES = 3  # <-- 新增：设置最大重试次数 (例如，3次代表总共会尝试4次)
-RETRY_DELAY = 10  # <-- 新增：设置每次重试前的等待时间（秒）
+
+# 最大重试次数
+# 说明：网络错误时的自动重试次数
+# 建议：2-5次（避免无限重试，同时提高成功率）
+# - 0次：不重试（快速失败）
+# - 3次：总共尝试4次（平衡性能和可靠性）
+# - 过多：可能导致总等待时间过长
+MAX_RETRIES = 3
+
+# 重试延迟时间（秒）
+# 说明：每次重试前等待的时间
+# 建议：5-15秒（给API服务恢复时间）
+# - 过短：可能重复触发限流
+# - 过长：用户等待时间增加
+RETRY_DELAY = 10
 
 # --- 2. 视觉模型配置 (Qwen-VL) ---
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -76,18 +96,40 @@ PROCESSED_DIR = ROOT_DIR / "processed"
 SOLUTION_DIR = ROOT_DIR / "solutions"
 
 # --- 7. Agent 行为配置 ---
+# 分组超时时间（秒）
+# 说明：当用户在 GROUP_TIMEOUT 秒内没有新截图时，将当前收集的图片作为一个完整任务提交
+# 建议：5-15秒（根据用户操作习惯调整）
+# - 5秒：适合快速截图的用户（可能过早分组）
+# - 8-10秒：平衡选择（大多数用户适用）
+# - 15秒：适合操作较慢的用户（可能延迟提交）
 GROUP_TIMEOUT = 8.0
+
+# 允许的图片文件扩展名
+# 说明：文件监控器只处理这些扩展名的文件
+# 注意：新增图片格式需要在此处添加
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 # 8. 全局热键配置 (用于 silent_screencapper.py)
 HOTKEY_CONFIG = {
-    # 定义一个或多个修饰键的虚拟键码列表
+    # 修饰键虚拟键码列表（例如：Alt, Ctrl, Shift）
+    # VK_MENU (0x12) = Alt 键
+    # VK_CONTROL (0x11) = Ctrl 键
+    # VK_SHIFT (0x10) = Shift 键
     "MODIFIERS_VK": [0x12],  # 0x12 is VK_MENU, which represents the Alt key
-    # 定义主键的虚拟键码
+
+    # 主键虚拟键码（ASCII码）
+    # 使用 ord() 函数获取字符的虚拟键码
     "KEY_VK": ord('X'),
-    # 用于日志输出的字符串
+
+    # 用于日志输出的字符串表示
     "STRING": "Alt + X"
 }
+
+# 远程触发服务端口
+# 说明：用于 remote_trigger.py 的 Web 服务器监听端口
+# 建议：1024-65535（避免使用系统保留端口 0-1023）
+# - 5555：默认端口（易于记忆）
+# - 注意：确保防火墙允许此端口
 REMOTE_TRIGGER_PORT = 5555
 
 
