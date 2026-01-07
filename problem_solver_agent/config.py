@@ -1,11 +1,23 @@
 # -*- coding: utf-8 -*-
 """
 自动化多图解题Agent - 配置文件 (V2.2 - 多模型/多端点版)
+
+配置管理最佳实践：
+1. 避免使用 import *，显式导入需要的变量
+2. 所有配置项使用大写命名（常量约定）
+3. 敏感信息（API密钥）从环境变量读取
+4. 路径配置使用 pathlib.Path
 """
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from .prompts import *
+from .prompts import (
+    CLASSIFICATION_PROMPT,
+    TRANSCRIPTION_PROMPT,
+    TEXT_MERGE_AND_POLISH_PROMPT,
+    FILENAME_GENERATION_PROMPT,
+    PROMPT_TEMPLATES,
+)
 
 # --- 0. 基础设置 ---
 load_dotenv()

@@ -27,23 +27,23 @@ _clients: Dict[str, OpenAI] = {}
 
 # --- API Payload 类型定义 ---
 class StandardChatPayload(TypedDict):
-    model: str;
-    messages: List[Dict[str, Any]];
+    model: str
+    messages: List[Dict[str, Any]]
     stream: bool
-    max_tokens: int;
+    max_tokens: int
     temperature: float
 
 
 class ZhipuChatPayload(TypedDict):
-    model: str;
-    messages: List[Dict[str, Any]];
+    model: str
+    messages: List[Dict[str, Any]]
     stream: bool
     extra_body: Dict[str, Any]
 
 
 class DashScopeChatPayload(TypedDict):
-    model: str;
-    messages: List[Dict[str, Any]];
+    model: str
+    messages: List[Dict[str, Any]]
     stream: bool
     extra_body: Dict[str, Any]
 
