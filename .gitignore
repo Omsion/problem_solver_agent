@@ -48,3 +48,12 @@ htmlcov/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Windows 设备名 (NUL, CON 等)
+nul
+CON
+PRN
+AUX
+NUL
+COM[0-9]
+LPT[0-9]
