@@ -3,12 +3,15 @@
 
 import asyncio
 import json
+import socket
 import threading
 import uuid
+from io import BytesIO
 from pathlib import Path
 
+import qrcode
 from fastapi import APIRouter, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response
 
 from . import config as web_config
 
@@ -114,16 +117,20 @@ async def stream_task(task_id: str):
     with _proc_lock:
         if _processing_locks.get(task_id):
             async def _dup():
-                yield f"data: {json.dumps({'type': 'error', 'message': '任务正在处理中'})}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'phase': 'solving', 'message': '任务已在其他窗口中处理中，实时同步进度…'})}\n\n"
             return StreamingResponse(_dup(), media_type="text/event-stream")
         _processing_locks[task_id] = True
 
     task_dir = web_config.UPLOAD_DIR / task_id
     image_paths = sorted(task_dir.glob("*"))
     if not image_paths:
+        # 上传目录已被清理，任务无法重试，标记为失败
+        task_manager.update_task(task_id, status="failed", error_message="上传文件已过期，请重新提交")
         with _proc_lock:
             _processing_locks.pop(task_id, None)
-        return JSONResponse({"error": "找不到上传的图片文件"}, status_code=400)
+        async def _no_files():
+            yield f"data: {json.dumps({'type': 'error', 'message': '上传文件已过期，请重新提交'})}\n\n"
+        return StreamingResponse(_no_files(), media_type="text/event-stream")
     q: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
 
@@ -190,3 +197,29 @@ async def list_tasks(limit: int = 100):
     """获取最近的任务列表。"""
     tasks = task_manager.get_recent_tasks(limit=limit)
     return {"tasks": tasks}
+
+
+def _get_lan_ip() -> str:
+    """获取本机局域网 IP，失败则返回 localhost。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return "127.0.0.1"
+
+
+@router.get("/api/qrcode")
+async def qr_code(request: Request):
+    """生成局域网访问二维码（PNG）。"""
+    lan_ip = _get_lan_ip()
+    port = request.url.port or 8000
+    url = f"http://{lan_ip}:{port}"
+    img = qrcode.make(url, box_size=8, border=2)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return Response(content=buf.read(), media_type="image/png")

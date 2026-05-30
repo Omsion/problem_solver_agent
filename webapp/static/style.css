@@ -588,6 +588,32 @@ body {
   font-size: 13px;
 }
 
+/* ---- QR Code ---- */
+.qr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.5);
+}
+.qr-overlay[hidden] { display: none; }
+.qr-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 28px;
+  text-align: center;
+  box-shadow: var(--shadow-md);
+}
+.qr-card h3 { margin-bottom: 16px; }
+.qr-card img { width: 200px; height: 200px; display: block; margin: 0 auto 12px; }
+.qr-card .text-sm { margin-bottom: 16px; word-break: break-all; }
+@media (max-width: 640px) {
+  .qr-card { padding: 20px; }
+  .qr-card img { width: 160px; height: 160px; }
+}
+
 /* ---- Responsive: Mobile ---- */
 @media (max-width: 640px) {
   /* Layout */

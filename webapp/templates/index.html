@@ -74,6 +74,16 @@
     <div class="lightbox-counter" id="lightboxCounter"></div>
   </div>
 </div>
+
+<!-- 手机扫码弹窗 -->
+<div class="qr-overlay" id="qrOverlay" hidden>
+  <div class="qr-card">
+    <h3>手机扫码访问</h3>
+    <img id="qrImage" src="/api/qrcode" alt="QR Code">
+    <p class="text-sm" id="qrUrl"></p>
+    <button class="btn btn-ghost btn-sm" id="qrCloseBtn">关闭</button>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}

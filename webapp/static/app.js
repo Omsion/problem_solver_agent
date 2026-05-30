@@ -53,6 +53,27 @@ let lightboxIdx = 0;
 // ---- Configure marked.js ----
 marked.setOptions({ breaks: true, gfm: true });
 
+// ---- QR Code toggle ----
+const qrBtn = document.getElementById('qrBtn');
+const qrOverlay = document.getElementById('qrOverlay');
+const qrCloseBtn = document.getElementById('qrCloseBtn');
+const qrUrl = document.getElementById('qrUrl');
+if (qrBtn) {
+  qrBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    qrOverlay.hidden = false;
+    if (qrUrl && !qrUrl.textContent) {
+      qrUrl.textContent = window.location.origin;
+    }
+  });
+}
+if (qrCloseBtn) {
+  qrCloseBtn.addEventListener('click', () => { qrOverlay.hidden = true; });
+}
+if (qrOverlay) {
+  qrOverlay.addEventListener('click', (e) => { if (e.target === qrOverlay) qrOverlay.hidden = true; });
+}
+
 // ---- Page load: restore active tasks from server ----
 (async function restoreTasks() {
   try {
@@ -61,12 +82,18 @@ marked.setOptions({ breaks: true, gfm: true });
     const { tasks } = await resp.json();
     if (!tasks || !tasks.length) return;
     for (const t of tasks) {
-      if (t.status === 'processing' || t.status === 'pending') {
+      // 只恢复正在进行的任务；已完成/失败的在历史记录页面查看
+      if (t.status === 'pending') {
+        createTaskCard(t.id);
+        connectTaskSSE(t.id);
+      }
+      // 处理中状态的任务尝试重连，后端会自动判断是否可以恢复
+      if (t.status === 'processing') {
         createTaskCard(t.id);
         connectTaskSSE(t.id);
       }
     }
-  } catch (_) { /* ignore - page works without restore */ }
+  } catch (_) { /* ignore */ }
 })();
 
 
@@ -203,7 +230,7 @@ function createTaskCard(taskId) {
     phase: 'connecting',
     accumulated: '',
     filename: '',
-    status: 'processing',     // processing | completed | failed | interrupted
+    status: 'processing',
     errorMessage: '',
   };
 
@@ -310,6 +337,7 @@ function connectTaskSSE(taskId) {
     switch (event.type) {
 
       case 'status':
+        ts.phase = event.phase || '';
         setTaskStep(ts.card, event.phase);
         ts.card._msgEl.textContent = event.message;
         break;
@@ -357,20 +385,27 @@ function connectTaskSSE(taskId) {
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) {
       if (!finished) {
-        ts.status = 'interrupted';
-        ts.card._msgEl.textContent = '连接中断 — 服务器可能已断开';
-        markStepsError(ts.card);
-        updateTaskBadge(ts.card, 'failed', '中断');
-        ts.card._resultMeta.innerHTML = '<span class="badge badge-failed">连接中断</span>';
-        if (ts.accumulated) {
-          ts.card._resultBody.innerHTML =
-            renderMarkdown(ts.accumulated) +
-            '<div class="error-card" style="padding:16px;margin-top:12px;"><p class="error-msg">连接意外中断，以上为已接收的部分结果。</p></div>';
+        // 如果收到了 status 但没有 chunk/done/error，说明任务在其他窗口处理中
+        if (ts.accumulated === '' && ts.phase !== 'connecting') {
+          ts.card._msgEl.textContent = '任务已在其他窗口处理中，请切换到对应窗口查看';
+          updateTaskBadge(ts.card, 'processing', '同步中');
+          ts.card._resultArea.hidden = true;
         } else {
-          ts.card._resultBody.innerHTML =
-            '<div class="error-card" style="padding:16px;"><p class="error-msg">连接意外中断，未收到任何结果。请重试。</p></div>';
+          ts.status = 'interrupted';
+          ts.card._msgEl.textContent = '连接中断 — 服务器可能已断开';
+          markStepsError(ts.card);
+          updateTaskBadge(ts.card, 'failed', '中断');
+          ts.card._resultMeta.innerHTML = '<span class="badge badge-failed">连接中断</span>';
+          if (ts.accumulated) {
+            ts.card._resultBody.innerHTML =
+              renderMarkdown(ts.accumulated) +
+              '<div class="error-card" style="padding:16px;margin-top:12px;"><p class="error-msg">连接意外中断，以上为已接收的部分结果。</p></div>';
+          } else {
+            ts.card._resultBody.innerHTML =
+              '<div class="error-card" style="padding:16px;"><p class="error-msg">连接意外中断，未收到任何结果。请重试。</p></div>';
+          }
+          ts.card._resultArea.hidden = false;
         }
-        ts.card._resultArea.hidden = false;
         es.close();
         ts.eventSource = null;
       }
