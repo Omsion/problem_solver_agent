@@ -13,5 +13,5 @@ import uvicorn
 from webapp.config import HOST, PORT
 
 if __name__ == "__main__":
-    print(f"启动 Web 服务 → http://{HOST}:{PORT}")
+    print(f"启动 Web 服务 → http://localhost:{PORT}")
     uvicorn.run("webapp.app:create_app", host=HOST, port=PORT, factory=True, log_level="info")

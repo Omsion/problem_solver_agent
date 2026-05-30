@@ -67,9 +67,12 @@ def get_client(provider: str) -> OpenAI:
     return client
 
 
-def stream_solve(final_prompt: str, provider: str, model: str) -> Generator[str, None, None]:
+def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[str, None, None]:
     """
     流式调用指定的LLM进行问题求解，内置自动重试逻辑。
+
+    Args:
+        enable_thinking: 是否启用思考模式（仅 DeepSeek）。Web 端建议关闭以保证流式输出流畅。
     """
     logger.info(f"Step 2.2: 使用动态选择的模型 '{model}' (提供商: {provider}) 进行流式求解...")
 
