@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import markdown
+from markupsafe import Markup
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -24,12 +25,13 @@ def _status_label(status: str) -> str:
     return {"pending": "等待中", "processing": "处理中", "completed": "已完成", "failed": "失败"}.get(status, status)
 
 
-def _safe_markdown(text: str) -> str:
-    return markdown.markdown(
+def _safe_markdown(text: str) -> Markup:
+    html = markdown.markdown(
         text,
         extensions=["fenced_code", "codehilite", "tables", "mdx_math"],
         extension_configs={"mdx_math": {"enable_dollar_delimiter": True}},
     )
+    return Markup(html)
 
 
 def create_app() -> FastAPI:

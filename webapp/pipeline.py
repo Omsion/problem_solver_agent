@@ -125,7 +125,7 @@ class PipelineService:
             final_type = self._map_final_type(problem_type, transcribed_text)
             provider, model = self._determine_solver(final_type)
             prompt = self._build_prompt(final_type, transcribed_text)
-            stream = solver_client.stream_solve(prompt, provider, model)
+            stream = solver_client.stream_solve(prompt, provider, model, enable_thinking=False)
         return final_type, provider, model, stream
 
     def _map_final_type(self, problem_type: str, text: str) -> str:

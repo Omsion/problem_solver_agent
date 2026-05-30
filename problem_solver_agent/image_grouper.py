@@ -148,40 +148,59 @@ class ImageGrouper:
         return True
 
     def _write_failure_log(self, group: List[Path], reason: str, transcribed_text: str = "N/A"):
-        """
-        当处理流程中出现不可恢复的错误时，创建一个详细的失败日志文件。
-        """
+        """当处理流程出现不可恢复的错误时，创建 Markdown 格式的失败日志。"""
         thread_name = current_thread().name
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = f"{timestamp}_{group[0].stem}_FAILED.md"
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        filename = f"{time.strftime('%Y%m%d-%H%M%S')}_{group[0].stem}_FAILED.md"
         failure_path = config.SOLUTION_DIR / filename
+
+        image_lines = "\n".join(f"  - {p.name}" for p in group)
         with open(failure_path, 'w', encoding='utf-8') as f:
-            f.write(f"Processed on {thread_name}:\n- " + "\n- ".join(p.name for p in group) + "\n\n")
-            f.write("=" * 50 + "\nERROR: Processing failed.\n")
-            f.write(f"Reason: {reason}\n" + "=" * 50 + "\n\n")
-            f.write("Transcribed Text (at point of failure):\n" + transcribed_text)
+            f.write("---\n")
+            f.write("status: FAILED\n")
+            f.write(f"created: {timestamp}\n")
+            f.write(f"thread: {thread_name}\n")
+            f.write("images:\n")
+            f.write(image_lines + "\n")
+            f.write("---\n\n")
+            f.write("# 处理失败\n\n")
+            f.write(f"> **原因**: {reason}\n\n")
+            if transcribed_text and transcribed_text != "N/A":
+                f.write("## 已提取的文本\n\n")
+                f.write(transcribed_text)
         logger.info(f"[{thread_name}] 失败日志已保存至: {failure_path}")
 
     def _write_solution_header(self, f, thread_name: str, group: List[Path], final_problem_type: str,
-                               transcribed_text: str, solver_provider: str, solver_model: str):
+                                transcribed_text: str, solver_provider: str, solver_model: str):
         """
-        DRY (Don't Repeat Yourself) 辅助函数，用于写入标准的解决方案文件头。
+        写入 YAML frontmatter + 结构化 Markdown 文件头。
+        frontmatter 确保在任何 markdown 渲染器（GitHub/VS Code/Obsidian）中
+        元数据都能正确显示，不会出现纯文本粘连。
         """
-        # 写入处理的线程和截图文件列表
-        f.write(f"Processed on {thread_name}:\n- " + "\n- ".join(p.name for p in group) + "\n\n")
-        f.write("=" * 50 + "\n")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        image_lines = "\n".join(f"  - {p.name}" for p in group)
 
-        # 为元数据信息添加项目符号 (-) 和额外的空行
-        f.write(f"- Detected Problem Type: {final_problem_type}\n")
-        f.write(f"- Selected Solver: {solver_provider} ({solver_model})\n")
-        f.write(f"- Auxiliary Model: {config.AUX_PROVIDER} ({config.AUX_MODEL_NAME})\n\n")  # <-- 修改点：在末尾增加了一个换行符 \n
-        f.write("=" * 50 + "\n\n")
+        # --- YAML frontmatter ---
+        f.write("---\n")
+        f.write(f"problem_type: {final_problem_type}\n")
+        f.write(f"solver: {solver_provider} ({solver_model})\n")
+        f.write(f"aux_model: {config.AUX_PROVIDER} ({config.AUX_MODEL_NAME})\n")
+        f.write(f"thread: {thread_name}\n")
+        if final_problem_type in ("LEETCODE", "ACM", "ML_CODING"):
+            f.write(f"style: {config.SOLUTION_STYLE}\n")
+        f.write(f"created: {timestamp}\n")
+        f.write("images:\n")
+        f.write(image_lines + "\n")
+        f.write("---\n\n")
 
-        f.write("Transcribed & Polished Text:\n" + transcribed_text + "\n\n")
-        f.write("=" * 50 + "\n\n")
+        # --- 题目文本 ---
+        if transcribed_text and transcribed_text != "N/A":
+            f.write("# 题目文本\n\n")
+            f.write(transcribed_text.strip() + "\n\n")
+            f.write("---\n\n")
 
-        style = f"(Style: {config.SOLUTION_STYLE})" if final_problem_type in ["LEETCODE", "ACM"] else ""
-        f.write(f"Final Solution {style}:\n")
+        # --- 解答 ---
+        f.write("# 解答\n\n")
         f.flush()
 
     def _textualize_problem(self, group: List[Path]) -> str:

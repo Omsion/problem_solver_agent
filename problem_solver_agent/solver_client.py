@@ -82,13 +82,13 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
             messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
             payload: Union[StandardChatPayload, DeepSeekChatPayload]
 
+
             if provider == 'deepseek':
-                # DeepSeek 思考模式
-                # 思考模式下 temperature/top_p 不生效，故不传递
-                payload = {"model": model, "messages": messages, "stream": True,
-                           "extra_body": {"thinking": {"type": "enabled"}},
-                           "reasoning_effort": "high",
-                           "max_tokens": 8000}
+                if enable_thinking:
+                    # DeepSeek æèæ¨¡å¼
+                    payload = {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "high", "max_tokens": 8000}
+                else:
+                    payload = {"model": model, "messages": messages, "stream": True, "max_tokens": 8000, "temperature": 0.7}
             else:
                 payload = {"model": model, "messages": messages, "stream": True,
                            "max_tokens": 8000, "temperature": 0.7}

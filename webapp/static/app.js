@@ -160,6 +160,7 @@ function connectSSE(taskId) {
   const es = new EventSource(`/api/tasks/${taskId}/stream`);
   state.eventSource = es;
   let accumulated = '';
+  let finished = false;
 
   es.onmessage = (e) => {
     let event;
@@ -181,6 +182,7 @@ function connectSSE(taskId) {
         break;
 
       case 'done':
+        finished = true;
         setStep('done');
         progressMsg.textContent = `解答完成 — ${event.filename || ''}`;
         resultMeta.innerHTML = `<span class="badge badge-completed">完成</span> <span class="text-sm">${event.filename || ''}</span>`;
@@ -193,6 +195,7 @@ function connectSSE(taskId) {
         break;
 
       case 'error':
+        finished = true;
         progressMsg.textContent = '处理失败: ' + event.message;
         setStep('done');
         progressSteps.querySelectorAll('.step').forEach(s => { s.classList.remove('active'); s.classList.add('done'); });
@@ -211,7 +214,25 @@ function connectSSE(taskId) {
 
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) {
-      // If we haven't received done/error, connection was lost
+      if (!finished) {
+        progressMsg.textContent = '连接中断 — 服务器可能已断开，请重试';
+        setStep('done');
+        progressSteps.querySelectorAll('.step').forEach(s => { s.classList.remove('active'); s.classList.add('done'); });
+        progressSteps.querySelector('[data-step="done"] .step-dot').style.background = 'var(--error)';
+        resultMeta.innerHTML = '<span class="badge badge-failed">连接中断</span>';
+        if (accumulated) {
+          resultBody.innerHTML = renderMarkdown(accumulated) +
+            '<div class="error-card" style="padding:16px;margin-top:12px;"><p class="error-msg">连接意外中断，以上为已接收的部分结果。请重试。</p></div>';
+        } else {
+          resultBody.innerHTML = '<div class="error-card" style="padding:16px;"><p class="error-msg">连接意外中断，未收到任何结果。请重试。</p></div>';
+        }
+        resultCard.hidden = false;
+        es.close();
+        state.eventSource = null;
+        solveBtn.textContent = '重试';
+        solveBtn.disabled = false;
+        solveBtn.onclick = startSolve;
+      }
     }
   };
 }
