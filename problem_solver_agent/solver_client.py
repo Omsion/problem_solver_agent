@@ -43,13 +43,6 @@ class DeepSeekChatPayload(TypedDict):
     reasoning_effort: str
 
 
-class ZhipuChatPayload(TypedDict):
-    model: str
-    messages: List[Dict[str, Any]]
-    stream: bool
-    extra_body: Dict[str, Any]
-
-
 def get_client(provider: str) -> OpenAI:
     """
     根据提供商名称，获取或创建一个缓存的OpenAI兼容客户端实例。
@@ -58,8 +51,7 @@ def get_client(provider: str) -> OpenAI:
     logger.info(f"正在为提供商 '{provider}' 初始化API客户端...")
     provider_config = config.SOLVER_CONFIG.get(provider)
     if not provider_config: raise ValueError(f"未在 config.py 中找到提供商 '{provider}' 的配置。")
-    api_key_map = {'deepseek': config.DEEPSEEK_API_KEY,
-                   'zhipu': config.ZHIPU_API_KEY}
+    api_key_map = {'deepseek': config.DEEPSEEK_API_KEY}
     api_key = api_key_map.get(provider)
     if not api_key: raise ValueError(f"未能获取提供商 '{provider}' 的API密钥，请检查 .env 文件。")
     client = OpenAI(api_key=api_key, base_url=provider_config["base_url"], timeout=config.API_TIMEOUT)
@@ -78,19 +70,15 @@ def stream_solve(final_prompt: str, provider: str, model: str) -> Generator[str,
         try:
             client = get_client(provider)
             messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
-            payload: Union[StandardChatPayload, DeepSeekChatPayload, ZhipuChatPayload]
+            payload: Union[StandardChatPayload, DeepSeekChatPayload]
 
             if provider == 'deepseek':
-                # DeepSeek 思考模式 (V4-Pro)
+                # DeepSeek 思考模式
                 # 思考模式下 temperature/top_p 不生效，故不传递
                 payload = {"model": model, "messages": messages, "stream": True,
                            "extra_body": {"thinking": {"type": "enabled"}},
                            "reasoning_effort": "high",
                            "max_tokens": 8000}
-            elif provider == 'zhipu':
-                # Zhipu 思考模式 (GLM-4.5/GLM-4.6V 等)
-                payload = {"model": model, "messages": messages, "stream": True,
-                           "extra_body": {"thinking": {"type": "enabled"}}}
             else:
                 payload = {"model": model, "messages": messages, "stream": True,
                            "max_tokens": 8000, "temperature": 0.7}

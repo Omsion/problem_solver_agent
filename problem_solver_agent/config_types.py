@@ -146,10 +146,6 @@ class AgentConfig:
         "deepseek": SolverConfig(
             model="deepseek-v4-pro",
             base_url="https://api.deepseek.com/v1"
-        ),
-        "zhipu": SolverConfig(
-            model="glm-4.5",
-            base_url="https://open.bigmodel.cn/api/paas/v4/"
         )
     })
 

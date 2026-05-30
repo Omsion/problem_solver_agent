@@ -74,11 +74,6 @@ SOLVER_CONFIG = {
     "deepseek": {
         "model": "deepseek-v4-pro",
         "base_url": "https://api.deepseek.com/v1"},
-
-    "zhipu": {
-        "model": "glm-4.5",
-        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
-    }
 }
 
 # --- 5. 求解风格配置 ---
