@@ -13,8 +13,7 @@ vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 import concurrent.futures
 import time
 from pathlib import Path
-from typing import List, Union, Dict, Any, Generator
-from typing_extensions import TypedDict
+from typing import List, Union, Dict, Any, Generator, TypedDict
 from openai import OpenAI, APIConnectionError, APITimeoutError
 
 from . import config
@@ -32,14 +31,25 @@ class VisionCompletionPayload(TypedDict, total=False):
     extra_body: Dict[str, Any]
 
 
-# --- 客户端初始化 ---
-try:
+# --- 客户端延迟初始化 ---
+_vision_client: OpenAI | None = None
+
+
+def _get_vision_client() -> OpenAI | None:
+    """获取或延迟初始化视觉 API 客户端（单例）。"""
+    global _vision_client
+    if _vision_client is not None:
+        return _vision_client
     if not config.ZHIPU_API_KEY:
-        raise ValueError("未在 .env 文件中找到 ZHIPU_API_KEY。")
-    _vision_client = OpenAI(api_key=config.ZHIPU_API_KEY, base_url=config.VISION_BASE_URL)
-except Exception as e:
-    logger.critical(f"初始化视觉客户端失败 (base_url={config.VISION_BASE_URL}): {e}")
-    _vision_client = None
+        logger.critical("未在 .env 文件中找到 ZHIPU_API_KEY，视觉客户端初始化失败。")
+        return None
+    try:
+        _vision_client = OpenAI(api_key=config.ZHIPU_API_KEY, base_url=config.VISION_BASE_URL)
+        logger.info("视觉客户端初始化成功。")
+    except Exception as e:
+        logger.critical(f"初始化视觉客户端失败 (base_url={config.VISION_BASE_URL}): {e}")
+        return None
+    return _vision_client
 
 
 def _call_vision_api(image_paths: List[Path], user_prompt: str, model_name: str,
@@ -63,7 +73,7 @@ def _call_vision_api(image_paths: List[Path], user_prompt: str, model_name: str,
         流式: 字符串生成器
         失败: None
     """
-    if not _vision_client:
+    if not _get_vision_client():
         logger.error("视觉客户端未初始化，API调用中止。")
         return None
 
@@ -88,7 +98,7 @@ def _call_vision_api(image_paths: List[Path], user_prompt: str, model_name: str,
     # --- 核心：自动重试循环 ---
     for attempt in range(config.MAX_RETRIES + 1):
         try:
-            completion = _vision_client.chat.completions.create(**payload)  # type: ignore
+            completion = _get_vision_client().chat.completions.create(**payload)  # type: ignore
 
             if stream:
                 def stream_generator():

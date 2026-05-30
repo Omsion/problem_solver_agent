@@ -62,19 +62,15 @@ OnlineTest/
 ├── requirements.txt
 │
 ├── problem_solver_agent/ # 核心包
-│   ├── __init__.py
+│   ├── __init__.py       # 包定义与公共 API
 │   ├── main.py           # 主入口
 │   ├── config.py         # 所有配置（模型、路径、超时等）
-│   ├── config_types.py   # 类型安全的 dataclass 配置定义
 │   ├── file_monitor.py   # 文件系统监控
 │   ├── image_grouper.py  # 核心调度器 / 流水线编排
 │   ├── prompts.py        # Prompt 模板
 │   ├── vision_client.py  # 视觉 API 客户端（分类/OCR/视觉推理）
 │   ├── solver_client.py  # 求解器客户端（统一多模型接口）
 │   └── utils.py          # 工具函数
-│
-├── scripts/
-│   └── aggregate_for_gemini.py
 │
 └── tools/                # 独立工具
     ├── __init__.py
@@ -196,3 +192,5 @@ SOLVER_ROUTING_CONFIG = {
     "DEFAULT_SOLVER": "deepseek",
 }
 ```
+
+**添加新 provider 到 `SOLVER_CONFIG` 后，需在 `.env` 中配置对应的 API 密钥。密钥命名遵循约定：`{PROVIDER}_API_KEY`（全大写）。例如添加 `new_provider`，则需配置 `NEW_PROVIDER_API_KEY`。**

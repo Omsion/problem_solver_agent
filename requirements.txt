@@ -1,68 +1,18 @@
 # requirements.txt - 项目依赖清单
-#
-# 版本说明：
-# - 明确指定版本号：package==1.2.3
-# - 最小版本要求：package>=1.0.0
-# - 兼容版本范围：package~=1.2.0 (即 >=1.2.0, <2.0.0)
-#
+
 # 安装方法：
 #   pip install -r requirements.txt
 
-# ==============================================================================
-# --- 核心依赖 (Core Dependencies) ---
-# ==============================================================================
+# --- 核心依赖 ---
+openai>=1.0.0,<3.0.0      # OpenAI SDK，调用 DeepSeek / Zhipu 等 LLM API
+Pillow>=10.0.0,<13.0.0    # 图像处理，截图
+watchdog>=3.0.0,<7.0.0    # 文件系统监控，实时监控截图目录
+python-dotenv>=1.0.0,<3.0.0  # 从 .env 文件加载环境变量
 
-# OpenAI SDK - 用于调用 LLM API (Qwen, DeepSeek, Zhipu 等)
-openai>=1.0.0
-
-# Pillow - 图像处理库，用于 OCR 预处理和截图
-Pillow>=10.0.0
-
-# watchdog - 文件系统监控库，用于实时监控截图目录
-watchdog>=3.0.0
-
-# python-dotenv - 从 .env 文件加载环境变量
-python-dotenv>=1.0.0
-
-# ==============================================================================
-# --- 工具依赖 (Utility Dependencies) ---
-# ==============================================================================
-
-# keyboard - 键盘热键监听库，用于静默截图工具
-keyboard>=0.13.0
-
-# pywin32 - Windows API 封装库，用于 GDI 截图
-# 注意：仅在 Windows 平台需要
-pywin32>=306.0.0; sys_platform == "win32"
-
-# ==============================================================================
-# --- 原有依赖 (Legacy Dependencies - 待评估是否需要) ---
-# ==============================================================================
-# langchain - LangChain 框架
-# langchain-deepseek - LangChain 的 DeepSeek 集成
-# langserve[all] - LangChain 服务端
-# 注意：当前代码中未使用 LangChain 功能，这些依赖可以移除
-langchain
-langchain-deepseek
-langserve[all]
-
-# ==============================================================================
-# --- 开发依赖 (Development Dependencies - 可选) ---
-# ==============================================================================
-# 取消以下依赖的注释以启用开发工具
-
-# 测试框架
-# pytest>=7.0.0
-# pytest-cov>=4.0.0
-# pytest-mock>=3.10.0
-
-# 代码质量工具
-# black>=23.0.0        # 代码格式化
-# flake8>=6.0.0        # 代码风格检查
-# isort>=5.12.0        # import 排序
-# mypy>=1.0.0          # 类型检查
-# pre-commit>=3.0.0     # Git 钩子管理
-
-# 文档生成
-# sphinx>=7.0.0
-# sphinx-rtd-theme>=1.2.0
+# --- 工具依赖 ---
+keyboard>=0.13.0           # 键盘热键监听（silent_screencapper / human_typer）
+pywin32>=306.0.0; sys_platform == "win32"  # Windows GDI 截图
+flask>=3.0.0,<5.0.0       # Web 服务器（remote_trigger）
+qrcode>=7.4.0,<9.0.0      # 二维码生成（remote_trigger）
+pyperclip>=1.8.0           # 剪贴板操作（human_typer）
+pyautogui>=0.9.0           # GUI 自动化（human_typer）

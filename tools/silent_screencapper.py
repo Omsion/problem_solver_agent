@@ -106,8 +106,6 @@ def take_screenshot_action():
         img = Image.frombuffer('RGB', (width, height), signed_ints_array, 'raw', 'BGRX', 0, 1)
 
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        # microsecond = f"{time.time():.6f}"[-6:]
-        # filename = f"Screenshot_{timestamp}_{microsecond}.png"
         filename = f"Screenshot_{timestamp}.png"
         filepath = SAVE_DIRECTORY / filename
         SAVE_DIRECTORY.mkdir(parents=True, exist_ok=True)

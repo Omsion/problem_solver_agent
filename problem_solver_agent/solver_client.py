@@ -14,8 +14,7 @@ V2.5 版本更新:
 """
 import time
 from openai import OpenAI, APIConnectionError, APITimeoutError
-from typing import Generator, Dict, Any, List, Union
-from typing_extensions import TypedDict
+from typing import Generator, Dict, Any, List, Union, TypedDict
 from . import config
 from .utils import setup_logger
 
@@ -43,17 +42,25 @@ class DeepSeekChatPayload(TypedDict):
     reasoning_effort: str
 
 
+def _get_api_key(provider: str) -> str | None:
+    """根据 provider 名称从 config 中查找对应的 API 密钥。"""
+    attr_name = f"{provider.upper()}_API_KEY"
+    return getattr(config, attr_name, None)
+
+
 def get_client(provider: str) -> OpenAI:
     """
     根据提供商名称，获取或创建一个缓存的OpenAI兼容客户端实例。
     """
-    if provider in _clients: return _clients[provider]
+    if provider in _clients:
+        return _clients[provider]
     logger.info(f"正在为提供商 '{provider}' 初始化API客户端...")
     provider_config = config.SOLVER_CONFIG.get(provider)
-    if not provider_config: raise ValueError(f"未在 config.py 中找到提供商 '{provider}' 的配置。")
-    api_key_map = {'deepseek': config.DEEPSEEK_API_KEY}
-    api_key = api_key_map.get(provider)
-    if not api_key: raise ValueError(f"未能获取提供商 '{provider}' 的API密钥，请检查 .env 文件。")
+    if not provider_config:
+        raise ValueError(f"未在 config.py 中找到提供商 '{provider}' 的配置。")
+    api_key = _get_api_key(provider)
+    if not api_key:
+        raise ValueError(f"未能获取提供商 '{provider}' 的API密钥，请检查 .env 文件。")
     client = OpenAI(api_key=api_key, base_url=provider_config["base_url"], timeout=config.API_TIMEOUT)
     _clients[provider] = client
     logger.info(f"客户端 '{provider}' 初始化成功。")

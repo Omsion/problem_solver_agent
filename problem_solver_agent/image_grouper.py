@@ -206,7 +206,7 @@ class ImageGrouper:
 
         return polished_text
 
-    def _determine_solver(self, final_problem_type: str) -> (str, str):
+    def _determine_solver(self, final_problem_type: str) -> tuple[str, str]:
         """根据最终问题类型和config中的路由规则，决定使用哪个求解器。"""
         if final_problem_type in ["LEETCODE", "ACM", "ML_CODING"]:
             provider = config.SOLVER_ROUTING_CONFIG["CODING_SOLVER"]

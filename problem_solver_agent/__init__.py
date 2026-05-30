@@ -29,10 +29,5 @@ __all__ = [
     "start_monitoring",
 ]
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 __author__ = "WZW"
-__email__ = "your.email@example.com"
-
-# 初始化日志记录器（提前初始化，避免首次调用时的延迟）
-# from .utils import setup_logger
-# setup_logger()

@@ -6,22 +6,15 @@ conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python -m problem_sol
 
 import sys
 
-if __package__ is None:
-    sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent.parent))
-    import problem_solver_agent.config as config
-    import problem_solver_agent.file_monitor as file_monitor
-    from problem_solver_agent.image_grouper import ImageGrouper
-    from problem_solver_agent.utils import setup_logger
-    import problem_solver_agent.solver_client as solver_client
-else:
-    from . import config
-    from . import file_monitor
-    from .image_grouper import ImageGrouper
-    from .utils import setup_logger
-    from . import solver_client
+from . import config
+from . import file_monitor
+from .image_grouper import ImageGrouper
+from .utils import setup_logger
+from . import solver_client
+
 
 def main():
-    """主执行函数 """
+    """主执行函数"""
     logger = setup_logger()
     logger.info("=" * 50)
     logger.info("启动自动化解题Agent (统一客户端)...")
@@ -40,8 +33,7 @@ def main():
     else:
         logger.info("✓ GLM-4.6V API密钥配置正常")
 
-    logger.info(f"----- 检查所有已配置的核心求解器 -----")
-    # 遍历所有在 config 中定义的求解器并逐一检查健康状况
+    logger.info("----- 检查所有已配置的核心求解器 -----")
     for provider, details in config.SOLVER_CONFIG.items():
         try:
             model_to_check = details["model"]
@@ -63,7 +55,6 @@ def main():
     logger.info(f"视觉分类/OCR模型: {config.VISION_CLASSIFY_MODEL}")
     logger.info(f"视觉推理模型: {config.VISION_REASONING_MODEL}")
     logger.info("核心求解器: [根据问题类型动态选择]")
-    # 从新的配置中读取并显示路由规则
     logger.info(f"  - 编程类问题 -> {config.SOLVER_ROUTING_CONFIG['CODING_SOLVER']}")
     logger.info(f"  - 其他问题 -> {config.SOLVER_ROUTING_CONFIG['DEFAULT_SOLVER']}")
     logger.info(f"辅助模型: {config.AUX_PROVIDER} -> {config.AUX_MODEL_NAME}")
