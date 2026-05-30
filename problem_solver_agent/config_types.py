@@ -13,7 +13,6 @@ config_types.py - 配置类型定义（基于 dataclass）
     from .config_types import AgentConfig, SolverConfig
     
     config = AgentConfig(
-        dashscope_api_key="sk-xxx",
         deepseek_api_key="sk-xxx",
         zhipu_api_key="xxx",
     )
@@ -69,7 +68,6 @@ class AgentConfig:
 
     Attributes:
         # API 密钥
-        dashscope_api_key: DashScope API 密钥
         deepseek_api_key: DeepSeek API 密钥
         zhipu_api_key: 智谱 AI API 密钥
 
@@ -79,9 +77,9 @@ class AgentConfig:
         retry_delay: 重试延迟（秒）
 
         # 模型配置
-        qwen_base_url: Qwen-VL API 端点
-        qwen_model_name: Qwen-VL 模型名称
-        qwen_vl_thinking_model_name: Qwen-VL 视觉推理模型
+        vision_base_url: 视觉模型 API 端点 (Zhipu)
+        vision_classify_model: 视觉分类/OCR 模型
+        vision_reasoning_model: 视觉推理模型
 
         # 辅助模型配置
         aux_provider: 辅助模型提供商
@@ -107,7 +105,6 @@ class AgentConfig:
         solver_configs: 各求解器的详细配置
     """
     # API 密钥
-    dashscope_api_key: str | None = None
     deepseek_api_key: str | None = None
     zhipu_api_key: str | None = None
 
@@ -117,13 +114,13 @@ class AgentConfig:
     retry_delay: float = 10.0
 
     # 模型配置
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model_name: str = "qwen3-vl-flash"
-    qwen_vl_thinking_model_name: str = "qwen3-vl-235b-a22b-thinking"
+    vision_base_url: str = "https://open.bigmodel.cn/api/paas/v4/"
+    vision_classify_model: str = "GLM-4.6V-FlashX"
+    vision_reasoning_model: str = "GLM-4.6V"
 
     # 辅助模型配置
     aux_provider: str = "deepseek"
-    aux_model_name: str = "deepseek-chat"
+    aux_model_name: str = "deepseek-v4-flash"
 
     # 路径配置
     root_dir: Path = field(default_factory=lambda: Path(r"D:\Users\wzw\Pictures"))
@@ -142,17 +139,13 @@ class AgentConfig:
 
     # 求解器配置
     solver_routing_config: Dict[str, str] = field(default_factory=lambda: {
-        "CODING_SOLVER": "dashscope",
-        "DEFAULT_SOLVER": "zhipu"
+        "CODING_SOLVER": "deepseek",
+        "DEFAULT_SOLVER": "deepseek"
     })
     solver_configs: Dict[str, SolverConfig] = field(default_factory=lambda: {
         "deepseek": SolverConfig(
-            model="deepseek-reasoner",
+            model="deepseek-v4-pro",
             base_url="https://api.deepseek.com/v1"
-        ),
-        "dashscope": SolverConfig(
-            model="qwen3-max",
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         ),
         "zhipu": SolverConfig(
             model="glm-4.5",
@@ -171,7 +164,7 @@ class AgentConfig:
             self.solution_dir = self.root_dir / "solutions"
 
         # 验证关键配置
-        if not any([self.dashscope_api_key, self.deepseek_api_key, self.zhipu_api_key]):
+        if not any([self.deepseek_api_key, self.zhipu_api_key]):
             raise ValueError("至少需要配置一个 API 密钥")
 
         if self.api_timeout < 0:
@@ -190,10 +183,6 @@ class AgentConfig:
         Raises:
             ValueError: 当配置无效时抛出
         """
-        # 验证 API 密钥
-        if not self.dashscope_api_key:
-            raise ValueError("dashscope_api_key 未设置")
-
         # 验证路径
         if not self.root_dir:
             raise ValueError("root_dir 未设置")

@@ -51,8 +51,8 @@ def main():
 
     logger.info("=" * 50)
     logger.info(f"监控目录: {config.MONITOR_DIR}")
-    logger.info(f"视觉分类/OCR模型: {config.QWEN_MODEL_NAME}")
-    logger.info(f"视觉推理模型: {config.QWEN_VL_THINKING_MODEL_NAME}")
+    logger.info(f"视觉分类/OCR模型: {config.VISION_CLASSIFY_MODEL}")
+    logger.info(f"视觉推理模型: {config.VISION_REASONING_MODEL}")
     logger.info("核心求解器: [根据问题类型动态选择]")
     # 从新的配置中读取并显示路由规则
     logger.info(f"  - 编程类问题 -> {config.SOLVER_ROUTING_CONFIG['CODING_SOLVER']}")

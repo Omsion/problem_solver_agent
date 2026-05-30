@@ -304,7 +304,7 @@ class ImageGrouper:
                     self._write_solution_header(f, thread_name, group_to_process,
                                                 final_problem_type, transcribed_text,
                                                 solver_provider="Qwen-VL",
-                                                solver_model=config.QWEN_VL_THINKING_MODEL_NAME)
+                                                solver_model=config.VISION_REASONING_MODEL)
                     response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
                 else:
                     # 根据最终确定的 problem_type，映射到最终的问题类型

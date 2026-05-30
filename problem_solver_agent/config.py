@@ -24,7 +24,6 @@ load_dotenv()
 
 # --- 1. API 密钥与通用设置 ---
 # 从环境变量读取 API 密钥（推荐方式：使用 .env 文件）
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 
@@ -52,10 +51,10 @@ MAX_RETRIES = 3
 RETRY_DELAY = 10
 
 # --- 2. 视觉模型配置 (GLM-4.6V) ---
-QWEN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
-QWEN_MODEL_NAME = "GLM-4.6V-FlashX"
+VISION_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
+VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"
 # 专用于视觉推理的、更强大的模型
-QWEN_VL_THINKING_MODEL_NAME = "GLM-4.6V"
+VISION_REASONING_MODEL = "GLM-4.6V"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
 AUX_PROVIDER = "deepseek"
@@ -76,10 +75,6 @@ SOLVER_CONFIG = {
         "model": "deepseek-v4-pro",
         "base_url": "https://api.deepseek.com/v1"},
 
-    "dashscope": {
-        "model": "qwen3-max",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    },
     "zhipu": {
         "model": "glm-4.5",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
@@ -169,8 +164,6 @@ def validate_config() -> None:
     warnings = []
 
     # --- 验证 API 密钥 ---
-    if not DASHSCOPE_API_KEY:
-        errors.append("DASHSCOPE_API_KEY 未设置，请在 .env 文件中配置")
     if not DEEPSEEK_API_KEY:
         errors.append("DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置")
     if not ZHIPU_API_KEY:

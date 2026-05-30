@@ -4,7 +4,7 @@ qwen_client.py - GLM-4.6V (Zhipu) 视觉API 客户端 (V3.0 - 智谱适配版)
 
 V3.0 版本更新:
 - 【供应商切换】: 从 DashScope (Qwen-VL) 迁移到 Zhipu (GLM-4.6V) 视觉模型。
-- 【API密钥】: 使用 ZHIPU_API_KEY 替代 DASHSCOPE_API_KEY。
+- 【API密钥】: 使用 ZHIPU_API_KEY。
 - 【端点更新】: base_url 指向 Zhipu OpenAI 兼容端点。
 - 【参数清理】: 移除 Qwen 专用的 thinking_budget 参数。
 """
@@ -34,7 +34,7 @@ class VisionCompletionPayload(TypedDict, total=False):
 try:
     if not config.ZHIPU_API_KEY:
         raise ValueError("未在 .env 文件中找到 ZHIPU_API_KEY。")
-    qwen_client = OpenAI(api_key=config.ZHIPU_API_KEY, base_url=config.QWEN_BASE_URL)
+    qwen_client = OpenAI(api_key=config.ZHIPU_API_KEY, base_url=config.VISION_BASE_URL)
 except Exception as e:
     logger.critical(f"初始化视觉 (Zhipu GLM-4.6V) 客户端失败: {e}")
     qwen_client = None
@@ -118,7 +118,7 @@ def _call_qwen_api(image_paths: List[Path], user_prompt: str, model_name: str, s
 # ==============================================================================
 def classify_problem_type(image_paths: List[Path]) -> str:
     logger.info("步骤 1: 正在进行问题类型分类...")
-    response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT, config.QWEN_MODEL_NAME, stream=False)
+    response = _call_qwen_api(image_paths, config.CLASSIFICATION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False)
     valid_types = ["CODING", "VISUAL_REASONING", "QUESTION_ANSWERING", "GENERAL", "MULTIPLE_CHOICE",
                    "FILL_IN_THE_BLANKS"]
 
@@ -135,7 +135,7 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
     transcriptions = [""] * len(image_paths)
 
     def transcribe_single(index, path):
-        return index, _call_qwen_api([path], config.TRANSCRIPTION_PROMPT, config.QWEN_MODEL_NAME, stream=False)
+        return index, _call_qwen_api([path], config.TRANSCRIPTION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_index = {executor.submit(transcribe_single, i, p): i for i, p in enumerate(image_paths)}
@@ -160,7 +160,7 @@ def solve_visual_reasoning_problem(image_paths: List[Path]) -> Union[Generator[s
     """
     调用专用的视觉推理模型 (GLM-4.6V) 来解决视觉推理问题。
     """
-    logger.info(f"步骤 2.2: 正在使用专用视觉推理模型 '{config.QWEN_VL_THINKING_MODEL_NAME}' 进行求解...")
+    logger.info(f"步骤 2.2: 正在使用专用视觉推理模型 '{config.VISION_REASONING_MODEL}' 进行求解...")
     extra_params = {
         "top_p": 0.8,
         "temperature": 0.7
@@ -168,7 +168,7 @@ def solve_visual_reasoning_problem(image_paths: List[Path]) -> Union[Generator[s
     return _call_qwen_api(
         image_paths,
         config.PROMPT_TEMPLATES["VISUAL_REASONING"],
-        config.QWEN_VL_THINKING_MODEL_NAME,
+        config.VISION_REASONING_MODEL,
         stream=True,
         extra_params=extra_params
     )
