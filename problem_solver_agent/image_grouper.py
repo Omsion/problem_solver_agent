@@ -31,7 +31,7 @@ from typing import List
 
 # 导入项目模块
 from . import config
-from . import qwen_client
+from . import vision_client
 from . import solver_client
 from .utils import setup_logger, sanitize_filename, extract_question_numbers, format_number_prefix
 
@@ -186,7 +186,7 @@ class ImageGrouper:
 
     def _textualize_problem(self, group: List[Path]) -> str:
         """执行OCR和文本合并润色，返回最终的文本化结果。"""
-        raw_transcriptions = qwen_client.transcribe_images_raw(group)
+        raw_transcriptions = vision_client.transcribe_images_raw(group)
         if not raw_transcriptions:
             raise ValueError("独立文字转录步骤返回了空结果。")
 
@@ -260,7 +260,7 @@ class ImageGrouper:
 
             # --- 步骤 1: 初步视觉分类 ---
             # 使用多模态模型对图片内容进行快速的初步分类。
-            problem_type = qwen_client.classify_problem_type(group_to_process)
+            problem_type = vision_client.classify_problem_type(group_to_process)
             logger.info(f"[{thread_name}] 初步视觉分类结果: {problem_type}")
 
             # --- 步骤 2: 文本化 ---
@@ -303,9 +303,9 @@ class ImageGrouper:
                     final_problem_type = "VISUAL_REASONING"
                     self._write_solution_header(f, thread_name, group_to_process,
                                                 final_problem_type, transcribed_text,
-                                                solver_provider="Qwen-VL",
+                                                solver_provider="GLM-4.6V",
                                                 solver_model=config.VISION_REASONING_MODEL)
-                    response_stream = qwen_client.solve_visual_reasoning_problem(group_to_process)
+                    response_stream = vision_client.solve_visual_reasoning_problem(group_to_process)
                 else:
                     # 根据最终确定的 problem_type，映射到最终的问题类型
                     if problem_type == "ML_CODING":

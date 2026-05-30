@@ -80,7 +80,10 @@ SOLVER_CONFIG = {
 SOLUTION_STYLE = "OPTIMAL"# 'EXPLORATORY' or 'OPTIMAL'
 
 # --- 6. 核心文件路径配置 ---
-ROOT_DIR = Path(r"D:\Users\wzw\Pictures")
+# ROOT_DIR 自动检测为项目父目录，可通过环境变量 SOLVER_ROOT_DIR 覆盖
+# 例: 项目位于 D:\Pictures\OnlineTest\ → ROOT_DIR = D:\Pictures
+_PROJECT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(os.getenv("SOLVER_ROOT_DIR", str(_PROJECT_DIR.parent)))
 MONITOR_DIR = ROOT_DIR / "Screenshots"
 PROCESSED_DIR = ROOT_DIR / "processed"
 SOLUTION_DIR = ROOT_DIR / "solutions"

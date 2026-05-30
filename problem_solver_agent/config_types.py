@@ -18,6 +18,7 @@ config_types.py - 配置类型定义（基于 dataclass）
     )
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Literal
@@ -123,7 +124,9 @@ class AgentConfig:
     aux_model_name: str = "deepseek-v4-flash"
 
     # 路径配置
-    root_dir: Path = field(default_factory=lambda: Path(r"D:\Users\wzw\Pictures"))
+    root_dir: Path = field(default_factory=lambda: Path(os.getenv(
+        "SOLVER_ROOT_DIR", str(Path(__file__).resolve().parent.parent.parent)
+    )))
     monitor_dir: Path | None = None
     processed_dir: Path | None = None
     solution_dir: Path | None = None
