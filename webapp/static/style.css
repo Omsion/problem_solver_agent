@@ -157,8 +157,22 @@ body {
 .btn-ghost:hover { background: #f8fafc; color: var(--text); }
 .btn-danger { color: var(--error); }
 .btn-danger:hover { background: #fef2f2; color: #dc2626; }
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-alt);
+  cursor: pointer;
+  font-size: 16px;
+  transition: all .15s;
+}
+.btn-icon:hover { background: #f1f5f9; color: var(--text); }
 
-/* ---- Progress ---- */
+/* ---- Progress Steps ---- */
 .progress-steps {
   display: flex;
   justify-content: center;
@@ -245,19 +259,30 @@ body {
   font-size: 13px;
   line-height: 1.65;
 }
-.copy-btn {
+.code-block-wrapper { position: relative; }
+.code-block-wrapper .code-actions {
   position: absolute;
-  top: 8px; right: 8px;
-  padding: 4px 10px;
+  top: 6px; right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.code-block-wrapper:hover .code-actions { opacity: 1; }
+.copy-btn, .animate-btn {
+  padding: 3px 8px;
   font-size: 11px;
   background: rgba(255,255,255,.1);
   color: #94a3b8;
-  border: none;
+  border: 1px solid rgba(255,255,255,.08);
   border-radius: 4px;
   cursor: pointer;
   transition: all .15s;
+  white-space: nowrap;
 }
-.copy-btn:hover { background: rgba(255,255,255,.2); color: #fff; }
+.copy-btn:hover, .animate-btn:hover { background: rgba(255,255,255,.2); color: #fff; }
+.animate-btn { border-color: rgba(59,130,246,.3); }
+.animate-btn:hover { background: rgba(59,130,246,.25); color: #93c5fd; }
 
 /* KaTeX overrides */
 .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
@@ -296,7 +321,7 @@ body {
 /* ---- Task Detail ---- */
 .task-detail-header { margin-bottom: 20px; }
 .task-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
-.error-card { border-color: #fecaca; background: #fef2f2; }
+.error-card { border: 1px solid #fecaca; background: #fef2f2; border-radius: var(--radius); }
 .error-msg { color: #dc2626; }
 .empty-msg { text-align: center; color: var(--text-alt); padding: 40px 0; }
 
@@ -305,13 +330,188 @@ body {
 .empty-state h1 { font-size: 64px; color: var(--border); margin-bottom: 8px; }
 .empty-state p { margin-bottom: 20px; }
 
-/* ---- Responsive ---- */
-@media (max-width: 640px) {
-  .main { padding: 16px 12px; }
-  .card { padding: 16px; }
-  .drop-zone { padding: 28px 16px; }
-  .progress-steps { gap: 12px; }
-  .step { font-size: 12px; }
+/* ================================================================
+   进行中的任务区域
+   ================================================================ */
+.tasks-section { margin-top: 28px; }
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  color: var(--text);
+}
+.tasks-list { display: flex; flex-direction: column; gap: 16px; }
+
+/* ---- 单张任务卡片 ---- */
+.task-card { transition: box-shadow .2s; }
+.task-card:hover { box-shadow: var(--shadow-md); }
+
+.task-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.task-card-title { display: flex; align-items: center; gap: 8px; flex: 1; }
+.task-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.task-id-label { font-size: 12px; color: var(--text-alt); }
+.task-card-status { margin-left: auto; }
+.task-card-actions { display: flex; gap: 6px; }
+
+.task-card-body {
+  overflow: hidden;
+  transition: max-height .3s ease, opacity .3s ease;
+}
+.task-card.collapsed .task-card-body {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.task-card .progress-steps { justify-content: flex-start; padding-left: 4px; }
+.task-card .progress-msg { text-align: left; padding-left: 4px; }
+
+.task-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-alt);
+  cursor: pointer;
+  font-size: 18px;
+  transition: all .15s;
+}
+.task-close-btn:hover { background: #f1f5f9; color: var(--error); }
+
+/* ================================================================
+   算法动画面板
+   ================================================================ */
+.anim-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, .75);
+  backdrop-filter: blur(4px);
+}
+.anim-overlay[hidden] { display: none; }
+
+.anim-panel {
+  width: 90vw;
+  max-width: 860px;
+  max-height: 90vh;
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.anim-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.anim-title { font-size: 16px; font-weight: 700; flex: 1; }
+.anim-step-counter { font-size: 13px; color: var(--text-alt); }
+.anim-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  color: var(--text-alt);
+  cursor: pointer;
+  transition: all .15s;
+}
+.anim-close-btn:hover { background: #f1f5f9; color: var(--text); }
+
+.anim-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 200px;
+}
+
+.anim-canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-height: 260px;
+  overflow: hidden;
+}
+.anim-canvas-wrap canvas {
+  display: block;
+  max-width: 100%;
+}
+
+.anim-empty {
+  text-align: center;
+  color: var(--text-alt);
+  padding: 40px;
+}
+.anim-empty p { margin-bottom: 6px; }
+
+.anim-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.anim-ctrl-group { display: flex; gap: 6px; }
+.anim-speed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-alt);
+}
+.anim-speed-control input[type="range"] {
+  width: 80px;
+  accent-color: var(--primary);
+}
+.anim-speed-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  min-width: 28px;
+  text-align: center;
 }
 
 /* ---- Lightbox ---- */
@@ -387,7 +587,59 @@ body {
   color: rgba(255,255,255,.6);
   font-size: 13px;
 }
+
+/* ---- Responsive: Mobile ---- */
 @media (max-width: 640px) {
-  .lightbox-prev { left: 8px; }
-  .lightbox-next { right: 8px; }
+  /* Layout */
+  .main { padding: 12px 8px; }
+  .card { padding: 14px; margin-bottom: 12px; }
+  .header { padding: 0 12px; height: 48px; }
+  .logo { font-size: 15px; }
+  .header nav a { font-size: 12px; padding: 4px 10px; }
+
+  /* Drop zone */
+  .drop-zone { padding: 24px 12px; }
+  .drop-title { font-size: 14px; }
+  .drop-hint { font-size: 11px; }
+  .drop-icon { font-size: 32px; }
+
+  /* Preview */
+  .preview-item { width: 72px; height: 72px; }
+  .preview-list { gap: 6px; }
+  .preview-header { font-size: 12px; }
+
+  /* Buttons - larger touch targets */
+  .btn { padding: 8px 16px; font-size: 13px; min-height: 40px; }
+  .btn-lg { padding: 10px 28px; font-size: 14px; }
+  .btn-sm { padding: 6px 10px; font-size: 11px; min-height: 32px; }
+
+  /* Progress steps */
+  .progress-steps { gap: 10px; flex-wrap: wrap; }
+  .step { font-size: 11px; gap: 4px; }
+  .step-dot { width: 10px; height: 10px; }
+
+  /* Task cards */
+  .task-card-header { flex-wrap: wrap; gap: 8px; }
+  .task-card-title { font-size: 13px; }
+  .task-number { width: 24px; height: 24px; font-size: 11px; }
+  .task-id-label { font-size: 10px; }
+  .task-card .progress-steps { gap: 8px; }
+  .task-card .progress-msg { font-size: 12px; }
+
+  /* Markdown body */
+  .markdown-body { font-size: 14px; }
+  .markdown-body h1 { font-size: 1.3em; }
+  .markdown-body h2 { font-size: 1.15em; }
+  .markdown-body pre { padding: 12px; }
+  .markdown-body pre code { font-size: 11px; }
+
+  /* Lightbox */
+  .lightbox-prev { left: 4px; }
+  .lightbox-next { right: 4px; }
+  .lightbox-prev, .lightbox-next { width: 36px; height: 36px; font-size: 28px; }
+  .lightbox-close { top: -32px; font-size: 28px; }
+
+  /* Animation - hide on mobile */
+  .anim-overlay { display: none !important; }
+  .code-block-wrapper .animate-btn { display: none; }
 }
