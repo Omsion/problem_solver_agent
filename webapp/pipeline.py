@@ -65,7 +65,7 @@ class PipelineService:
 
             # ---- 步骤 4：命名 & 归档 ----
             final_path = self._generate_filename(transcribed_text, final_type, task_id)
-            temp_path.rename(final_path)
+            temp_path.replace(final_path)
 
             self._cleanup_images(image_paths)
             self.task_manager.update_task(task_id, status="completed", solution_path=str(final_path), filename=final_path.name)
