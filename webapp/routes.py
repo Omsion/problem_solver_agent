@@ -23,6 +23,9 @@ pipeline_service = None
 templates = None
 _processing_locks: dict[str, bool] = {}
 _proc_lock = threading.Lock()
+# 广播列表：同一任务的所有 SSE 连接共享事件
+_task_queues: dict[str, list[asyncio.Queue]] = {}
+_task_queues_lock = threading.Lock()
 
 
 def init_router(tm, ps, tpl):
