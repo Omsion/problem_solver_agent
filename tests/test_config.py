@@ -24,17 +24,15 @@ class TestValidateConfig:
 
     def test_validate_config_success(self, mock_config):
         """测试配置验证成功场景。"""
-        # 不应抛出异常
         validate_config()
 
     def test_validate_config_missing_api_keys(self, monkeypatch):
         """测试 API 密钥缺失时的错误处理。"""
-        # 清除所有 API 密钥
         monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
         monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
         monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
 
-        with pytest.raises(ValueError, match="DASHSCOPE_API_KEY 未设置"):
+        with pytest.raises(ValueError, match="DEEPSEEK_API_KEY 未设置"):
             validate_config()
 
     def test_validate_config_invalid_timeout(self, monkeypatch, mock_config):
@@ -59,25 +57,20 @@ class TestInitializeDirectories:
         """测试目录初始化成功场景。"""
         from problem_solver_agent import config
 
-        # Mock 目录配置
         original_root = config.ROOT_DIR
         original_processed = config.PROCESSED_DIR
         original_solution = config.SOLUTION_DIR
 
         try:
-            # 设置临时目录
             config.ROOT_DIR = tmp_path
             config.PROCESSED_DIR = tmp_path / "processed"
             config.SOLUTION_DIR = tmp_path / "solutions"
 
-            # 初始化目录
             initialize_directories()
 
-            # 验证目录已创建
             assert config.PROCESSED_DIR.exists()
             assert config.SOLUTION_DIR.exists()
         finally:
-            # 恢复原始配置
             config.ROOT_DIR = original_root
             config.PROCESSED_DIR = original_processed
             config.SOLUTION_DIR = original_solution
@@ -133,11 +126,8 @@ class TestAgentConfig:
 
     def test_agent_config_defaults(self):
         """测试默认配置值。"""
-        config = AgentConfig(
-            dashscope_api_key="test-key",
-        )
-
-        assert config.dashscope_api_key == "test-key"
+        config = AgentConfig(deepseek_api_key="test-key")
+        assert config.deepseek_api_key == "test-key"
         assert config.api_timeout == 600.0
         assert config.max_retries == 3
         assert config.retry_delay == 10.0
@@ -145,11 +135,9 @@ class TestAgentConfig:
     def test_agent_config_path_computation(self, tmp_path):
         """测试路径自动计算功能。"""
         config = AgentConfig(
-            dashscope_api_key="test-key",
+            deepseek_api_key="test-key",
             root_dir=tmp_path,
         )
-
-        # 验证派生路径
         assert config.monitor_dir == tmp_path / "Screenshots"
         assert config.processed_dir == tmp_path / "processed"
         assert config.solution_dir == tmp_path / "solutions"
@@ -161,15 +149,10 @@ class TestAgentConfig:
 
     def test_agent_config_validate_success(self):
         """测试配置验证成功。"""
-        config = AgentConfig(
-            dashscope_api_key="test-key",
-        )
+        config = AgentConfig(deepseek_api_key="test-key")
         assert config.validate() is True
 
     def test_agent_config_invalid_timeout(self):
         """测试无效的超时配置。"""
         with pytest.raises(ValueError, match="api_timeout 不能为负数"):
-            AgentConfig(
-                dashscope_api_key="test-key",
-                api_timeout=-10.0,
-            )
+            AgentConfig(deepseek_api_key="test-key", api_timeout=-10.0)
