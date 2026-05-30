@@ -1,5 +1,0 @@
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-    "integration: 集成测试（需要 mock API，用 -m 'not integration' 跳过）",
-]
