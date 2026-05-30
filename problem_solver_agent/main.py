@@ -5,11 +5,20 @@ conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python -m problem_sol
 """
 
 import sys
-from . import config
-from . import file_monitor
-from .image_grouper import ImageGrouper
-from .utils import setup_logger
-from . import solver_client
+
+if __package__ is None:
+    sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent.parent))
+    import problem_solver_agent.config as config
+    import problem_solver_agent.file_monitor as file_monitor
+    from problem_solver_agent.image_grouper import ImageGrouper
+    from problem_solver_agent.utils import setup_logger
+    import problem_solver_agent.solver_client as solver_client
+else:
+    from . import config
+    from . import file_monitor
+    from .image_grouper import ImageGrouper
+    from .utils import setup_logger
+    from . import solver_client
 
 def main():
     """主执行函数 """
