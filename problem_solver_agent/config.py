@@ -53,27 +53,27 @@ RETRY_DELAY = 10
 
 # --- 2. 视觉模型配置 (Qwen-VL) ---
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-QWEN_MODEL_NAME = "qwen3-vl-flash"  # qwen3-vl-235b-a22b-instruct
+QWEN_MODEL_NAME = "qwen3-vl-flash"
 # 专用于视觉推理的、更强大的思考模型
-QWEN_VL_THINKING_MODEL_NAME = "qwen3-vl-235b-a22b-thinking"
+QWEN_VL_THINKING_MODEL_NAME = "qwen3-vl-plus"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
 AUX_PROVIDER = "deepseek"
-AUX_MODEL_NAME = "deepseek-chat"
+AUX_MODEL_NAME = "deepseek-v4-flash"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 # 配置字典，用于定义问题类型到求解器的映射规则。
 SOLVER_ROUTING_CONFIG = {
-    # 为编程类问题指定使用 'dashscope' 供应商
-    "CODING_SOLVER": "dashscope",
+    # 为编程类问题指定使用 'deepseek' 供应商
+    "CODING_SOLVER": "deepseek",
 
     # 为所有其他问题指定一个默认的求解器
-    "DEFAULT_SOLVER": "zhipu"
+    "DEFAULT_SOLVER": "deepseek"
 }
 
 SOLVER_CONFIG = {
     "deepseek": {
-        "model": "deepseek-reasoner",
+        "model": "deepseek-v4-pro",
         "base_url": "https://api.deepseek.com/v1"},
 
     "dashscope": {
