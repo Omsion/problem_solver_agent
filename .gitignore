@@ -63,3 +63,5 @@ LPT[0-9]
 !/webapp/data/.gitkeep
 /webapp/uploads/*
 !/webapp/uploads/.gitkeep
+/webapp/data/
+/webapp/solutions/
