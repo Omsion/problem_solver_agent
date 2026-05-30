@@ -25,6 +25,10 @@ const progressMsg = $('#progressMsg');
 const resultCard  = $('#resultCard');
 const resultMeta  = $('#resultMeta');
 const resultBody  = $('#resultBody');
+const lightbox     = $('#lightbox');
+const lightboxImg  = $('#lightboxImg');
+const lightboxCounter = $('#lightboxCounter');
+let lightboxIdx = 0;
 
 // ---- Configure marked.js ----
 marked.setOptions({ breaks: true, gfm: true });
@@ -90,6 +94,7 @@ function renderPreview() {
       URL.revokeObjectURL(url);
       renderPreview();
     });
+    item.addEventListener('click', () => openLightbox(i));
     previewList.appendChild(item);
   });
 }
@@ -292,6 +297,38 @@ const observer = new MutationObserver(() => {
   }
 });
 observer.observe(document.body, { childList: true, subtree: true });
+
+// ---- Lightbox ----
+function openLightbox(idx) {
+  lightboxIdx = idx;
+  showLightboxImage();
+  lightbox.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function showLightboxImage() {
+  const file = state.files[lightboxIdx];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  lightboxImg.src = url;
+  lightboxCounter.textContent = (lightboxIdx + 1) + ' / ' + state.files.length;
+}
+function closeLightbox() {
+  lightbox.hidden = true;
+  document.body.style.overflow = '';
+}
+function lightboxPrev(e) { e.stopPropagation(); if (lightboxIdx > 0) { lightboxIdx--; showLightboxImage(); } }
+function lightboxNext(e) { e.stopPropagation(); if (lightboxIdx < state.files.length - 1) { lightboxIdx++; showLightboxImage(); } }
+
+document.getElementById('lightboxBg').addEventListener('click', closeLightbox);
+document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+document.getElementById('lightboxPrev').addEventListener('click', lightboxPrev);
+document.getElementById('lightboxNext').addEventListener('click', lightboxNext);
+document.addEventListener('keydown', (e) => {
+  if (lightbox.hidden) return;
+  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'ArrowLeft') lightboxPrev(e);
+  if (e.key === 'ArrowRight') lightboxNext(e);
+});
 
 // ---- Utilities ----
 function copyCode(btn) {

@@ -37,6 +37,18 @@
     <div class="result-body markdown-body" id="resultBody"></div>
   </div>
 </section>
+
+<!-- 图片放大灯箱 -->
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-bg" id="lightboxBg"></div>
+  <div class="lightbox-body">
+    <button class="lightbox-close" id="lightboxClose">&times;</button>
+    <button class="lightbox-prev" id="lightboxPrev">&lsaquo;</button>
+    <button class="lightbox-next" id="lightboxNext">&rsaquo;</button>
+    <img class="lightbox-img" id="lightboxImg" src="" alt="">
+    <div class="lightbox-counter" id="lightboxCounter"></div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
