@@ -19,6 +19,7 @@ task_manager = None
 pipeline_service = None
 templates = None
 _processing_locks: dict[str, bool] = {}
+_proc_lock = threading.Lock()
 
 
 def init_router(tm, ps, tpl):
@@ -34,20 +35,20 @@ def init_router(tm, ps, tpl):
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @router.get("/tasks", response_class=HTMLResponse)
 async def history_page(request: Request):
     tasks = task_manager.get_recent_tasks()
-    return templates.TemplateResponse("tasks.html", {"request": request, "tasks": tasks})
+    return templates.TemplateResponse(request, "tasks.html", {"tasks": tasks})
 
 
 @router.get("/tasks/{task_id}", response_class=HTMLResponse)
 async def task_detail_page(request: Request, task_id: str):
     task = task_manager.get_task(task_id)
     if not task:
-        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+        return templates.TemplateResponse(request, "404.html", status_code=404)
 
     solution_content = ""
     if task["status"] == "completed" and task["solution_path"]:
@@ -55,8 +56,7 @@ async def task_detail_page(request: Request, task_id: str):
         if sp.exists():
             solution_content = sp.read_text(encoding="utf-8")
 
-    return templates.TemplateResponse("task.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "task.html", {
         "task": task,
         "solution_content": solution_content,
     })
@@ -111,17 +111,19 @@ async def stream_task(task_id: str):
         return StreamingResponse(_err(), media_type="text/event-stream")
 
     # 防止重复处理
-    if _processing_locks.get(task_id):
-        async def _dup():
-            yield f"data: {json.dumps({'type': 'error', 'message': '任务正在处理中'})}\n\n"
-        return StreamingResponse(_dup(), media_type="text/event-stream")
+    with _proc_lock:
+        if _processing_locks.get(task_id):
+            async def _dup():
+                yield f"data: {json.dumps({'type': 'error', 'message': '任务正在处理中'})}\n\n"
+            return StreamingResponse(_dup(), media_type="text/event-stream")
+        _processing_locks[task_id] = True
 
     task_dir = web_config.UPLOAD_DIR / task_id
     image_paths = sorted(task_dir.glob("*"))
     if not image_paths:
+        with _proc_lock:
+            _processing_locks.pop(task_id, None)
         return JSONResponse({"error": "找不到上传的图片文件"}, status_code=400)
-
-    _processing_locks[task_id] = True
     q: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
 
@@ -132,7 +134,8 @@ async def stream_task(task_id: str):
         try:
             pipeline_service.run(task_id, image_paths, _on_progress)
         finally:
-            _processing_locks.pop(task_id, None)
+            with _proc_lock:
+                _processing_locks.pop(task_id, None)
             # 清理上传目录
             try:
                 for p in task_dir.glob("*"):

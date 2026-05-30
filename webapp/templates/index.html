@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}自动化解题 Agent — 首页{% endblock %}
+
+{% block content %}
+<section class="upload-section">
+  <div class="card" id="dropZone">
+    <div class="drop-zone" id="dropArea">
+      <div class="drop-icon">📁</div>
+      <p class="drop-title">点击上传 / 拖拽图片到此处</p>
+      <p class="drop-hint">或直接 <kbd>Ctrl+V</kbd> 粘贴截图 • 支持 PNG / JPG / WebP</p>
+      <input type="file" id="fileInput" multiple accept="image/*" hidden>
+    </div>
+    <div class="preview-area" id="previewArea" hidden>
+      <div class="preview-header">
+        <span id="previewCount">0 张图片</span>
+        <button class="btn-ghost btn-sm" id="clearBtn">清除全部</button>
+      </div>
+      <div class="preview-list" id="previewList"></div>
+    </div>
+    <div class="upload-actions">
+      <button class="btn btn-primary btn-lg" id="solveBtn" disabled>开始解答</button>
+    </div>
+  </div>
+
+  <div class="card progress-card" id="progressCard" hidden>
+    <div class="progress-steps" id="progressSteps">
+      <div class="step active" data-step="classifying"><span class="step-dot"></span>分类</div>
+      <div class="step" data-step="ocr"><span class="step-dot"></span>OCR 识别</div>
+      <div class="step" data-step="solving"><span class="step-dot"></span>AI 求解</div>
+      <div class="step" data-step="done"><span class="step-dot"></span>完成</div>
+    </div>
+    <p class="progress-msg" id="progressMsg"></p>
+  </div>
+
+  <div class="card result-card" id="resultCard" hidden>
+    <div class="result-meta" id="resultMeta"></div>
+    <div class="result-body markdown-body" id="resultBody"></div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js"></script>
+{% endblock %}
