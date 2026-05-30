@@ -51,11 +51,11 @@ MAX_RETRIES = 3
 # - 过长：用户等待时间增加
 RETRY_DELAY = 10
 
-# --- 2. 视觉模型配置 (Qwen-VL) ---
-QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-QWEN_MODEL_NAME = "qwen3-vl-flash"
-# 专用于视觉推理的、更强大的思考模型
-QWEN_VL_THINKING_MODEL_NAME = "qwen3-vl-plus"
+# --- 2. 视觉模型配置 (GLM-4.6V) ---
+QWEN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
+QWEN_MODEL_NAME = "GLM-4.6V-FlashX"
+# 专用于视觉推理的、更强大的模型
+QWEN_VL_THINKING_MODEL_NAME = "GLM-4.6V"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
 AUX_PROVIDER = "deepseek"

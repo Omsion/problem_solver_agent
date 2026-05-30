@@ -34,6 +34,15 @@ class StandardChatPayload(TypedDict):
     temperature: float
 
 
+class DeepSeekChatPayload(TypedDict):
+    model: str
+    messages: List[Dict[str, Any]]
+    stream: bool
+    max_tokens: int
+    extra_body: Dict[str, Any]
+    reasoning_effort: str
+
+
 class ZhipuChatPayload(TypedDict):
     model: str
     messages: List[Dict[str, Any]]
@@ -76,16 +85,26 @@ def stream_solve(final_prompt: str, provider: str, model: str) -> Generator[str,
         try:
             client = get_client(provider)
             messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
-            payload: Union[StandardChatPayload, ZhipuChatPayload, DashScopeChatPayload]
+            payload: Union[StandardChatPayload, DeepSeekChatPayload, ZhipuChatPayload, DashScopeChatPayload]
 
-            if provider == 'zhipu' and model == 'glm-4.5':
+            if provider == 'deepseek':
+                # DeepSeek 思考模式 (V4-Pro)
+                # 思考模式下 temperature/top_p 不生效，故不传递
+                payload = {"model": model, "messages": messages, "stream": True,
+                           "extra_body": {"thinking": {"type": "enabled"}},
+                           "reasoning_effort": "high",
+                           "max_tokens": 8000}
+            elif provider == 'zhipu':
+                # Zhipu 思考模式 (GLM-4.5/GLM-4.6V 等)
                 payload = {"model": model, "messages": messages, "stream": True,
                            "extra_body": {"thinking": {"type": "enabled"}}}
-            elif provider == 'dashscope' and 'qwen' in model:
+            elif provider == 'dashscope':
+                # DashScope 思考模式 (Qwen 系列)
                 payload = {"model": model, "messages": messages, "stream": True,
                            "extra_body": {"enable_thinking": True, "result_format": "message"}}
             else:
-                payload = {"model": model, "messages": messages, "stream": True, "max_tokens": 8000, "temperature": 0.7}
+                payload = {"model": model, "messages": messages, "stream": True,
+                           "max_tokens": 8000, "temperature": 0.7}
 
             completion = client.chat.completions.create(**payload)  # type: ignore
 

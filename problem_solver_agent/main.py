@@ -25,11 +25,11 @@ def main():
         sys.exit(1)
 
     all_apis_ok = True
-    if not config.DASHSCOPE_API_KEY:
-        logger.critical("❌ 错误: DASHSCOPE_API_KEY (视觉模型) 缺失!")
+    if not config.ZHIPU_API_KEY:
+        logger.critical("❌ 错误: ZHIPU_API_KEY (视觉模型 GLM-4.6V) 缺失!")
         all_apis_ok = False
     else:
-        logger.info("✓ Qwen-VL API密钥配置正常")
+        logger.info("✓ GLM-4.6V API密钥配置正常")
 
     logger.info(f"----- 检查所有已配置的核心求解器 -----")
     # 遍历所有在 config 中定义的求解器并逐一检查健康状况
@@ -51,8 +51,8 @@ def main():
 
     logger.info("=" * 50)
     logger.info(f"监控目录: {config.MONITOR_DIR}")
-    logger.info(f"视觉OCR模型: {config.QWEN_MODEL_NAME}")
-    logger.info(f"视觉图像推理模型: {config.QWEN_VL_THINKING_MODEL_NAME}")
+    logger.info(f"视觉分类/OCR模型: {config.QWEN_MODEL_NAME}")
+    logger.info(f"视觉推理模型: {config.QWEN_VL_THINKING_MODEL_NAME}")
     logger.info("核心求解器: [根据问题类型动态选择]")
     # 从新的配置中读取并显示路由规则
     logger.info(f"  - 编程类问题 -> {config.SOLVER_ROUTING_CONFIG['CODING_SOLVER']}")

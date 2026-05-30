@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-qwen_client.py - Qwen-VL (DashScope) API 客户端 (V2.3 - 健壮重试版)
+qwen_client.py - GLM-4.6V (Zhipu) 视觉API 客户端 (V3.0 - 智谱适配版)
 
-V2.3 版本更新:
-- 【核心增强】: 在核心函数 `_call_qwen_api` 中内置了强大的自动重试机制。
-- 【错误处理】: 能够智能区分可重试的网络错误 (如 APIConnectionError, APITimeoutError)
-  和不可重试的严重错误，提高了程序的整体稳定性。
-- 【可配置性】: 重试次数和延迟时间由 config.py 中的 MAX_RETRIES 和 RETRY_DELAY 控制。
-- 【日志改进】: 在重试过程中会输出清晰的警告日志，便于追踪网络问题。
+V3.0 版本更新:
+- 【供应商切换】: 从 DashScope (Qwen-VL) 迁移到 Zhipu (GLM-4.6V) 视觉模型。
+- 【API密钥】: 使用 ZHIPU_API_KEY 替代 DASHSCOPE_API_KEY。
+- 【端点更新】: base_url 指向 Zhipu OpenAI 兼容端点。
+- 【参数清理】: 移除 Qwen 专用的 thinking_budget 参数。
 """
 import concurrent.futures
 import time
@@ -33,11 +32,11 @@ class VisionCompletionPayload(TypedDict, total=False):
 
 # --- 客户端初始化 ---
 try:
-    if not config.DASHSCOPE_API_KEY:
-        raise ValueError("未在 .env 文件中找到 DASHSCOPE_API_KEY。")
-    qwen_client = OpenAI(api_key=config.DASHSCOPE_API_KEY, base_url=config.QWEN_BASE_URL)
+    if not config.ZHIPU_API_KEY:
+        raise ValueError("未在 .env 文件中找到 ZHIPU_API_KEY。")
+    qwen_client = OpenAI(api_key=config.ZHIPU_API_KEY, base_url=config.QWEN_BASE_URL)
 except Exception as e:
-    logger.critical(f"初始化Qwen-VL (DashScope)客户端失败: {e}")
+    logger.critical(f"初始化视觉 (Zhipu GLM-4.6V) 客户端失败: {e}")
     qwen_client = None
 
 
@@ -159,11 +158,10 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
 
 def solve_visual_reasoning_problem(image_paths: List[Path]) -> Union[Generator[str, None, None], None]:
     """
-    调用专用的 `qwen3-vl-thinking` 模型来解决视觉推理问题。
+    调用专用的视觉推理模型 (GLM-4.6V) 来解决视觉推理问题。
     """
-    logger.info(f"步骤 2.2: 正在使用专用视觉思考模型 '{config.QWEN_VL_THINKING_MODEL_NAME}' 进行求解...")
+    logger.info(f"步骤 2.2: 正在使用专用视觉推理模型 '{config.QWEN_VL_THINKING_MODEL_NAME}' 进行求解...")
     extra_params = {
-        "extra_body": {"thinking_budget": 4000},
         "top_p": 0.8,
         "temperature": 0.7
     }
