@@ -32,7 +32,7 @@ class TaskEventBus:
         self._lock = threading.Lock()
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
-    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        q: asyncio.Queue = asyncio.Queue(maxsize=256)
         with self._lock:
             self._queues.setdefault(task_id, []).append(q)
             for event in self._history.get(task_id, []):
