@@ -19,7 +19,14 @@ python -m problem_solver_agent.main
 ```
 
 ### 启动 Web 应用
+
+**一键启动（推荐）**：双击 `start_web.bat`，自动安装依赖 → 构建前端 → 启动服务。
+
+**手动启动**：
 ```bash
+# 首次运行需先构建前端
+cd frontend && npm install && npm run build && cd ..
+# 启动后端
 python run_web.py
 ```
 

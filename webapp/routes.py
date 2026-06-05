@@ -152,19 +152,22 @@ async def stream_task(task_id: str, thinking: bool = False):
     # 已完成/失败的任务，直接返回状态
     if task["status"] == "completed":
         async def _done():
-            yield f"data: {json.dumps({'type': 'done', 'task_id': task_id, 'filename': task.get('filename', '')})}\n\n"
+            ev = json.dumps({"type": "done", "task_id": task_id, "filename": task.get("filename", "")}, ensure_ascii=False)
+            yield f"event: done\ndata: {ev}\n\n"
         return StreamingResponse(_done(), media_type="text/event-stream")
 
     if task["status"] == "failed":
         async def _err():
-            yield f"data: {json.dumps({'type': 'error', 'message': task.get('error_message', '未知错误')})}\n\n"
+            ev = json.dumps({"type": "error", "message": task.get("error_message", "未知错误")}, ensure_ascii=False)
+            yield f"event: error\ndata: {ev}\n\n"
         return StreamingResponse(_err(), media_type="text/event-stream")
 
     # 防止重复处理
     with _proc_lock:
         if _processing_locks.get(task_id):
             async def _dup():
-                yield f"data: {json.dumps({'type': 'status', 'phase': 'solving', 'message': '任务已在其他窗口中处理中，实时同步进度…'})}\n\n"
+                ev = json.dumps({"type": "status", "phase": "solving", "message": "任务已在其他窗口中处理中，实时同步进度…"}, ensure_ascii=False)
+                yield f"event: status\ndata: {ev}\n\n"
             return StreamingResponse(_dup(), media_type="text/event-stream")
         _processing_locks[task_id] = True
 
@@ -176,7 +179,8 @@ async def stream_task(task_id: str, thinking: bool = False):
         with _proc_lock:
             _processing_locks.pop(task_id, None)
         async def _no_files():
-            yield f"data: {json.dumps({'type': 'error', 'message': '上传文件已过期，请重新提交'})}\n\n"
+            ev = json.dumps({"type": "error", "message": "上传文件已过期，请重新提交"}, ensure_ascii=False)
+            yield f"event: error\ndata: {ev}\n\n"
         return StreamingResponse(_no_files(), media_type="text/event-stream")
     q: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
@@ -204,10 +208,11 @@ async def stream_task(task_id: str, thinking: bool = False):
     async def _event_generator():
         # 连接建立后立即发送 init 事件，携带任务元数据
         init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
-        yield f"data: {json.dumps(init_event, ensure_ascii=False)}\n\n"
+        yield f"event: init\ndata: {json.dumps(init_event, ensure_ascii=False)}\n\n"
         while True:
             event = await q.get()
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            ev_type = event.get("type", "message")
+            yield f"event: {ev_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             if event["type"] in ("done", "error"):
                 break
 

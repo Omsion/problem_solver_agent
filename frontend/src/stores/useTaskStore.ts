@@ -102,6 +102,43 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       get().disconnectSSE(taskId);
     });
 
+    // Fallback — 捕获缺少 event: 前缀的消息（向后兼容）
+    es.onmessage = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        switch (data.type) {
+          case "init":
+            get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+            break;
+          case "status":
+            get().updateProgress(taskId, { phase: data.phase, message: data.message });
+            break;
+          case "reasoning":
+            set((s) => {
+              const p = s.progress[taskId] ?? emptyProgress();
+              return { progress: { ...s.progress, [taskId]: { ...p, thinking: p.thinking + (data.content ?? "") } } };
+            });
+            break;
+          case "chunk":
+            set((s) => {
+              const p = s.progress[taskId] ?? emptyProgress();
+              return { progress: { ...s.progress, [taskId]: { ...p, answer: p.answer + (data.content ?? "") } } };
+            });
+            break;
+          case "done":
+            get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
+            get().disconnectSSE(taskId);
+            break;
+          case "error":
+            get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message });
+            get().disconnectSSE(taskId);
+            break;
+        }
+      } catch {
+        // ignore unparseable messages
+      }
+    };
+
     // Handle connection-level errors
     es.onerror = () => {
       // EventSource will auto-reconnect; only flag error if not already done
