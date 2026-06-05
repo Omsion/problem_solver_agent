@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-solver_client.py - 统一求解器客户端 (V2.5 - 健壮重试版)
+solver_client.py - 统一求解器客户端 (V2.6 - Dict 事件流版)
 
 本模块是实现多模型灵活切换的核心。
+
+V2.6 版本更新:
+- 【接口变更】: `stream_solve()` 返回类型从 `Generator[str]` 改为 `Generator[dict]`，
+  每个事件为 `{"type": "reasoning"/"content", "content": "..."}` 结构。
+- 【思考捕获】: 新增对 DeepSeek `reasoning_content` 的捕获，思考过程以 `type: "reasoning"` 事件独立产出。
+- 【向后兼容】: 新增 `stream_solve_text_only()` 包装器，供 CLI Agent 继续使用纯文本流。
 
 V2.5 版本更新:
 - 【核心增强】: 为所有外部API调用函数 (`stream_solve`, `ask_for_analysis`)
@@ -67,12 +73,16 @@ def get_client(provider: str) -> OpenAI:
     return client
 
 
-def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[str, None, None]:
+def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[dict[str, str], None, None]:
     """
     流式调用指定的LLM进行问题求解，内置自动重试逻辑。
 
+    Yields dict events with structure:
+        {"type": "reasoning", "content": "..."}  — DeepSeek 思考过程
+        {"type": "content", "content": "..."}    — 最终解答文本
+
     Args:
-        enable_thinking: 是否启用思考模式（仅 DeepSeek）。Web 端建议关闭以保证流式输出流畅。
+        enable_thinking: 是否启用思考模式（仅 DeepSeek）。开启后 reasoning_content 将被捕获为 reasoning 事件。
     """
     logger.info(f"Step 2.2: 使用动态选择的模型 '{model}' (提供商: {provider}) 进行流式求解...")
 
@@ -82,10 +92,9 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
             messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
             payload: Union[StandardChatPayload, DeepSeekChatPayload]
 
-
             if provider == 'deepseek':
                 if enable_thinking:
-                    # DeepSeek æèæ¨¡å¼
+                    # DeepSeek 思考模式
                     payload = {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "high", "max_tokens": 8000}
                 else:
                     payload = {"model": model, "messages": messages, "stream": True, "max_tokens": 8000, "temperature": 0.7}
@@ -95,12 +104,16 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
 
             completion = client.chat.completions.create(**payload)  # type: ignore
 
-            # 如果成功，返回一个生成器并退出重试循环
-            def stream_generator():
+            # 返回生成器：同时捕获 reasoning_content（思考过程）和 content（最终解答）
+            def stream_generator() -> Generator[dict[str, str], None, None]:
                 for chunk in completion:
-                    content = chunk.choices[0].delta.content
-                    if content:
-                        yield content
+                    delta = chunk.choices[0].delta
+                    # 捕获 DeepSeek 思考模式下的推理内容
+                    reasoning = getattr(delta, 'reasoning_content', None)
+                    if reasoning:
+                        yield {"type": "reasoning", "content": reasoning}
+                    if delta.content:
+                        yield {"type": "content", "content": delta.content}
 
             return stream_generator()
 
@@ -118,10 +131,23 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
             break
 
     # 所有重试失败后的最终返回
-    def error_generator():
-        yield f"\n\n--- ERROR in solver_client: All retries failed for model {model}. ---\n"
+    def error_generator() -> Generator[dict[str, str], None, None]:
+        yield {"type": "error", "content": f"\n\n--- ERROR in solver_client: All retries failed for model {model}. ---\n"}
 
     return error_generator()
+
+
+def stream_solve_text_only(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[str, None, None]:
+    """
+    stream_solve() 的向后兼容包装器：仅 yield 纯文本内容，丢弃 reasoning 事件。
+    供 CLI Agent（image_grouper.py）使用，因为它只需要将文本 join 后写入文件。
+
+    Args:
+        enable_thinking: 是否启用思考模式。即使开启，reasoning 内容也会被过滤掉。
+    """
+    logger.info(f"text_only wrapper: 调用 stream_solve(provider='{provider}', model='{model}', thinking={enable_thinking})")
+    for event in stream_solve(final_prompt, provider, model, enable_thinking):
+        yield event["content"]
 
 
 def ask_for_analysis(final_prompt: str, provider: str, model: str) -> Union[str, None]:

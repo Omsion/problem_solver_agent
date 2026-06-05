@@ -32,7 +32,7 @@ class TaskEventBus:
         self._lock = threading.Lock()
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
         with self._lock:
             self._queues.setdefault(task_id, []).append(q)
             for event in self._history.get(task_id, []):
@@ -138,8 +138,13 @@ async def create_task(files: list[UploadFile] = File(...)):
 
 
 @router.get("/api/tasks/{task_id}/stream")
-async def stream_task(task_id: str):
-    """SSE 流式端点 — 启动流水线处理并实时推送进度。"""
+async def stream_task(task_id: str, thinking: bool = False):
+    """SSE 流式端点 — 启动流水线处理并实时推送进度。
+
+    Query Parameters:
+        thinking: 设为 True 可启用求解器思考模式（DeepSeek reasoning），
+                  思考过程将以 type="reasoning" 事件独立推送。
+    """
     task = task_manager.get_task(task_id)
     if not task:
         return JSONResponse({"error": "任务不存在"}, status_code=404)
@@ -181,7 +186,7 @@ async def stream_task(task_id: str):
 
     def _run() -> None:
         try:
-            pipeline_service.run(task_id, image_paths, _on_progress)
+            pipeline_service.run(task_id, image_paths, _on_progress, enable_thinking=thinking)
         finally:
             with _proc_lock:
                 _processing_locks.pop(task_id, None)
@@ -197,6 +202,9 @@ async def stream_task(task_id: str):
     thread.start()
 
     async def _event_generator():
+        # 连接建立后立即发送 init 事件，携带任务元数据
+        init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
+        yield f"data: {json.dumps(init_event, ensure_ascii=False)}\n\n"
         while True:
             event = await q.get()
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

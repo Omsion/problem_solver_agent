@@ -23,8 +23,14 @@ class PipelineService:
     # 公开入口
     # ------------------------------------------------------------------
 
-    def run(self, task_id: str, image_paths: List[Path], on_progress: Callable[[dict], None]) -> None:
-        """串行执行完整流水线，阶段切换 / 流式内容均通过 on_progress 推送。"""
+    def run(self, task_id: str, image_paths: List[Path], on_progress: Callable[[dict], None],
+            enable_thinking: bool = True) -> None:
+        """串行执行完整流水线，阶段切换 / 流式内容均通过 on_progress 推送。
+
+        Args:
+            enable_thinking: 是否启用求解器思考模式（DeepSeek reasoning）。开启后
+                            思考过程以 type="reasoning" 事件独立推送，不影响最终答案。
+        """
         transcribed_text = "N/A"
         temp_path = None
 
@@ -45,7 +51,7 @@ class PipelineService:
 
             # ---- 步骤 3：求解 ----
             on_progress({"type": "status", "phase": "solving", "message": "正在调用求解器生成解答…"})
-            final_type, solver_provider, solver_model, stream = self._start_solve(problem_type, transcribed_text, image_paths)
+            final_type, solver_provider, solver_model, stream = self._start_solve(problem_type, transcribed_text, image_paths, enable_thinking)
             self.task_manager.update_task(task_id, solver_provider=solver_provider, solver_model=solver_model)
 
             # ---- 写入文件 + 流式推送 ----
@@ -53,11 +59,26 @@ class PipelineService:
             full_answer: list[str] = []
             with open(temp_path, "w", encoding="utf-8") as f:
                 self._write_header(f, image_paths, final_type, transcribed_text, solver_provider, solver_model)
-                for chunk in stream:
-                    full_answer.append(chunk)
-                    f.write(chunk)
-                    f.flush()
-                    on_progress({"type": "chunk", "content": chunk})
+                for event in stream:
+                    ev_type = event.get("type", "") if isinstance(event, dict) else ""
+                    if ev_type == "reasoning":
+                        # 思考过程：仅推送 SSE，不写入解答文件
+                        on_progress({"type": "reasoning", "content": event["content"]})
+                    elif ev_type == "content":
+                        # 解答内容：写入文件 + 推送 SSE
+                        full_answer.append(event["content"])
+                        f.write(event["content"])
+                        f.flush()
+                        on_progress({"type": "chunk", "content": event["content"]})
+                    elif ev_type == "error":
+                        raise ValueError(event["content"])
+                    else:
+                        # 向后兼容：纯字符串 chunk（来自非 dict 流）
+                        chunk = event if isinstance(event, str) else event.get("content", "")
+                        full_answer.append(chunk)
+                        f.write(chunk)
+                        f.flush()
+                        on_progress({"type": "chunk", "content": chunk})
 
             full_text = "".join(full_answer)
             if not full_text.strip() or "--- ERROR ---" in full_text:
@@ -115,7 +136,8 @@ class PipelineService:
             return "CODING"
         return problem_type
 
-    def _start_solve(self, problem_type: str, transcribed_text: str, image_paths: List[Path]):
+    def _start_solve(self, problem_type: str, transcribed_text: str, image_paths: List[Path],
+                     enable_thinking: bool = True):
         if problem_type == "VISUAL_REASONING":
             final_type = "VISUAL_REASONING"
             provider = "GLM-4.6V"
@@ -125,7 +147,7 @@ class PipelineService:
             final_type = self._map_final_type(problem_type, transcribed_text)
             provider, model = self._determine_solver(final_type)
             prompt = self._build_prompt(final_type, transcribed_text)
-            stream = solver_client.stream_solve(prompt, provider, model, enable_thinking=False)
+            stream = solver_client.stream_solve(prompt, provider, model, enable_thinking=enable_thinking)
         return final_type, provider, model, stream
 
     def _map_final_type(self, problem_type: str, text: str) -> str:

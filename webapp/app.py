@@ -7,7 +7,9 @@ from pathlib import Path
 
 import markdown
 from markupsafe import Markup
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -50,6 +52,15 @@ def create_app() -> FastAPI:
     app = FastAPI(title="自动化解题 Agent", version="1.0.0", docs_url=None, redoc_url=None)
     app.include_router(router)
 
+    # CORS 中间件 — 允许 React 开发服务器 (localhost:5173) 跨域访问
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     if web_config.STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(web_config.STATIC_DIR)), name="static")
     if web_config.SOLUTION_DIR.exists():
@@ -86,5 +97,13 @@ def create_app() -> FastAPI:
                 logger.warning("预热视觉客户端失败: %s", e)
         except Exception as e:
             logger.warning("客户端预热过程出错: %s", e)
+
+    # SPA fallback 路由 — 生产模式下，未匹配的 GET 请求返回 React index.html
+    @app.get("/{full_path:path}")
+    async def _spa_fallback(full_path: str, request: Request):
+        index_path = web_config.STATIC_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
+        return JSONResponse({"error": "Not Found"}, status_code=404)
 
     return app

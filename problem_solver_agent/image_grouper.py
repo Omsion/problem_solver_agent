@@ -352,9 +352,9 @@ class ImageGrouper:
 
                     # 发起求解请求
                     final_solve_prompt = prompt_template.format(transcribed_text=transcribed_text)
-                    response_stream = solver_client.stream_solve(final_solve_prompt,
-                                                                 provider=solver_provider,
-                                                                 model=solver_model)
+                    response_stream = solver_client.stream_solve_text_only(final_solve_prompt,
+                                                                                     provider=solver_provider,
+                                                                                     model=solver_model)
 
                 # 将流式响应写入临时文件
                 final_answer_chunks = [chunk for chunk in response_stream]
