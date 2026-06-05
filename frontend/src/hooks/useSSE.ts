@@ -11,22 +11,27 @@ interface UseSSEOptions {
 /**
  * Custom hook for managing an EventSource SSE connection.
  * Auto-connects/disconnects based on url and enabled flag.
+ * Returns a disconnect function for imperative teardown.
  */
 export function useSSE({ url, onEvent, onError, enabled = true }: UseSSEOptions) {
   const onEventRef = useRef(onEvent);
   const onErrorRef = useRef(onError);
+  const esRef = useRef<EventSource | null>(null);
   onEventRef.current = onEvent;
   onErrorRef.current = onError;
 
-  const cleanup = useCallback(() => {
-    // Managed by the ref — no explicit close needed here
-    // since useEffect cleanup handles it
+  const disconnect = useCallback(() => {
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
     if (!url || !enabled) return;
 
     const es = new EventSource(url);
+    esRef.current = es;
 
     es.onmessage = (e: MessageEvent) => {
       try {
@@ -39,13 +44,13 @@ export function useSSE({ url, onEvent, onError, enabled = true }: UseSSEOptions)
 
     es.onerror = (e: Event) => {
       onErrorRef.current?.(e);
-      es.close();
+      disconnect();
     };
 
     return () => {
-      es.close();
+      disconnect();
     };
-  }, [url, enabled]);
+  }, [url, enabled, disconnect]);
 
-  return { disconnect: cleanup };
+  return { disconnect };
 }
