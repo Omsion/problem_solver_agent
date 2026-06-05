@@ -90,14 +90,10 @@ if exist "frontend\package.json" (
 echo [3/3] 启动 Web 服务...
 echo.
 echo ============================================
-echo   服务启动中，请在浏览器中打开:
-echo   http://localhost:8000
-echo.
-echo   手机访问（同一局域网）:
-echo   请查看终端输出的二维码地址
+echo   服务启动中，即将自动打开浏览器...
+echo   若未自动打开，请手动访问 http://localhost:8000
+echo   按 Ctrl+C 停止服务
 echo ============================================
-echo.
-echo 按 Ctrl+C 停止服务
 echo.
 
 python run_web.py

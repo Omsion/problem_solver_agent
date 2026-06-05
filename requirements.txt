@@ -13,8 +13,6 @@ python-dotenv>=1.0.0,<3.0.0  # 从 .env 文件加载环境变量
 fastapi>=0.100.0           # Web 框架
 uvicorn[standard]>=0.20.0  # ASGI 服务器
 python-multipart>=0.0.5    # 文件上传支持
-markdown>=3.5.0            # Markdown 渲染（服务端）
-python-markdown-math>=0.8  # LaTeX 数学公式扩展
 
 # --- 工具依赖 ---
 keyboard>=0.13.0           # 键盘热键监听（silent_screencapper / human_typer）

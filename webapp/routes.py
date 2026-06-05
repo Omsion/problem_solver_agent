@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
-"""webapp 路由模块 — 页面路由 + REST API + SSE 流式端点"""
+"""webapp 路由模块 — REST API + SSE 流式端点"""
 
 import asyncio
 import json
-import socket
 import threading
 import uuid
-from io import BytesIO
 from pathlib import Path
 
-import qrcode
-from fastapi import APIRouter, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response
+from fastapi import APIRouter, UploadFile, File
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from . import config as web_config
 
@@ -20,7 +17,6 @@ router = APIRouter()
 # 由 app.py 在启动时注入
 task_manager = None
 pipeline_service = None
-templates = None
 
 
 class TaskEventBus:
@@ -67,44 +63,10 @@ _processing_locks: dict[str, bool] = {}
 _proc_lock = threading.Lock()
 
 
-def init_router(tm, ps, tpl):
-    global task_manager, pipeline_service, templates
+def init_router(tm, ps):
+    global task_manager, pipeline_service
     task_manager = tm
     pipeline_service = ps
-    templates = tpl
-
-
-# ==============================================================================
-# 页面路由
-# ==============================================================================
-
-@router.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse(request, "index.html")
-
-
-@router.get("/tasks", response_class=HTMLResponse)
-async def history_page(request: Request):
-    tasks = task_manager.get_recent_tasks()
-    return templates.TemplateResponse(request, "tasks.html", {"tasks": tasks})
-
-
-@router.get("/tasks/{task_id}", response_class=HTMLResponse)
-async def task_detail_page(request: Request, task_id: str):
-    task = task_manager.get_task(task_id)
-    if not task:
-        return templates.TemplateResponse(request, "404.html", status_code=404)
-
-    solution_content = ""
-    if task["status"] == "completed" and task["solution_path"]:
-        sp = Path(task["solution_path"])
-        if sp.exists():
-            solution_content = sp.read_text(encoding="utf-8")
-
-    return templates.TemplateResponse(request, "task.html", {
-        "task": task,
-        "solution_content": solution_content,
-    })
 
 
 # ==============================================================================
@@ -252,29 +214,3 @@ async def list_tasks(limit: int = 100):
     """获取最近的任务列表。"""
     tasks = task_manager.get_recent_tasks(limit=limit)
     return {"tasks": tasks}
-
-
-def _get_lan_ip() -> str:
-    """获取本机局域网 IP，失败则返回 localhost。"""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(1)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except OSError:
-        return "127.0.0.1"
-
-
-@router.get("/api/qrcode")
-async def qr_code(request: Request):
-    """生成局域网访问二维码（PNG）。"""
-    lan_ip = _get_lan_ip()
-    port = request.url.port or 8000
-    url = f"http://{lan_ip}:{port}"
-    img = qrcode.make(url, box_size=8, border=2)
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return Response(content=buf.read(), media_type="image/png")

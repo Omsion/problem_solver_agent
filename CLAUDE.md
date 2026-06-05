@@ -84,10 +84,10 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 
 | 模块 | 职责 |
 |---|---|
-| `app.py` | FastAPI 应用工厂：创建目录、挂载静态文件、CORS、SPA fallback、预热 API 客户端。仍保留 Jinja2 模板引擎配置（过渡期） |
+| `app.py` | FastAPI 应用工厂：创建目录、挂载静态文件、CORS、SPA fallback、预热 API 客户端 |
 | `config.py` | Web 专用配置：上传/解答/数据目录、端口、文件大小限制 |
 | `models.py` | `TaskManager`：基于 sqlite3 的任务持久化 CRUD（WAL 模式） |
-| `routes.py` | 页面路由（Jinja2 遗留） + REST API + SSE 流式端点。`TaskEventBus` 实现 per-task 事件广播 |
+| `routes.py` | REST API + SSE 流式端点。`TaskEventBus` 实现 per-task 事件广播。页面路由已移除，由 SPA fallback 接管 |
 | `pipeline.py` | `PipelineService`：Web 端的处理流水线，通过 `on_progress` 回调推送 SSE 事件 |
 
 ### Web 前端 `frontend/`
@@ -147,12 +147,12 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 - **API 密钥命名**：在 `SOLVER_CONFIG` 中添加 provider `"xyz"` 后，必须在 `.env` 中配置 `XYZ_API_KEY`
 - **路径**：核心 Agent 的 `ROOT_DIR` 默认为项目目录的**父目录**，可通过 `SOLVER_ROOT_DIR` 环境变量覆盖。Web 应用的路径都在 `webapp/` 子目录下
 - **前端构建**：修改 `frontend/` 源码后必须 `npm run build` 才能在生产环境生效。开发时可用 `npm run dev` 启动 Vite 开发服务器，API 请求通过 CORS 跨域
-- **SSE 事件**：后端只推送 JSON 格式的 dict 事件。`pipeline.py` 中保留的非 dict 回退分支（第 76-79 行）是遗留兼容代码，不应触发
+- **SSE 事件**：后端推送 `event:` + `data:` 标准格式。`pipeline.py` 中保留的非 dict 回退分支（第 76-79 行）是遗留兼容代码，不应触发
 
 ## 已知技术债务
 
 1. **流水线代码重复**：`image_grouper.py::_execute_pipeline()` 和 `pipeline.py::PipelineService.run()` 实现了相同逻辑但代码独立。修改流水线步骤需同步两个文件
 2. **重分类逻辑重复**：相同的关键词列表和重分类判断在 `image_grouper.py`（第 294-317 行）和 `pipeline.py`（第 121-137 行）各有一份
-3. **遗留 Jinja2 模板**：`webapp/templates/` 中的 4 个模板和 `app.py` 中的 `_safe_markdown`/`_format_ts`/`_status_label` 辅助函数已基本被 React SPA 取代，但仍保留并可通过页面路由访问。完全移除需确认无外部依赖后删除模板目录、`markdown` 依赖和 `app.py` 中的 Jinja2 初始化代码
-4. **`pipeline.py:143` 硬编码**：`provider = "GLM-4.6V"` 应为配置常量
-5. **无 Python 测试**：历史上曾有过测试文件但已删除。前端有 ESLint 配置但 Python 端无 lint/format 工具
+3. **`pipeline.py:143` 硬编码**：`provider = "GLM-4.6V"` 应为配置常量
+4. **无 Python 测试**：历史上曾有过测试文件但已删除。前端有 ESLint 配置但 Python 端无 lint/format 工具
+5. **`webapp/templates/` 目录**：虽然路由已移除，4 个 Jinja2 模板文件仍存在于磁盘上，确认无外部依赖后可物理删除

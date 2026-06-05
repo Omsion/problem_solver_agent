@@ -1,39 +1,17 @@
 # -*- coding: utf-8 -*-
 """FastAPI 应用工厂"""
 
-import time
-import re
 from pathlib import Path
 
-import markdown
-from markupsafe import Markup
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from . import config as web_config
 from .models import TaskManager
 from .pipeline import PipelineService
 from .routes import router, init_router
-
-
-def _format_ts(ts: float) -> str:
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
-
-
-def _status_label(status: str) -> str:
-    return {"pending": "等待中", "processing": "处理中", "completed": "已完成", "failed": "失败"}.get(status, status)
-
-
-def _safe_markdown(text: str) -> Markup:
-    html = markdown.markdown(
-        text,
-        extensions=["fenced_code", "codehilite", "tables", "mdx_math"],
-        extension_configs={"mdx_math": {"enable_dollar_delimiter": True}},
-    )
-    return Markup(html)
 
 
 def create_app() -> FastAPI:
@@ -42,12 +20,8 @@ def create_app() -> FastAPI:
 
     task_manager = TaskManager(web_config.DB_PATH)
     pipeline_service = PipelineService(web_config.SOLUTION_DIR, task_manager)
-    templates = Jinja2Templates(directory=str(web_config.TEMPLATES_DIR))
-    templates.env.filters["format_ts"] = _format_ts
-    templates.env.filters["status_label"] = _status_label
-    templates.env.filters["safe_markdown"] = _safe_markdown
 
-    init_router(task_manager, pipeline_service, templates)
+    init_router(task_manager, pipeline_service)
 
     app = FastAPI(title="自动化解题 Agent", version="1.0.0", docs_url=None, redoc_url=None)
     app.include_router(router)

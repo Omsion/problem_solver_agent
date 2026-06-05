@@ -55,6 +55,8 @@ VISION_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"
 # 专用于视觉推理的、更强大的模型
 VISION_REASONING_MODEL = "GLM-4.6V"
+# 视觉模型 provider 名称（用于解答文件元数据）
+VISION_PROVIDER_NAME = "zhipu"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
 AUX_PROVIDER = "deepseek"
@@ -97,10 +99,78 @@ SOLUTION_DIR = ROOT_DIR / "solutions"
 # - 15秒：适合操作较慢的用户（可能延迟提交）
 GROUP_TIMEOUT = 8.0
 
+# --- 重分类关键词（CLI 和 Web 流水线共享）---
+ML_KEYWORDS = [
+    "numpy", "torch", "tensorflow", "mlp", "transformer", "注意力",
+    "normalization", "norm", "cnn", "rnn", "神经网络", "感知机",
+    "反向传播", "前向传播", "mnist", "cifar",
+]
+CODING_KEYWORDS = ["手撕", "算法", "leetcode", "acm", "代码", "函数", "实现", "编程"]
+
 # 允许的图片文件扩展名
 # 说明：文件监控器只处理这些扩展名的文件
 # 注意：新增图片格式需要在此处添加
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
+
+
+# ---------------------------------------------------------------------------
+# 共享流水线函数（CLI Agent 和 Web App 共用）
+# ---------------------------------------------------------------------------
+
+def reclassify_problem_type(problem_type: str, transcribed_text: str) -> str:
+    """基于 OCR 文本检测 ML/编程关键词，修正视觉模型的初步分类。
+
+    Args:
+        problem_type: 视觉分类结果（GENERAL / CODING / FILL_IN_THE_BLANKS 等）
+        transcribed_text: OCR + 润色后的文本
+
+    Returns:
+        修正后的问题类型（ML_CODING / CODING / 原类型）
+    """
+    reclassifiable = {"GENERAL", "FILL_IN_THE_BLANKS", "QUESTION_ANSWERING", "CODING"}
+    if problem_type not in reclassifiable or transcribed_text == "N/A":
+        return problem_type
+
+    text_lower = transcribed_text.lower()
+    if any(kw in text_lower for kw in ML_KEYWORDS):
+        return "ML_CODING"
+    if any(kw in text_lower for kw in CODING_KEYWORDS) and problem_type != "CODING":
+        return "CODING"
+    return problem_type
+
+
+def map_final_type(problem_type: str, text: str) -> str:
+    """映射最终问题类型：CODING → LEETCODE/ACM，ML_CODING 保持不变。
+
+    Args:
+        problem_type: 重分类后的问题类型
+        text: 题目文本（用于检测 leetcode 关键词）
+
+    Returns:
+        最终问题类型
+    """
+    if problem_type == "ML_CODING":
+        return "ML_CODING"
+    if problem_type == "CODING":
+        return "LEETCODE" if "leetcode" in text.lower() else "ACM"
+    return problem_type
+
+
+def determine_solver(final_type: str) -> tuple[str, str]:
+    """根据最终问题类型和路由配置，选择求解器 provider 和 model。
+
+    Args:
+        final_type: 最终问题类型（LEETCODE / ACM / ML_CODING / 其他）
+
+    Returns:
+        (provider, model) 元组
+    """
+    if final_type in ("LEETCODE", "ACM", "ML_CODING"):
+        provider = SOLVER_ROUTING_CONFIG["CODING_SOLVER"]
+    else:
+        provider = SOLVER_ROUTING_CONFIG["DEFAULT_SOLVER"]
+    return provider, SOLVER_CONFIG[provider]["model"]
+
 
 # 8. 全局热键配置 (用于 silent_screencapper.py)
 HOTKEY_CONFIG = {
