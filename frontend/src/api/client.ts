@@ -16,8 +16,8 @@ export async function createTask(files: File[]): Promise<{ task_id: string; num_
   return res.json();
 }
 
-/** Fetch a single task with solution content. */
-export async function getTask(taskId: string): Promise<{ task: Task; solution_content: string }> {
+/** Fetch a single task with solution content and image URLs. */
+export async function getTask(taskId: string): Promise<{ task: Task; solution_content: string; image_urls: string[] }> {
   const res = await fetch(`${BASE}/tasks/${taskId}`);
   if (!res.ok) throw new Error(`Task not found (${res.status})`);
   return res.json();

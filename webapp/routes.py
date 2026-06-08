@@ -126,51 +126,40 @@ async def stream_task(task_id: str, thinking: bool = False):
             yield f"event: error\ndata: {ev}\n\n"
         return StreamingResponse(_err(), media_type="text/event-stream")
 
-    # 防止重复处理
-    with _proc_lock:
-        if _processing_locks.get(task_id):
-            async def _dup():
-                ev = json.dumps({"type": "status", "phase": "solving", "message": "任务已在其他窗口中处理中，实时同步进度…"}, ensure_ascii=False)
-                yield f"event: status\ndata: {ev}\n\n"
-            return StreamingResponse(_dup(), media_type="text/event-stream")
-        _processing_locks[task_id] = True
-
-    task_dir = web_config.UPLOAD_DIR / task_id
+        task_dir = web_config.UPLOAD_DIR / task_id
     image_paths = sorted(task_dir.glob("*"))
     if not image_paths:
-        # 上传目录已被清理，任务无法重试，标记为失败
         task_manager.update_task(task_id, status="failed", error_message="上传文件已过期，请重新提交")
-        with _proc_lock:
-            _processing_locks.pop(task_id, None)
         async def _no_files():
             ev = json.dumps({"type": "error", "message": "上传文件已过期，请重新提交"}, ensure_ascii=False)
             yield f"event: error\ndata: {ev}\n\n"
         return StreamingResponse(_no_files(), media_type="text/event-stream")
-    q: asyncio.Queue = asyncio.Queue()
+
+    q: asyncio.Queue = event_bus.subscribe(task_id)
     loop = asyncio.get_event_loop()
 
-    def _on_progress(event: dict) -> None:
-        loop.call_soon_threadsafe(q.put_nowait, event)
+    should_start = False
+    with _proc_lock:
+        if not _processing_locks.get(task_id):
+            _processing_locks[task_id] = True
+            should_start = True
 
-    def _run() -> None:
-        try:
-            pipeline_service.run(task_id, image_paths, _on_progress, enable_thinking=thinking)
-        finally:
-            with _proc_lock:
-                _processing_locks.pop(task_id, None)
-            # 清理上传目录
+    if should_start:
+        def _on_progress(event: dict) -> None:
+            event_bus.publish(task_id, event)
+
+        def _run() -> None:
             try:
-                for p in task_dir.glob("*"):
-                    p.unlink()
-                task_dir.rmdir()
-            except OSError:
-                pass
+                pipeline_service.run(task_id, image_paths, _on_progress, enable_thinking=thinking)
+            finally:
+                with _proc_lock:
+                    _processing_locks.pop(task_id, None)
+                event_bus.cleanup(task_id)
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
 
     async def _event_generator():
-        # 连接建立后立即发送 init 事件，携带任务元数据
         init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
         yield f"event: init\ndata: {json.dumps(init_event, ensure_ascii=False)}\n\n"
         while True:
@@ -181,11 +170,9 @@ async def stream_task(task_id: str, thinking: bool = False):
                 break
 
     return StreamingResponse(_event_generator(), media_type="text/event-stream")
-
-
 @router.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
-    """获取单个任务的详情（含解答内容）。"""
+    """获取单个任务的详情（含解答内容和图片 URL）。"""
     task = task_manager.get_task(task_id)
     if not task:
         return JSONResponse({"error": "任务不存在"}, status_code=404)
@@ -196,16 +183,31 @@ async def get_task(task_id: str):
         if sp.exists():
             solution_content = sp.read_text(encoding="utf-8")
 
-    return {"task": task, "solution_content": solution_content}
+    # 列出已上传的图片 URL
+    image_urls: list[str] = []
+    task_dir = web_config.UPLOAD_DIR / task_id
+    if task_dir.exists():
+        image_urls = [f"/uploads/{task_id}/{p.name}" for p in sorted(task_dir.glob("*")) if p.is_file()]
+
+    return {"task": task, "solution_content": solution_content, "image_urls": image_urls}
 
 
 @router.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str):
-    """删除任务及其解答文件。"""
+    """删除任务及其解答文件和上传图片。"""
     solution_path = task_manager.delete_task(task_id)
     if solution_path:
         try:
             Path(solution_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    # 清理上传图片目录
+    task_dir = web_config.UPLOAD_DIR / task_id
+    if task_dir.exists():
+        try:
+            for p in task_dir.glob("*"):
+                p.unlink(missing_ok=True)
+            task_dir.rmdir()
         except OSError:
             pass
     return {"status": "ok"}

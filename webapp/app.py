@@ -37,6 +37,8 @@ def create_app() -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(web_config.STATIC_DIR)), name="static")
     if web_config.SOLUTION_DIR.exists():
         app.mount("/solutions", StaticFiles(directory=str(web_config.SOLUTION_DIR)), name="solutions")
+    if web_config.UPLOAD_DIR.exists():
+        app.mount("/uploads", StaticFiles(directory=str(web_config.UPLOAD_DIR)), name="uploads")
 
     # 启动时预热所有 API 客户端，避免首次调用时初始化耗时
     @app.on_event("startup")

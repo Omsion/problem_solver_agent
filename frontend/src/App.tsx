@@ -14,14 +14,29 @@ import { useTaskStore } from "./stores/useTaskStore";
 import { createTask, getTask } from "./api/client";
 
 /**
- * 从 URL hash fragment 中解析查询参数（如 #/?task=abc123）。
- * 每次渲染都重新计算，确保 hash 变化时能立即反映。
+ * 监听 hash 变化，返回当前 URL 中的 task 参数。
+ * 使用 state + hashchange 事件确保 React Router 导航时能正确触发重渲染。
  */
-function parseHashTaskId(): string | null {
-  const hash = window.location.hash;
-  const qi = hash.indexOf("?");
-  if (qi === -1) return null;
-  return new URLSearchParams(hash.slice(qi + 1)).get("task");
+function useHashTaskId(): string | null {
+  const [taskId, setTaskId] = useState<string | null>(() => {
+    const hash = window.location.hash;
+    const qi = hash.indexOf("?");
+    if (qi === -1) return null;
+    return new URLSearchParams(hash.slice(qi + 1)).get("task");
+  });
+
+  useEffect(() => {
+    const handler = () => {
+      const hash = window.location.hash;
+      const qi = hash.indexOf("?");
+      const next = qi === -1 ? null : new URLSearchParams(hash.slice(qi + 1)).get("task");
+      setTaskId(next);
+    };
+    window.addEventListener("hashchange", handler);
+    return () => window.removeEventListener("hashchange", handler);
+  }, []);
+
+  return taskId;
 }
 
 function MainPage() {
@@ -32,14 +47,24 @@ function MainPage() {
   const files = useUploadStore((s) => s.files);
   const connectSSE = useTaskStore((s) => s.connectSSE);
   const updateProgress = useTaskStore((s) => s.updateProgress);
+  const connections = useTaskStore((s) => s.connections);
+  const progress = useTaskStore((s) => s.progress);
   const navigate = useNavigate();
 
-  // 每次渲染重新解析 hash 中的 task 参数
-  const taskParam = parseHashTaskId();
+  const taskParam = useHashTaskId();
+  const [historyImages, setHistoryImages] = useState<string[]>([]);
 
   // 从历史记录跳转过来时，加载已完成任务的解答
   useEffect(() => {
-    if (!taskParam) return; // 不主动清除 activeTaskId，让进行中的任务保持显示
+    if (!taskParam) {
+      // 回到首页但没有 task 参数 — 如果有进行中的任务且 SSE 已断连，尝试重连
+      if (activeTaskId && progress[activeTaskId]?.phase !== "done" && progress[activeTaskId]?.phase !== "error") {
+        if (!connections[activeTaskId]) {
+          connectSSE(activeTaskId, true);
+        }
+      }
+      return;
+    }
     let cancelled = false;
     // 仅在首次加载（无活跃任务）时显示 loading
     if (!activeTaskId || activeTaskId !== taskParam) {
@@ -48,9 +73,10 @@ function MainPage() {
     (async () => {
       setIsLoadingHistory(true);
       try {
-        const { task, solution_content } = await getTask(taskParam);
+        const { task, solution_content, image_urls } = await getTask(taskParam);
         if (cancelled) return;
         setActiveTaskId(taskParam);
+        setHistoryImages(image_urls);
         updateProgress(taskParam, {
           phase: task.status === "completed" ? "done" : "error",
           message: task.status === "completed" ? "解答完成" : "任务失败",
@@ -65,7 +91,7 @@ function MainPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [taskParam, updateProgress, setActiveTaskId]);
+  }, [taskParam, updateProgress, setActiveTaskId, activeTaskId, progress, connections, connectSSE]);
 
   const handleStart = useCallback(async () => {
     if (files.length === 0) return;
