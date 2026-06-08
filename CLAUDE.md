@@ -151,4 +151,4 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 - **SSE 事件**：后端推送 `event:` + `data:` 标准格式。`pipeline.py` 中保留的非 dict 回退分支（第 76-79 行）是遗留兼容代码，不应触发
 
 ## 已知技术债务
-1. 
+1. 监督MONITOR_DIR = ROOT_DIR / "Screenshots"，使得可以：当我截图、图片进入该文件夹后，自动输入到前端界面，自动开始解答

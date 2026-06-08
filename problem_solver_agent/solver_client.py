@@ -96,10 +96,10 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
 
             if provider == 'deepseek':
                 if enable_thinking:
-                    # DeepSeek 思考模式
-                    payload = {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "high", "max_tokens": 8000}
+                    # DeepSeek 思考模式：medium 深度避免思考 token 耗尽 max_tokens 配额
+                    payload = {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "medium", "max_tokens": 16000}
                 else:
-                    payload = {"model": model, "messages": messages, "stream": True, "max_tokens": 8000, "temperature": 0.7}
+                    payload = {"model": model, "messages": messages, "stream": True, "max_tokens": 16000, "temperature": 0.7}
             else:
                 payload = {"model": model, "messages": messages, "stream": True,
                            "max_tokens": 8000, "temperature": 0.7}

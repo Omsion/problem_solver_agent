@@ -208,7 +208,7 @@ class ImageGrouper:
             raise ValueError("独立文字转录步骤返回了空结果。")
 
         raw_texts_joined = "\n---[NEXT]---\n".join(raw_transcriptions)
-        merge_polish_prompt = prompts.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
+        merge_polish_prompt = prompts.TEXT_MERGE_AND_POLISH_PROMPT.replace("{raw_texts}", raw_texts_joined)
 
         polished_text = solver_client.ask_for_analysis(
             merge_polish_prompt,
@@ -228,7 +228,7 @@ class ImageGrouper:
     def _generate_final_filename(self, transcribed_text: str, final_problem_type: str, timestamp: str) -> Path:
         """调用LLM生成文件名主体，并处理回退逻辑。"""
         logger.info("开始通过LLM生成智能文件名...")
-        filename_gen_prompt = prompts.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
+        filename_gen_prompt = prompts.FILENAME_GENERATION_PROMPT.replace("{transcribed_text}", transcribed_text)
 
         filename_body = solver_client.ask_for_analysis(
             filename_gen_prompt,
@@ -308,7 +308,7 @@ class ImageGrouper:
                                                 solver_provider, solver_model)
 
                     # 发起求解请求
-                    final_solve_prompt = prompt_template.format(transcribed_text=transcribed_text)
+                    final_solve_prompt = prompt_template.replace("{transcribed_text}", transcribed_text)
                     response_stream = solver_client.stream_solve_text_only(final_solve_prompt,
                                                                                      provider=solver_provider,
                                                                                      model=solver_model)

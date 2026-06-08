@@ -110,7 +110,8 @@ class PipelineService:
         if not raw:
             raise ValueError("OCR 转录返回空结果")
         joined = "\n---[NEXT]---\n".join(raw)
-        prompt = core_prompts.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=joined)
+        safe_joined = joined.replace("{", "{{").replace("}", "}}")
+        prompt = core_prompts.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=safe_joined)
         polished = solver_client.ask_for_analysis(prompt, provider=core_config.AUX_PROVIDER, model=core_config.AUX_MODEL_NAME)
         if not polished:
             raise ValueError("文本合并 / 润色失败")
@@ -142,7 +143,7 @@ class PipelineService:
             raise ValueError(f"缺少 '{final_type}' 的 Prompt 模板")
         if final_type in ("LEETCODE", "ACM", "ML_CODING"):
             template = template[core_config.SOLUTION_STYLE]
-        return template.format(transcribed_text=text)
+        return template.replace("{transcribed_text}", text)
 
     # ------------------------------------------------------------------
     # 辅助
@@ -162,7 +163,7 @@ class PipelineService:
         f.flush()
 
     def _generate_filename(self, text: str, problem_type: str, task_id: str) -> Path:
-        prompt = core_prompts.FILENAME_GENERATION_PROMPT.format(transcribed_text=text)
+        prompt = core_prompts.FILENAME_GENERATION_PROMPT.replace("{transcribed_text}", text)
         filename_body = solver_client.ask_for_analysis(
             prompt, provider=core_config.AUX_PROVIDER, model=core_config.AUX_MODEL_NAME
         )

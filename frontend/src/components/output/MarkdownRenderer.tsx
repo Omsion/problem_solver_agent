@@ -11,10 +11,13 @@ interface Props {
 
 function normalizeMathDelimiters(text: string): string {
   return text
+    // 标准 LaTeX 分隔符
     .replace(/\\\[/g, "$$$")
     .replace(/\\\]/g, "$$$")
     .replace(/\\\(/g, "$")
-    .replace(/\\\)/g, "$");
+    .replace(/\\\)/g, "$")
+    // 自动包裹裸露的 \begin{...}...\end{...} 块为块级公式
+    .replace(/(\\begin\{[^}]+\}[\s\S]*?\\end\{[^}]+\})/g, "\n$$\n$1\n$$\n");
 }
 
 const SCROLL_THRESHOLD = 80;

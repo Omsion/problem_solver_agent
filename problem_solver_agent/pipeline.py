@@ -90,7 +90,7 @@ def build_prompt(final_type: str, transcribed_text: str) -> str:
         raise ValueError(f"缺少 '{final_type}' 的 Prompt 模板")
     if final_type in ("LEETCODE", "ACM", "ML_CODING"):
         template = template[config.SOLUTION_STYLE]
-    return template.format(transcribed_text=transcribed_text)
+    return template.replace("{transcribed_text}", transcribed_text)
 
 
 # ---------------------------------------------------------------------------
