@@ -88,7 +88,7 @@ class PipelineService:
             final_path = self._generate_filename(transcribed_text, final_type, task_id)
             temp_path.replace(final_path)
 
-            self._cleanup_images(image_paths)
+            # 上传图片保留在 uploads/{task_id}/ 中，供历史查阅
             self.task_manager.update_task(task_id, status="completed", solution_path=str(final_path), filename=final_path.name)
             self._cleanup_old()
 
@@ -174,14 +174,6 @@ class PipelineService:
 
         safe = sanitize_filename(filename_body)
         return self.solution_dir / f"{safe}.md"
-
-    @staticmethod
-    def _cleanup_images(image_paths: list[Path]) -> None:
-        for p in image_paths:
-            try:
-                p.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     def _cleanup_old(self) -> None:
         paths = self.task_manager.cleanup_old_tasks(keep=100)

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface Props {
   content: string;
@@ -6,14 +7,6 @@ interface Props {
 
 export const ThinkingBlock = ({ content }: Props) => {
   const [expanded, setExpanded] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  // 自动滚动到底部（内容增长时）
-  useEffect(() => {
-    if (expanded && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [content, expanded]);
 
   if (!content) return null;
 
@@ -33,11 +26,8 @@ export const ThinkingBlock = ({ content }: Props) => {
         <span className="text-xs text-indigo-400 ml-auto">{content.length} 字符</span>
       </button>
       {expanded && (
-        <div
-          ref={scrollRef}
-          className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100 max-h-96 overflow-y-auto"
-        >
-          {content}
+        <div className="p-4 bg-gray-50 border-t border-indigo-100 max-h-96 overflow-y-auto">
+          <MarkdownRenderer content={content} className="text-sm" />
         </div>
       )}
     </div>
