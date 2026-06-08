@@ -105,7 +105,7 @@ GROUP_TIMEOUT = 8.0
 # - 1：单任务串行（最稳定）
 # - 4：四任务并发（适合大多数场景）
 # - 8：高并发（需确保 API 有足够并发配额）
-NUM_WORKERS = 1
+NUM_WORKERS = 4
 
 # OCR 并行转录音频的线程数
 # 说明：控制同时进行的 OCR 转录调用数（vision_client.transcribe_images_raw）
