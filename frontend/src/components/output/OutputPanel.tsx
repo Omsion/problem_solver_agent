@@ -59,21 +59,21 @@ export const OutputPanel = ({ taskId }: Props) => {
         >
           解答
         </button>
-        <button
-          onClick={() => setTab("thinking")}
-          className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer ${
-            tab === "thinking"
-              ? "border-indigo-600 text-indigo-600"
-              : "border-transparent text-gray-400 hover:text-gray-600"
-          }`}
-        >
-          思考过程
-          {progress.thinking && (
+        {progress.thinking ? (
+          <button
+            onClick={() => setTab("thinking")}
+            className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer ${
+              tab === "thinking"
+                ? "border-indigo-600 text-indigo-600"
+                : "border-transparent text-gray-400 hover:text-gray-600"
+            }`}
+          >
+            思考过程
             <span className="ml-1.5 text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full">
               {progress.thinking.length}
             </span>
-          )}
-        </button>
+          </button>
+        ) : null}
       </div>
 
       {/* Tab content */}

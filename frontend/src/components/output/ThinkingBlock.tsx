@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
   content: string;
@@ -6,6 +6,14 @@ interface Props {
 
 export const ThinkingBlock = ({ content }: Props) => {
   const [expanded, setExpanded] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 自动滚动到底部（内容增长时）
+  useEffect(() => {
+    if (expanded && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [content, expanded]);
 
   if (!content) return null;
 
@@ -24,15 +32,14 @@ export const ThinkingBlock = ({ content }: Props) => {
         <span className="text-sm font-medium text-indigo-700">思考过程</span>
         <span className="text-xs text-indigo-400 ml-auto">{content.length} 字符</span>
       </button>
-      <div
-        className={`transition-all duration-300 ${
-          expanded ? "max-h-96 opacity-100 overflow-y-auto" : "max-h-0 opacity-0"
-        }`}
-      >
-        <div className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100">
+      {expanded && (
+        <div
+          ref={scrollRef}
+          className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100 max-h-96 overflow-y-auto"
+        >
           {content}
         </div>
-      </div>
+      )}
     </div>
   );
 };

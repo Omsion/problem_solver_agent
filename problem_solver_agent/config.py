@@ -47,6 +47,8 @@ VISION_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"
 # 专用于视觉推理的、更强大的模型
 VISION_REASONING_MODEL = "GLM-4.6V"
+# GLM-OCR 专用模型（layout_parsing API，高精度文档解析）
+GLM_OCR_MODEL = "glm-ocr"
 # 视觉模型 provider 名称（用于解答文件元数据）
 VISION_PROVIDER_NAME = "zhipu"
 

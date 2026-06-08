@@ -1,7 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export const QrCodeButton = () => {
   const [open, setOpen] = useState(false);
+  const [isTouch, setIsTouch] = useState(false);
+
+  useEffect(() => {
+    setIsTouch("ontouchstart" in window || navigator.maxTouchPoints > 0);
+  }, []);
+
+  // 在触摸设备上隐藏扫码按钮（用户已在手机上访问）
+  if (isTouch) return null;
 
   return (
     <>
