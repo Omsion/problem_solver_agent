@@ -99,14 +99,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       get().disconnectSSE(taskId);
     });
 
-    es.addEventListener("error", (e: MessageEvent) => {
-      const data = e.data ? JSON.parse(e.data) : { message: "SSE 连接错误" };
-      get().updateProgress(taskId, {
-        phase: "error",
-        message: "处理失败",
-        error: data.message,
-      });
-      get().disconnectSSE(taskId);
+    es.addEventListener("error", (e: Event) => {
+      // 仅处理 SSE event: error 消息（有 data 的 MessageEvent）
+      // 连接级错误由 es.onerror 处理，此处忽略
+      if (!("data" in e) || !(e as MessageEvent).data) return;
+      try {
+        const data = JSON.parse((e as MessageEvent).data);
+        get().updateProgress(taskId, {
+          phase: "error",
+          message: "处理失败",
+          error: data.message || "未知错误",
+        });
+        get().disconnectSSE(taskId);
+      } catch {
+        // ignore parse errors
+      }
     });
 
     // Fallback — 捕获缺少 event: 前缀的消息（向后兼容）

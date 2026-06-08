@@ -151,15 +151,4 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 - **SSE 事件**：后端推送 `event:` + `data:` 标准格式。`pipeline.py` 中保留的非 dict 回退分支（第 76-79 行）是遗留兼容代码，不应触发
 
 ## 已知技术债务
-1. 手机局域网扫码连接后，手机视角为什么完全变形了，我需要默认显示浏览器里的“桌面版网站"
-2. 手机局域网扫码连接后，右上角的”手机扫码“按钮就消失，不要一直显示了
-3. 点击“历史记录”中的不同历史进行切换时，为什么无法直接显示出来，会卡为白色屏幕，还需要点击浏览器的书安心进行主动刷新才会正常显示
-4. 查看历史记录时，我不需要“思考过程"的相关内容（只有第一次从主页进行开始解答时才需要）
-5. 第一次从主页输入图片，进行开始解答时需要“思考过程"的相关内容，思考过程"的相关内容需要自动滑动底部，除非我使用右侧的滑动条进行内容的上下浏览
-6. 为什么会出现类似于“INFO:     127.0.0.1:9130 - "GET /static/assets/index-eHnL2Tiv.js HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:9130 - "GET /static/assets/index-0iaM7m-C.css HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:9130 - "GET /api/tasks/92baf6e80197 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:9130 - "GET /static/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2 HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:4570 - "GET /static/assets/KaTeX_Main-Regular-B22Nviop.woff2 HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:9130 - "GET /static/assets/KaTeX_Math-Italic-t53AETM-.woff2 HTTP/1.1" 304 Not Modified”里的“304 Not Modified”？如何修复？
-7. 
+1. 

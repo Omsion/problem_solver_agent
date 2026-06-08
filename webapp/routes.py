@@ -126,7 +126,7 @@ async def stream_task(task_id: str, thinking: bool = False):
             yield f"event: error\ndata: {ev}\n\n"
         return StreamingResponse(_err(), media_type="text/event-stream")
 
-        task_dir = web_config.UPLOAD_DIR / task_id
+    task_dir = web_config.UPLOAD_DIR / task_id
     image_paths = sorted(task_dir.glob("*"))
     if not image_paths:
         task_manager.update_task(task_id, status="failed", error_message="上传文件已过期，请重新提交")
