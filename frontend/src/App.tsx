@@ -86,7 +86,7 @@ function MainPage() {
     if (!activeTaskId) return;
     const p = useTaskStore.getState().progress[activeTaskId];
     const conn = useTaskStore.getState().connections[activeTaskId];
-    if (!p || p.phase === "done" || p.phase === "error" || p.phase === "idle") return;
+    if (!p || p.phase === "done" || p.phase === "error") return;
     if (conn) return; // already connected
     useTaskStore.getState().reconnectSSE(activeTaskId);
   }, [activeTaskId]);
