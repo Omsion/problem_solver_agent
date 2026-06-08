@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+import socket
 import threading
 import uuid
+from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+import qrcode
+from fastapi import APIRouter, File, Request, UploadFile
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import config as web_config
 
@@ -213,3 +216,33 @@ async def list_tasks(limit: int = 100):
     """获取最近的任务列表。"""
     tasks = task_manager.get_recent_tasks(limit=limit)
     return {"tasks": tasks}
+
+
+# ==============================================================================
+# 工具 API
+# ==============================================================================
+
+def _get_lan_ip() -> str:
+    """获取本机局域网 IP，失败则返回 localhost。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return "127.0.0.1"
+
+
+@router.get("/api/qrcode")
+async def qr_code(request: Request):
+    """生成局域网访问二维码（PNG 图片）。手机扫码即可在同一局域网访问。"""
+    lan_ip = _get_lan_ip()
+    port = request.url.port or 8000
+    url = f"http://{lan_ip}:{port}"
+    img = qrcode.make(url, box_size=8, border=2)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return Response(content=buf.read(), media_type="image/png")

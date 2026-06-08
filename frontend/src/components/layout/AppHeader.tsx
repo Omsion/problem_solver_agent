@@ -1,4 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
+import { QrCodeButton } from "./QrCodeButton";
 
 export const AppHeader = () => {
   const { pathname } = useLocation();
@@ -31,6 +32,7 @@ export const AppHeader = () => {
         <Link to="/history" className={linkClass("/history")}>
           历史记录
         </Link>
+        <QrCodeButton />
       </nav>
     </header>
   );

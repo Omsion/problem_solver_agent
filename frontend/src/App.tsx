@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { HashRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
 import { UploadZone } from "./components/upload/UploadZone";
@@ -32,6 +32,7 @@ function MainPage() {
   const files = useUploadStore((s) => s.files);
   const connectSSE = useTaskStore((s) => s.connectSSE);
   const updateProgress = useTaskStore((s) => s.updateProgress);
+  const navigate = useNavigate();
 
   // 每次渲染重新解析 hash 中的 task 参数
   const taskParam = parseHashTaskId();
@@ -65,9 +66,7 @@ function MainPage() {
   const handleStart = useCallback(async () => {
     if (files.length === 0) return;
     // 清除 URL 中的 task 参数，进入新任务模式
-    if (window.location.hash.includes("?")) {
-      window.location.hash = "#/";
-    }
+    navigate("/");
     setIsProcessing(true);
     try {
       const fileObjs = files.map((f) => f.file);
@@ -80,7 +79,7 @@ function MainPage() {
     } finally {
       setIsProcessing(false);
     }
-  }, [files, connectSSE]);
+  }, [files, connectSSE, navigate]);
 
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col">
@@ -108,7 +107,8 @@ function MainPage() {
                 <p className="text-xs text-gray-400">题目图片已清理，可查看右侧解答内容</p>
                 <button
                   onClick={() => {
-                    window.location.hash = "#/";
+                    setActiveTaskId(null);
+                    navigate("/");
                   }}
                   className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
                 >
@@ -136,8 +136,10 @@ function MainPage() {
 }
 
 function HistoryPage() {
+  const navigate = useNavigate();
+
   const handleSelectTask = (taskId: string) => {
-    window.location.hash = `#/?task=${taskId}`;
+    navigate(`/?task=${taskId}`);
   };
 
   return (
