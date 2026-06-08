@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from problem_solver_agent import config as core_config
+from problem_solver_agent import pipeline as core_pipeline, prompts as core_prompts
 from problem_solver_agent import solver_client, vision_client
 from problem_solver_agent.utils import extract_question_numbers, format_number_prefix, sanitize_filename
 
@@ -45,7 +46,7 @@ class PipelineService:
             if problem_type != "VISUAL_REASONING":
                 on_progress({"type": "status", "phase": "ocr", "message": f"正在进行 OCR 转录（{len(image_paths)} 张图片）…"})
                 transcribed_text = self._textualize_problem(image_paths)
-                problem_type = core_config.reclassify_problem_type(problem_type, transcribed_text)
+                problem_type = core_pipeline.reclassify_problem_type(problem_type, transcribed_text)
                 self.task_manager.update_task(task_id, problem_type=problem_type)
 
             # ---- 步骤 3：求解 ----
@@ -109,7 +110,7 @@ class PipelineService:
         if not raw:
             raise ValueError("OCR 转录返回空结果")
         joined = "\n---[NEXT]---\n".join(raw)
-        prompt = core_config.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=joined)
+        prompt = core_prompts.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=joined)
         polished = solver_client.ask_for_analysis(prompt, provider=core_config.AUX_PROVIDER, model=core_config.AUX_MODEL_NAME)
         if not polished:
             raise ValueError("文本合并 / 润色失败")
@@ -127,8 +128,8 @@ class PipelineService:
             model = core_config.VISION_REASONING_MODEL
             stream = vision_client.solve_visual_reasoning_problem(image_paths)
         else:
-            final_type = core_config.map_final_type(problem_type, transcribed_text)
-            provider, model = core_config.determine_solver(final_type)
+            final_type = core_pipeline.map_final_type(problem_type, transcribed_text)
+            provider, model = core_pipeline.determine_solver(final_type)
             prompt = self._build_prompt(final_type, transcribed_text)
             stream = solver_client.stream_solve(prompt, provider, model, enable_thinking=enable_thinking)
         return final_type, provider, model, stream
@@ -136,7 +137,7 @@ class PipelineService:
     # _map_final_type / _determine_solver 已替换为 core_config 共享函数
 
     def _build_prompt(self, final_type: str, text: str) -> str:
-        template = core_config.PROMPT_TEMPLATES.get(final_type)
+        template = core_prompts.PROMPT_TEMPLATES.get(final_type)
         if not template:
             raise ValueError(f"缺少 '{final_type}' 的 Prompt 模板")
         if final_type in ("LEETCODE", "ACM", "ML_CODING"):
@@ -161,7 +162,7 @@ class PipelineService:
         f.flush()
 
     def _generate_filename(self, text: str, problem_type: str, task_id: str) -> Path:
-        prompt = core_config.FILENAME_GENERATION_PROMPT.format(transcribed_text=text)
+        prompt = core_prompts.FILENAME_GENERATION_PROMPT.format(transcribed_text=text)
         filename_body = solver_client.ask_for_analysis(
             prompt, provider=core_config.AUX_PROVIDER, model=core_config.AUX_MODEL_NAME
         )

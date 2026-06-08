@@ -5,7 +5,7 @@ conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python -m problem_sol
 
 import sys
 
-from . import config, file_monitor, solver_client
+from . import config, file_monitor, pipeline, solver_client
 from .image_grouper import ImageGrouper
 from .utils import setup_logger
 
@@ -18,7 +18,7 @@ def main():
     logger.info("=" * 50)
 
     try:
-        config.initialize_directories()
+        pipeline.initialize_directories()
     except SystemExit:
         logger.critical("目录初始化失败，程序退出。")
         sys.exit(1)

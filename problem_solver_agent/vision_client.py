@@ -17,7 +17,7 @@ from typing import Any, TypedDict
 
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
-from . import config
+from . import config, prompts
 from .utils import encode_image_to_base64, setup_logger
 
 logger = setup_logger()
@@ -146,7 +146,7 @@ def classify_problem_type(image_paths: list[Path]) -> str:
     """对图片内容进行问题类型分类，返回 CODING / MULTIPLE_CHOICE / ... 等标签。"""
     logger.info("步骤 1: 正在进行问题类型分类...")
     response = _call_vision_api(
-        image_paths, config.CLASSIFICATION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
+        image_paths, prompts.CLASSIFICATION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
     )
     valid_types = [
         "CODING", "VISUAL_REASONING", "QUESTION_ANSWERING",
@@ -168,7 +168,7 @@ def transcribe_images_raw(image_paths: list[Path]) -> list[str] | None:
 
     def transcribe_single(index, path):
         return index, _call_vision_api(
-            [path], config.TRANSCRIPTION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
+            [path], prompts.TRANSCRIPTION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=config.OCR_PARALLEL_WORKERS) as executor:
@@ -199,7 +199,7 @@ def solve_visual_reasoning_problem(image_paths: list[Path]) -> Generator[str, No
     logger.info(f"步骤 2.2: 正在使用视觉推理模型 '{config.VISION_REASONING_MODEL}' 进行求解...")
     return _call_vision_api(
         image_paths,
-        config.PROMPT_TEMPLATES["VISUAL_REASONING"],
+        prompts.PROMPT_TEMPLATES["VISUAL_REASONING"],
         config.VISION_REASONING_MODEL,
         stream=True,
         extra_params={"top_p": 0.8, "temperature": 0.7}

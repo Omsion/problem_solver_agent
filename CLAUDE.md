@@ -72,12 +72,13 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 | 模块 | 职责 |
 |---|---|
 | `main.py` | 入口：健康检查 → 启动 ImageGrouper → 启动 FileMonitor → 阻塞等待 |
-| `config.py` | 所有配置中心：API 密钥、模型名称、路径、超时、热键等。切换模型只需改这里的常量 |
+| `config.py` | **纯常量**：API 密钥、模型名称、路径、超时、关键词。不含任何函数或业务逻辑 |
+| `pipeline.py` | **共享流水线逻辑**：重分类、类型映射、求解器路由、初始化/验证 |
+| `prompts.py` | **Prompt 模板**（模块级常量）：分类/转录/润色/求解/命名等所有 Prompt |
 | `file_monitor.py` | 基于 `watchdog` 的文件系统监控，检测新截图 → 传递给 ImageGrouper |
 | `image_grouper.py` | **核心调度器**：时间窗口分组（`threading.Timer`，默认 8 秒）+ 线程池并发处理 + 完整流水线编排 |
-| `vision_client.py` | 视觉 API 客户端（provider-agnostic）：封装分类、OCR 转录、视觉推理。底层使用 OpenAI SDK 兼容 Zhipu GLM-4.6V |
-| `solver_client.py` | 求解器客户端：流式/非流式调用 LLM，支持多 provider，内置自动重试。`stream_solve_text_only()` 过滤 reasoning 事件 |
-| `prompts.py` | 所有 Prompt 模板（Vision/Auxiliary/Solver 三类），使用类作为命名空间组织 |
+| `vision_client.py` | 视觉 API 客户端（provider-agnostic，直接导入 prompts 模块） |
+| `solver_client.py` | 求解器客户端：流式/非流式调用 LLM，支持多 provider，内置自动重试 |
 | `utils.py` | 日志单例、Base64 编码、文件名清理、题号提取 |
 
 ### Web 后端 `webapp/`

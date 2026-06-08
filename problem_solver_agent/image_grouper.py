@@ -28,7 +28,7 @@ from queue import Queue
 from threading import Lock, Thread, Timer, current_thread
 
 # 导入项目模块
-from . import config, solver_client, vision_client
+from . import config, pipeline, prompts, solver_client, vision_client
 from .utils import extract_question_numbers, format_number_prefix, sanitize_filename, setup_logger
 
 # 初始化全局日志记录器
@@ -208,7 +208,7 @@ class ImageGrouper:
             raise ValueError("独立文字转录步骤返回了空结果。")
 
         raw_texts_joined = "\n---[NEXT]---\n".join(raw_transcriptions)
-        merge_polish_prompt = config.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
+        merge_polish_prompt = prompts.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=raw_texts_joined)
 
         polished_text = solver_client.ask_for_analysis(
             merge_polish_prompt,
@@ -228,7 +228,7 @@ class ImageGrouper:
     def _generate_final_filename(self, transcribed_text: str, final_problem_type: str, timestamp: str) -> Path:
         """调用LLM生成文件名主体，并处理回退逻辑。"""
         logger.info("开始通过LLM生成智能文件名...")
-        filename_gen_prompt = config.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
+        filename_gen_prompt = prompts.FILENAME_GENERATION_PROMPT.format(transcribed_text=transcribed_text)
 
         filename_body = solver_client.ask_for_analysis(
             filename_gen_prompt,
@@ -278,7 +278,7 @@ class ImageGrouper:
 
             # --- 步骤 2.5: 智能重分类 (使用 config 共享逻辑) ---
             if problem_type != "VISUAL_REASONING" and transcribed_text != "N/A":
-                problem_type = config.reclassify_problem_type(problem_type, transcribed_text)
+                problem_type = pipeline.reclassify_problem_type(problem_type, transcribed_text)
 
             # --- 步骤 3: 核心求解 ---
             with open(temp_solution_path, 'w', encoding='utf-8') as f:
@@ -291,11 +291,11 @@ class ImageGrouper:
                     response_stream = vision_client.solve_visual_reasoning_problem(group_to_process)
                 else:
                     # 根据最终确定的 problem_type，调用 config 共享函数确定类型和求解器
-                    final_problem_type = config.map_final_type(problem_type, transcribed_text)
-                    solver_provider, solver_model = config.determine_solver(final_problem_type)
+                    final_problem_type = pipeline.map_final_type(problem_type, transcribed_text)
+                    solver_provider, solver_model = pipeline.determine_solver(final_problem_type)
 
                     # 获取对应的Prompt模板
-                    prompt_template = config.PROMPT_TEMPLATES.get(final_problem_type)
+                    prompt_template = prompts.PROMPT_TEMPLATES.get(final_problem_type)
                     if final_problem_type in ["LEETCODE", "ACM", "ML_CODING"]:  # 将ML_CODING加入此列表
                         prompt_template = prompt_template[config.SOLUTION_STYLE]
 

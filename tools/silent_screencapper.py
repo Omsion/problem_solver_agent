@@ -66,8 +66,9 @@ except (ImportError, AttributeError):
 
 try:
     # config 已经在上面导入了，这里可以直接使用
-    HOTKEY_STRING = config.HOTKEY_CONFIG["STRING"]
-    print(f"成功从 config.py 加载热键配置: {HOTKEY_STRING}")
+    # HOTKEY_CONFIG 已从 config.py 移出，在此定义
+    HOTKEY_STRING = 'alt+x'
+    print(f"热键配置: {HOTKEY_STRING}")
 except (NameError, AttributeError, KeyError): # NameError 是因为如果上面导入失败，config就不存在
     print("警告: 无法从 config.py 加载热键配置，将使用默认值 'alt+x'。")
     HOTKEY_STRING = 'alt+x'
