@@ -4,6 +4,7 @@ import asyncio
 import json
 import socket
 import threading
+import time
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -86,7 +87,7 @@ async def create_task(files: list[UploadFile] = File(...)):
         if ext not in web_config.ALLOWED_EXTENSIONS:
             return JSONResponse({"error": f"不支持的文件类型: {ext}"}, status_code=400)
 
-    task_id = uuid.uuid4().hex[:12]
+    task_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     task_dir = web_config.UPLOAD_DIR / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
 

@@ -155,10 +155,10 @@ class PipelineService:
         f.write(f"- Selected Solver: {solver_provider} ({solver_model})\n")
         f.write(f"- Auxiliary Model: {core_config.AUX_PROVIDER} ({core_config.AUX_MODEL_NAME})\n\n")
         f.write("=" * 50 + "\n\n")
-        f.write("Transcribed & Polished Text:\n" + transcribed_text + "\n\n")
+        f.write("Transcribed & Polished Text:\n\n" + transcribed_text + "\n\n")
         f.write("=" * 50 + "\n\n")
         style = f" (Style: {core_config.SOLUTION_STYLE})" if problem_type in ("LEETCODE", "ACM", "ML_CODING") else ""
-        f.write(f"Final Solution{style}:\n")
+        f.write(f"Final Solution{style}:\n\n")
         f.flush()
 
     def _generate_filename(self, text: str, problem_type: str, task_id: str) -> Path:

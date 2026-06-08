@@ -206,15 +206,44 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const url = sseUrl(taskId, true);
     const es = new EventSource(url);
 
-    // 只绑定 status/chunk/reasoning 等实时事件；done/error 保持独立处理
-    es.addEventListener("done", (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
+    const cleanup = () => {
       es.close();
       set((s) => {
         const { [taskId]: _, ...rest } = s.connections;
         return { connections: rest };
       });
+    };
+
+    es.addEventListener("init", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+    });
+
+    es.addEventListener("status", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      get().updateProgress(taskId, { phase: data.phase, message: data.message });
+    });
+
+    es.addEventListener("reasoning", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      set((s) => {
+        const p = s.progress[taskId] ?? emptyProgress();
+        return { progress: { ...s.progress, [taskId]: { ...p, thinking: p.thinking + (data.content ?? "") } } };
+      });
+    });
+
+    es.addEventListener("chunk", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      set((s) => {
+        const p = s.progress[taskId] ?? emptyProgress();
+        return { progress: { ...s.progress, [taskId]: { ...p, answer: p.answer + (data.content ?? "") } } };
+      });
+    });
+
+    es.addEventListener("done", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
+      cleanup();
     });
 
     es.addEventListener("error", (e: Event) => {
@@ -222,11 +251,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       try {
         const data = JSON.parse((e as MessageEvent).data);
         get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message || "未知错误" });
-        es.close();
-        set((s) => {
-          const { [taskId]: _, ...rest } = s.connections;
-          return { connections: rest };
-        });
+        cleanup();
       } catch { /* ignore */ }
     });
 
@@ -235,45 +260,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         const { [taskId]: _, ...rest } = s.connections;
         return { connections: rest };
       });
-    };
-
-    es.onmessage = (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        switch (data.type) {
-          case "status":
-            get().updateProgress(taskId, { phase: data.phase, message: data.message });
-            break;
-          case "reasoning":
-            set((s) => {
-              const p = s.progress[taskId] ?? emptyProgress();
-              return { progress: { ...s.progress, [taskId]: { ...p, thinking: p.thinking + (data.content ?? "") } } };
-            });
-            break;
-          case "chunk":
-            set((s) => {
-              const p = s.progress[taskId] ?? emptyProgress();
-              return { progress: { ...s.progress, [taskId]: { ...p, answer: p.answer + (data.content ?? "") } } };
-            });
-            break;
-          case "done":
-            get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
-            es.close();
-            set((s) => {
-              const { [taskId]: _, ...rest } = s.connections;
-              return { connections: rest };
-            });
-            break;
-          case "error":
-            get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message });
-            es.close();
-            set((s) => {
-              const { [taskId]: _, ...rest } = s.connections;
-              return { connections: rest };
-            });
-            break;
-        }
-      } catch { /* ignore */ }
     };
 
     set((s) => ({
