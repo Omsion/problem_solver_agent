@@ -47,8 +47,6 @@ function MainPage() {
   const files = useUploadStore((s) => s.files);
   const connectSSE = useTaskStore((s) => s.connectSSE);
   const updateProgress = useTaskStore((s) => s.updateProgress);
-  const connections = useTaskStore((s) => s.connections);
-  const progress = useTaskStore((s) => s.progress);
   const navigate = useNavigate();
 
   const taskParam = useHashTaskId();
@@ -56,22 +54,11 @@ function MainPage() {
 
   // 从历史记录跳转过来时，加载已完成任务的解答
   useEffect(() => {
-    if (!taskParam) {
-      // 回到首页但没有 task 参数 — 如果有进行中的任务且 SSE 已断连，尝试重连
-      if (activeTaskId && progress[activeTaskId]?.phase !== "done" && progress[activeTaskId]?.phase !== "error") {
-        if (!connections[activeTaskId]) {
-          connectSSE(activeTaskId, true);
-        }
-      }
-      return;
-    }
+    if (!taskParam) return;
+
     let cancelled = false;
-    // 仅在首次加载（无活跃任务）时显示 loading
-    if (!activeTaskId || activeTaskId !== taskParam) {
-      setIsLoadingHistory(!activeTaskId);
-    }
+    setIsLoadingHistory(true);
     (async () => {
-      setIsLoadingHistory(true);
       try {
         const { task, solution_content, image_urls } = await getTask(taskParam);
         if (cancelled) return;
@@ -91,13 +78,25 @@ function MainPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [taskParam, updateProgress, setActiveTaskId, activeTaskId, progress, connections, connectSSE]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskParam]);
+
+  // 当活跃任务 SSE 连接意外断开时自动重连（保留已累计进度）
+  useEffect(() => {
+    if (!activeTaskId) return;
+    const p = useTaskStore.getState().progress[activeTaskId];
+    const conn = useTaskStore.getState().connections[activeTaskId];
+    if (!p || p.phase === "done" || p.phase === "error" || p.phase === "idle") return;
+    if (conn) return; // already connected
+    useTaskStore.getState().reconnectSSE(activeTaskId);
+  }, [activeTaskId]);
 
   const handleStart = useCallback(async () => {
     if (files.length === 0) return;
     // 清除 URL 中的 task 参数，进入新任务模式
     navigate("/");
     setIsProcessing(true);
+    setHistoryImages([]);
     try {
       const fileObjs = files.map((f) => f.file);
       const { task_id } = await createTask(fileObjs);
@@ -131,10 +130,10 @@ function MainPage() {
                 <div className="flex flex-col gap-2 h-full overflow-auto">
                   <div className="flex items-center justify-between px-1">
                     <span className="text-xs text-gray-400">{historyImages.length} 张题目图片</span>
-                    <button
-                      onClick={() => { setActiveTaskId(null); navigate("/"); }}
-                      className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
-                    >
+                  <button
+                    onClick={() => { setActiveTaskId(null); setHistoryImages([]); navigate("/"); }}
+                    className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
+                  >
                       返回新建任务
                     </button>
                   </div>
@@ -156,7 +155,7 @@ function MainPage() {
                   <p className="text-sm text-gray-500 font-medium">查看历史解答</p>
                   <p className="text-xs text-gray-400">题目图片已清理，可查看右侧解答内容</p>
                   <button
-                    onClick={() => { setActiveTaskId(null); navigate("/"); }}
+                    onClick={() => { setActiveTaskId(null); setHistoryImages([]); navigate("/"); }}
                     className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
                   >
                     返回新建任务

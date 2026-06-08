@@ -18,8 +18,8 @@ interface TaskState {
   disconnectSSE: (taskId: string) => void;
   /** Update a single task's progress (used by SSE event handler). */
   updateProgress: (taskId: string, patch: Partial<ProgressState>) => void;
-  /** Reset progress for a task. */
-  resetProgress: (taskId: string) => void;
+  /** Reconnect SSE for a task without resetting accumulated progress. */
+  reconnectSSE: (taskId: string) => void;
 }
 
 function emptyProgress(): ProgressState {
@@ -153,18 +153,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       }
     };
 
-    // Handle connection-level errors
+    // 连接级错误（断连/超时）— 仅断开，不标记任务失败
+    // 由 App 层 reconnectSSE 负责恢复
     es.onerror = () => {
-      // EventSource will auto-reconnect; only flag error if not already done
-      const p = get().progress[taskId];
-      if (p && p.phase !== "done" && p.phase !== "error") {
-        get().updateProgress(taskId, {
-          phase: "error",
-          message: "连接中断",
-          error: "SSE 连接失败",
-        });
-      }
-      get().disconnectSSE(taskId);
+      set((s) => {
+        const { [taskId]: _, ...rest } = s.connections;
+        return { connections: rest };
+      });
     };
 
     set((s) => ({
@@ -193,11 +188,96 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     });
   },
 
-  resetProgress: (taskId) => {
-    get().disconnectSSE(taskId);
+  resetProgress: (taskId: string) => {
+    const es = get().connections[taskId];
+    if (es) es.close();
+    set((s) => {
+      const { [taskId]: _, ...rest } = s.connections;
+      return { connections: rest };
+    });
     set((s) => {
       const { [taskId]: _, ...rest } = s.progress;
       return { progress: rest };
     });
+  },
+
+  reconnectSSE: (taskId) => {
+    if (get().connections[taskId]) return; // already connected
+    const url = sseUrl(taskId, true);
+    const es = new EventSource(url);
+
+    // 只绑定 status/chunk/reasoning 等实时事件；done/error 保持独立处理
+    es.addEventListener("done", (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
+      es.close();
+      set((s) => {
+        const { [taskId]: _, ...rest } = s.connections;
+        return { connections: rest };
+      });
+    });
+
+    es.addEventListener("error", (e: Event) => {
+      if (!("data" in e) || !(e as MessageEvent).data) return;
+      try {
+        const data = JSON.parse((e as MessageEvent).data);
+        get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message || "未知错误" });
+        es.close();
+        set((s) => {
+          const { [taskId]: _, ...rest } = s.connections;
+          return { connections: rest };
+        });
+      } catch { /* ignore */ }
+    });
+
+    es.onerror = () => {
+      set((s) => {
+        const { [taskId]: _, ...rest } = s.connections;
+        return { connections: rest };
+      });
+    };
+
+    es.onmessage = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        switch (data.type) {
+          case "status":
+            get().updateProgress(taskId, { phase: data.phase, message: data.message });
+            break;
+          case "reasoning":
+            set((s) => {
+              const p = s.progress[taskId] ?? emptyProgress();
+              return { progress: { ...s.progress, [taskId]: { ...p, thinking: p.thinking + (data.content ?? "") } } };
+            });
+            break;
+          case "chunk":
+            set((s) => {
+              const p = s.progress[taskId] ?? emptyProgress();
+              return { progress: { ...s.progress, [taskId]: { ...p, answer: p.answer + (data.content ?? "") } } };
+            });
+            break;
+          case "done":
+            get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
+            es.close();
+            set((s) => {
+              const { [taskId]: _, ...rest } = s.connections;
+              return { connections: rest };
+            });
+            break;
+          case "error":
+            get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message });
+            es.close();
+            set((s) => {
+              const { [taskId]: _, ...rest } = s.connections;
+              return { connections: rest };
+            });
+            break;
+        }
+      } catch { /* ignore */ }
+    };
+
+    set((s) => ({
+      connections: { ...s.connections, [taskId]: es },
+    }));
   },
 }));
