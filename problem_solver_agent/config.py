@@ -11,6 +11,13 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from .prompts import (
+    CLASSIFICATION_PROMPT,
+    TRANSCRIPTION_PROMPT,
+    TEXT_MERGE_AND_POLISH_PROMPT,
+    FILENAME_GENERATION_PROMPT,
+    PROMPT_TEMPLATES,
+)
 
 # --- 0. 基础设置 ---
 load_dotenv()

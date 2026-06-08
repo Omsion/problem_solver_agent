@@ -25,11 +25,11 @@ export const ThinkingBlock = ({ content }: Props) => {
         <span className="text-xs text-indigo-400 ml-auto">{content.length} 字符</span>
       </button>
       <div
-        className={`overflow-hidden transition-all duration-300 ${
-          expanded ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
+        className={`transition-all duration-300 ${
+          expanded ? "max-h-96 opacity-100 overflow-y-auto" : "max-h-0 opacity-0"
         }`}
       >
-        <div className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100 max-h-[468px] overflow-y-auto">
+        <div className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100">
           {content}
         </div>
       </div>

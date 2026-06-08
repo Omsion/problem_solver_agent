@@ -38,10 +38,7 @@ function MainPage() {
 
   // 从历史记录跳转过来时，加载已完成任务的解答
   useEffect(() => {
-    if (!taskParam) {
-      setActiveTaskId(null);
-      return;
-    }
+    if (!taskParam) return; // 不主动清除 activeTaskId，让进行中的任务保持显示
     let cancelled = false;
     (async () => {
       setIsLoadingHistory(true);
@@ -63,7 +60,7 @@ function MainPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [taskParam, updateProgress]);
+  }, [taskParam, updateProgress, setActiveTaskId]);
 
   const handleStart = useCallback(async () => {
     if (files.length === 0) return;

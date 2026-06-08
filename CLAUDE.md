@@ -151,11 +151,9 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 
 ## 已知技术债务
 
-1. **流水线代码重复**：`image_grouper.py::_execute_pipeline()` 和 `pipeline.py::PipelineService.run()` 实现了相同逻辑但代码独立。修改流水线步骤需同步两个文件
-2. **重分类逻辑重复**：相同的关键词列表和重分类判断在 `image_grouper.py`（第 294-317 行）和 `pipeline.py`（第 121-137 行）各有一份
-3. **`pipeline.py:143` 硬编码**：`provider = "GLM-4.6V"` 应为配置常量
-4. **无 Python 测试**：历史上曾有过测试文件但已删除。前端有 ESLint 配置但 Python 端无 lint/format 工具
-5. **`webapp/templates/` 目录**：虽然路由已移除，4 个 Jinja2 模板文件仍存在于磁盘上，确认无外部依赖后可物理删除
+1. **流水线代码重复已部分解决**：新增 `config.py` 共享函数（`reclassify_problem_type`、`map_final_type`、`determine_solver`），两处流水线已统一调用。但 `image_grouper.py::_execute_pipeline()` 和 `pipeline.py::PipelineService.run()` 的主体流程仍各自独立，进一步合并需引入统一 Pipeline 基类
+2. **无 Python 测试**：已添加 `pyproject.toml`（pytest + ruff 配置），但 `tests/` 目录尚未创建测试文件
+3. **前端状态持久化**：`activeTaskId` 已迁移至 Zustand store，可在页面切换后保持，但 SSE 连接在组件卸载时会被断开（EventSource 不支持后台重连）
 
 
 6. 为什么前端界面的思考过程没有上下查看的拖动条/或者无法上下查看内容？
