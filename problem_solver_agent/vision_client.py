@@ -10,8 +10,8 @@ vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 - OCR:   GLM-OCR (layout_parsing)
 - 视觉推理: GLM-4.6V (chat/completions)
 """
-import concurrent.futures
 import json
+import random
 import time
 from collections.abc import Generator
 from pathlib import Path
@@ -178,16 +178,29 @@ def _call_glm_ocr(image_path: Path) -> str | None:
                 resp = client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-                # GLM-OCR 返回格式: {"choices": [{"message": {"content": "markdown text"}}]}
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 if content:
                     return content.strip()
                 logger.error(f"GLM-OCR 返回空内容: {image_path.name}")
                 return None
 
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        except httpx.HTTPStatusError as e:
+            is_rate_limited = e.response.status_code == 429
             log_msg = (
-                f"GLM-OCR 调用失败 (尝试 {attempt + 1}/{config.MAX_RETRIES + 1}): {e}"
+                f"GLM-OCR {'限流(429)' if is_rate_limited else 'HTTP错误'} (尝试 {attempt + 1}/{config.MAX_RETRIES + 1}): {e}"
+            )
+            if attempt < config.MAX_RETRIES:
+                # 429 限流使用指数退避 + 随机抖动，避免重试风暴
+                delay = config.RETRY_DELAY * (2 ** attempt) + random.uniform(0, 3)
+                logger.warning(log_msg)
+                logger.info(f"将在 {delay:.1f} 秒后重试...")
+                time.sleep(delay)
+            else:
+                logger.error(f"GLM-OCR 达到最大重试次数，最终失败: {image_path.name}")
+                return None
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            log_msg = (
+                f"GLM-OCR 网络错误 (尝试 {attempt + 1}/{config.MAX_RETRIES + 1}): {e}"
             )
             if attempt < config.MAX_RETRIES:
                 logger.warning(log_msg)
@@ -227,33 +240,32 @@ def classify_problem_type(image_paths: list[Path]) -> str:
 
 
 def transcribe_images_raw(image_paths: list[Path]) -> list[str] | None:
-    """对多张图片并行执行 OCR 转录（GLM-OCR），返回结构化 Markdown 文本列表。"""
-    logger.info(f"启动 GLM-OCR 对 {len(image_paths)} 张图片的并行转录...")
-    transcriptions = [""] * len(image_paths)
+    """对多张图片串行执行 OCR 转录（GLM-OCR），返回结构化 Markdown 文本列表。
 
-    def transcribe_single(index: int, path: Path):
-        return index, _call_glm_ocr(path)
+    返回值仅在所有图片均失败时为 None；部分成功时返回成功部分，
+    后续文本合并步骤将仅处理已成功转录的图片。
+    """
+    logger.info(f"启动 GLM-OCR 对 {len(image_paths)} 张图片的串行转录...")
+    transcriptions: list[str] = []
+    failures = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=config.OCR_PARALLEL_WORKERS) as executor:
-        future_to_index = {
-            executor.submit(transcribe_single, i, p): i
-            for i, p in enumerate(image_paths)
-        }
-        all_successful = True
-        for future in concurrent.futures.as_completed(future_to_index):
-            try:
-                index, text = future.result()
-                if isinstance(text, str) and text:
-                    transcriptions[index] = text
-                    logger.info(f"  - 成功完成并行转录，图片 {index + 1}/{len(image_paths)}。")
-                else:
-                    all_successful = False
-                    logger.error(f"  - 并行转录失败（返回空内容），图片 {index + 1}/{len(image_paths)}。")
-            except Exception as e:
-                all_successful = False
-                logger.error(f"转录线程池任务执行时发生异常: {e}")
-        if not all_successful:
-            return None
+    for i, p in enumerate(image_paths):
+        text = _call_glm_ocr(p)
+        if isinstance(text, str) and text:
+            transcriptions.append(text)
+            logger.info(f"  - GLM-OCR 成功，图片 {i + 1}/{len(image_paths)}。")
+        else:
+            failures += 1
+            logger.error(f"  - GLM-OCR 失败（返回空内容），图片 {i + 1}/{len(image_paths)}。")
+
+    if not transcriptions:
+        logger.error(f"GLM-OCR 全部 {len(image_paths)} 张图片转录失败。")
+        return None
+
+    if failures:
+        logger.warning(f"GLM-OCR 部分失败: {failures}/{len(image_paths)} 张图片未能转录，"
+                       f"将继续处理 {len(transcriptions)} 张成功的图片。")
+
     return transcriptions
 
 
