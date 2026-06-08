@@ -127,24 +127,42 @@ function MainPage() {
                 </div>
               </div>
             ) : taskParam ? (
-              // 查看历史任务时，左侧显示任务元信息（原始图片已被后端清理）
-              <div className="flex flex-col items-center justify-center gap-3 p-8 bg-gray-50 rounded-lg border border-gray-200 h-full text-center">
-                <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <p className="text-sm text-gray-500 font-medium">查看历史解答</p>
-                <p className="text-xs text-gray-400">题目图片已清理，可查看右侧解答内容</p>
-                <button
-                  onClick={() => {
-                    setActiveTaskId(null);
-                    navigate("/");
-                  }}
-                  className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
-                >
-                  返回新建任务
-                </button>
-              </div>
+              historyImages.length > 0 ? (
+                <div className="flex flex-col gap-2 h-full overflow-auto">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs text-gray-400">{historyImages.length} 张题目图片</span>
+                    <button
+                      onClick={() => { setActiveTaskId(null); navigate("/"); }}
+                      className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
+                    >
+                      返回新建任务
+                    </button>
+                  </div>
+                  {historyImages.map((url, i) => (
+                    <img
+                      key={i}
+                      src={url}
+                      alt={`题目图片 ${i + 1}`}
+                      className="w-full rounded-lg border border-gray-200 object-contain bg-gray-100"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-3 p-8 bg-gray-50 rounded-lg border border-gray-200 h-full text-center">
+                  <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-sm text-gray-500 font-medium">查看历史解答</p>
+                  <p className="text-xs text-gray-400">题目图片已清理，可查看右侧解答内容</p>
+                  <button
+                    onClick={() => { setActiveTaskId(null); navigate("/"); }}
+                    className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
+                  >
+                    返回新建任务
+                  </button>
+                </div>
+              )
             ) : files.length === 0 ? (
               <UploadZone />
             ) : (

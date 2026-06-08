@@ -168,7 +168,7 @@ def _call_glm_ocr(image_path: Path) -> str | None:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": config.GLM_OCR_MODEL,
+        "model": config.VISION_OCR_MODEL,
         "file": f"data:image/jpeg;base64,{base64_data}",
     }
 
