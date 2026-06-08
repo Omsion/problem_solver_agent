@@ -102,6 +102,9 @@ GROUP_TIMEOUT = 8.0
 # - 2：两张图并行（需确认 API 配额充足）
 OCR_PARALLEL_WORKERS = 1
 
+# 后台工作线程数（ImageGrouper 消费者线程池大小）
+NUM_WORKERS = 4
+
 # --- 重分类关键词（CLI 和 Web 流水线共享）---
 ML_KEYWORDS = [
     "numpy", "torch", "tensorflow", "mlp", "transformer", "注意力",
@@ -117,60 +120,3 @@ ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
 
 
 # ---------------------------------------------------------------------------
-# 共享流水线函数（CLI Agent 和 Web App 共用）
-# ---------------------------------------------------------------------------
-
-def reclassify_problem_type(problem_type: str, transcribed_text: str) -> str:
-    """基于 OCR 文本检测 ML/编程关键词，修正视觉模型的初步分类。
-
-    Args:
-        problem_type: 视觉分类结果（GENERAL / CODING / FILL_IN_THE_BLANKS 等）
-        transcribed_text: OCR 转录后的文本
-
-    Returns:
-        修正后的问题类型（ML_CODING / CODING / 原类型）
-    """
-    reclassifiable = {"GENERAL", "FILL_IN_THE_BLANKS", "QUESTION_ANSWERING", "CODING"}
-    if problem_type not in reclassifiable or transcribed_text == "N/A":
-        return problem_type
-
-    text_lower = transcribed_text.lower()
-    if any(kw in text_lower for kw in ML_KEYWORDS):
-        return "ML_CODING"
-    if any(kw in text_lower for kw in CODING_KEYWORDS) and problem_type != "CODING":
-        return "CODING"
-    return problem_type
-
-
-def map_final_type(problem_type: str, text: str) -> str:
-    """映射最终问题类型：CODING → LEETCODE/ACM，ML_CODING 保持不变。
-
-    Args:
-        problem_type: 重分类后的问题类型
-        text: 题目文本（用于检测 leetcode 关键词）
-
-    Returns:
-        最终问题类型
-    """
-    if problem_type == "ML_CODING":
-        return "ML_CODING"
-    if problem_type == "CODING":
-        return "LEETCODE" if "leetcode" in text.lower() else "ACM"
-    return problem_type
-
-
-def determine_solver(final_type: str) -> tuple[str, str]:
-    """根据最终问题类型和路由配置，选择求解器 provider 和 model。
-
-    Args:
-        final_type: 最终问题类型（LEETCODE / ACM / ML_CODING / 其他）
-
-    Returns:
-        (provider, model) 元组
-    """
-    if final_type in ("LEETCODE", "ACM", "ML_CODING"):
-        provider = SOLVER_ROUTING_CONFIG["CODING_SOLVER"]
-    else:
-        provider = SOLVER_ROUTING_CONFIG["DEFAULT_SOLVER"]
-    return provider, SOLVER_CONFIG[provider]["model"]
-

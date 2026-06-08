@@ -10,6 +10,7 @@ vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 - OCR:   GLM-4.6V-FlashX (chat/completions)
 - 视觉推理: GLM-4.6V (chat/completions)
 """
+import concurrent.futures
 import time
 from collections.abc import Generator
 from pathlib import Path
