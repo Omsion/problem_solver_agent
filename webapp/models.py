@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """webapp 数据模型 — 基于 sqlite3 的任务持久化管理器"""
 
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
 
 
 class TaskManager:
@@ -61,7 +59,7 @@ class TaskManager:
             conn.execute(f"UPDATE tasks SET {set_clause} WHERE id = ?", values)
             conn.commit()
 
-    def get_task(self, task_id: str) -> Optional[dict]:
+    def get_task(self, task_id: str) -> dict | None:
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -93,7 +91,7 @@ class TaskManager:
             conn.commit()
             return paths
 
-    def delete_task(self, task_id: str) -> Optional[str]:
+    def delete_task(self, task_id: str) -> str | None:
         """删除指定任务，返回其 solution_path（如果有）。"""
         with self._get_conn() as conn:
             row = conn.execute(

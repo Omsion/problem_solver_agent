@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 自动化多图解题Agent - 配置文件 (V2.2 - 多模型/多端点版)
 
@@ -10,14 +9,8 @@
 """
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
-from .prompts import (
-    CLASSIFICATION_PROMPT,
-    TRANSCRIPTION_PROMPT,
-    TEXT_MERGE_AND_POLISH_PROMPT,
-    FILENAME_GENERATION_PROMPT,
-    PROMPT_TEMPLATES,
-)
 
 # --- 0. 基础设置 ---
 load_dotenv()
@@ -98,6 +91,22 @@ SOLUTION_DIR = ROOT_DIR / "solutions"
 # - 8-10秒：平衡选择（大多数用户适用）
 # - 15秒：适合操作较慢的用户（可能延迟提交）
 GROUP_TIMEOUT = 8.0
+
+# 后台工作线程数（ImageGrouper 消费者线程池大小）
+# 说明：控制同时处理的任务数量。每个任务占一个线程，适合 I/O 密集型场景。
+# 建议：1-8（根据 CPU 核心数和 API 并发限制调整）
+# - 1：单任务串行（最稳定）
+# - 4：四任务并发（适合大多数场景）
+# - 8：高并发（需确保 API 有足够并发配额）
+NUM_WORKERS = 1
+
+# OCR 并行转录音频的线程数
+# 说明：控制同时进行的 OCR 转录调用数（vision_client.transcribe_images_raw）
+# 建议：1-4（GLM-4.6V 系列对并发支持有限）
+# - 1：串行转录（稳定，API 压力最小）
+# - 2：两张图并行转录（提速明显）
+# - 4：四图并行（仅在高配额下推荐）
+OCR_PARALLEL_WORKERS = 1
 
 # --- 重分类关键词（CLI 和 Web 流水线共享）---
 ML_KEYWORDS = [

@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
 """FastAPI 应用工厂"""
 
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config as web_config
 from .models import TaskManager
 from .pipeline import PipelineService
-from .routes import router, init_router
+from .routes import init_router, router
 
 
 def create_app() -> FastAPI:
@@ -46,8 +44,8 @@ def create_app() -> FastAPI:
         import logging
         logger = logging.getLogger("WebappStartup")
         try:
-            from problem_solver_agent import solver_client, vision_client
             from problem_solver_agent import config as core_config
+            from problem_solver_agent import solver_client, vision_client
             # 预热求解器客户端
             for provider in core_config.SOLVER_CONFIG:
                 try:

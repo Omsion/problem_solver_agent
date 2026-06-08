@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 file_monitor.py - 文件系统监控模块
 
@@ -7,8 +6,9 @@ file_monitor.py - 文件系统监控模块
 """
 
 from pathlib import Path
-from watchdog.observers import Observer
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 # 从项目中导入配置和核心处理器
 from . import config

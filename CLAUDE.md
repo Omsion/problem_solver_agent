@@ -156,3 +156,39 @@ python tools/human_typer.py           # 模拟真人打字输出 AI 代码
 3. **`pipeline.py:143` 硬编码**：`provider = "GLM-4.6V"` 应为配置常量
 4. **无 Python 测试**：历史上曾有过测试文件但已删除。前端有 ESLint 配置但 Python 端无 lint/format 工具
 5. **`webapp/templates/` 目录**：虽然路由已移除，4 个 Jinja2 模板文件仍存在于磁盘上，确认无外部依赖后可物理删除
+
+
+6. 为什么前端界面的思考过程没有上下查看的拖动条/或者无法上下查看内容？
+7. 同一个任务，上传图片，再点击“开始解答”后，看到“问题分类
+●
+文字识别
+3
+AI 求解
+4
+完成
+正在进行 OCR 转录（4 张图片）…
+
+正在生成解答...”
+。但是为什么再点击“历史记录”离开了开始界面，再回到首页就没法看到“问题分类
+●
+文字识别
+3
+AI 求解
+4
+完成
+正在进行 OCR 转录（4 张图片）…
+
+正在生成解答...”，而是回到了默认的“选择一个任务查看解答”的界面
+
+8. 把problem_solver_agent里的.py文件的多线程相关的参数添加入problem_solver_agent\config.py以便后续分被修改（例如“def __init__(self, num_workers: int = 1):
+        """
+        初始化ImageGrouper实例。
+
+        Args:
+            num_workers (int): 要启动的后台工作线程（消费者）的数量。默认为8。”、“
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future_to_index = {
+            executor.submit(transcribe_single, i, p): i
+            for i, p in enumerate(image_paths)
+        }”以及其他的多线程相关的参数）
+9. 

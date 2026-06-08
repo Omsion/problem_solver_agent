@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 自动化多图解题 Agent (Automated Multi-Image Problem Solver Agent)
 
@@ -20,8 +19,8 @@
 """
 
 # 核心类和函数导出
-from .image_grouper import ImageGrouper
 from .file_monitor import start_monitoring
+from .image_grouper import ImageGrouper
 
 # 定义包的公共 API
 __all__ = [

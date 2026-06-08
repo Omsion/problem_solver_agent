@@ -3,6 +3,10 @@ import type { ProgressState } from "../types";
 import { sseUrl } from "../api/client";
 
 interface TaskState {
+  /** Currently active task ID (persists across navigation) */
+  activeTaskId: string | null;
+  setActiveTaskId: (id: string | null) => void;
+
   /** Map of taskId → progress */
   progress: Record<string, ProgressState>;
   /** Active EventSource connections */
@@ -30,6 +34,9 @@ function emptyProgress(): ProgressState {
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
+  activeTaskId: null,
+  setActiveTaskId: (id) => set({ activeTaskId: id }),
+
   progress: {},
   connections: {},
 

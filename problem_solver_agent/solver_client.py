@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 solver_client.py - 统一求解器客户端 (V2.6 - Dict 事件流版)
 
@@ -19,21 +18,24 @@ V2.5 版本更新:
 - 【日志改进】: 在重试过程中会输出清晰的警告日志，便于追踪网络问题。
 """
 import time
-from openai import OpenAI, APIConnectionError, APITimeoutError
-from typing import Generator, Dict, Any, List, Union, TypedDict
+from collections.abc import Generator
+from typing import Any, TypedDict
+
+from openai import APIConnectionError, APITimeoutError, OpenAI
+
 from . import config
 from .utils import setup_logger
 
 logger = setup_logger()
 
 # --- 客户端单例缓存 ---
-_clients: Dict[str, OpenAI] = {}
+_clients: dict[str, OpenAI] = {}
 
 
 # --- API Payload 类型定义 ---
 class StandardChatPayload(TypedDict):
     model: str
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
     stream: bool
     max_tokens: int
     temperature: float
@@ -41,10 +43,10 @@ class StandardChatPayload(TypedDict):
 
 class DeepSeekChatPayload(TypedDict):
     model: str
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
     stream: bool
     max_tokens: int
-    extra_body: Dict[str, Any]
+    extra_body: dict[str, Any]
     reasoning_effort: str
 
 
@@ -89,8 +91,8 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
     for attempt in range(config.MAX_RETRIES + 1):
         try:
             client = get_client(provider)
-            messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
-            payload: Union[StandardChatPayload, DeepSeekChatPayload]
+            messages: list[dict[str, Any]] = [{"role": "user", "content": final_prompt}]
+            payload: StandardChatPayload | DeepSeekChatPayload
 
             if provider == 'deepseek':
                 if enable_thinking:
@@ -150,7 +152,7 @@ def stream_solve_text_only(final_prompt: str, provider: str, model: str, enable_
         yield event["content"]
 
 
-def ask_for_analysis(final_prompt: str, provider: str, model: str) -> Union[str, None]:
+def ask_for_analysis(final_prompt: str, provider: str, model: str) -> str | None:
     """
     非流式调用LLM进行分析任务，内置自动重试逻辑。
     """
@@ -159,7 +161,7 @@ def ask_for_analysis(final_prompt: str, provider: str, model: str) -> Union[str,
     for attempt in range(config.MAX_RETRIES + 1):
         try:
             client = get_client(provider)
-            messages: List[Dict[str, Any]] = [{"role": "user", "content": final_prompt}]
+            messages: list[dict[str, Any]] = [{"role": "user", "content": final_prompt}]
 
             response = client.chat.completions.create(
                 model=model, messages=messages, stream=False, temperature=0.7, timeout=120.0

@@ -25,7 +25,8 @@ function parseHashTaskId(): string | null {
 }
 
 function MainPage() {
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const activeTaskId = useTaskStore((s) => s.activeTaskId);
+  const setActiveTaskId = useTaskStore((s) => s.setActiveTaskId);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const files = useUploadStore((s) => s.files);

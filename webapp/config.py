@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """webapp 配置模块"""
 
 from pathlib import Path

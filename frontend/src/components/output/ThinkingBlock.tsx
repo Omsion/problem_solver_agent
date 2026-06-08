@@ -29,7 +29,7 @@ export const ThinkingBlock = ({ content }: Props) => {
           expanded ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
         }`}
       >
-        <div className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100">
+        <div className="p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed border-t border-indigo-100 max-h-[468px] overflow-y-auto">
           {content}
         </div>
       </div>

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 utils.py - 通用工具模块
 
@@ -13,7 +12,6 @@ import base64
 import logging
 import re
 from pathlib import Path
-from typing import List
 
 # ==============================================================================
 # --- Logger 单例系统 ---
@@ -89,7 +87,7 @@ def sanitize_filename(filename: str) -> str:
     return re.sub(illegal_chars, '', filename)
 
 
-def extract_question_numbers(text: str) -> List[int]:
+def extract_question_numbers(text: str) -> list[int]:
     """
     使用正则表达式从文本中提取所有以数字开头，并后跟点、顿号或空格的题号。
     """
@@ -106,7 +104,7 @@ def extract_question_numbers(text: str) -> List[int]:
 
 
 # 题号前缀格式化函数
-def format_number_prefix(numbers: List[int]) -> str:
+def format_number_prefix(numbers: list[int]) -> str:
     """
     根据提取出的题号列表，智能生成文件名所需的前缀。
     - 单个题号: "16"

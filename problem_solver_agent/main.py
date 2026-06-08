@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 r"""
 main.py - 自动化多图解题Agent主程序入口
 conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python -m problem_solver_agent.main
@@ -6,11 +5,9 @@ conda activate llm; cd "D:\Users\wzw\Pictures\OnlineTest"; python -m problem_sol
 
 import sys
 
-from . import config
-from . import file_monitor
+from . import config, file_monitor, solver_client
 from .image_grouper import ImageGrouper
 from .utils import setup_logger
-from . import solver_client
 
 
 def main():

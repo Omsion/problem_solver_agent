@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """webapp 路由模块 — REST API + SSE 流式端点"""
 
 import asyncio
@@ -7,8 +6,8 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi import APIRouter, File, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import config as web_config
 

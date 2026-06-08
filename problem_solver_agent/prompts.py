@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 prompts.py - 自动化多图解题Agent - 提示词模块 (V4.0 - 结构化重构版)
 

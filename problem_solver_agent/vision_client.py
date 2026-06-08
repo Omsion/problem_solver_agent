@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 
@@ -12,12 +11,14 @@ vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 """
 import concurrent.futures
 import time
+from collections.abc import Generator
 from pathlib import Path
-from typing import List, Union, Dict, Any, Generator, TypedDict
-from openai import OpenAI, APIConnectionError, APITimeoutError
+from typing import Any, TypedDict
+
+from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from . import config
-from .utils import setup_logger, encode_image_to_base64
+from .utils import encode_image_to_base64, setup_logger
 
 logger = setup_logger()
 
@@ -25,10 +26,10 @@ logger = setup_logger()
 # --- 类型定义 ---
 class VisionCompletionPayload(TypedDict, total=False):
     model: str
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
     max_tokens: int
     stream: bool
-    extra_body: Dict[str, Any]
+    extra_body: dict[str, Any]
 
 
 # --- 客户端延迟初始化 ---
@@ -52,9 +53,9 @@ def _get_vision_client() -> OpenAI | None:
     return _vision_client
 
 
-def _call_vision_api(image_paths: List[Path], user_prompt: str, model_name: str,
+def _call_vision_api(image_paths: list[Path], user_prompt: str, model_name: str,
                      stream: bool = False,
-                     extra_params: Dict = None) -> Union[str, Generator[str, None, None], None]:
+                     extra_params: dict = None) -> str | Generator[str, None, None] | None:
     """
     核心视觉API调用函数，内置健壮的自动重试逻辑。
 
@@ -141,7 +142,7 @@ def _call_vision_api(image_paths: List[Path], user_prompt: str, model_name: str,
 # 公共 API —— 切换模型只需修改 config.py，以下函数无需改动
 # ==============================================================================
 
-def classify_problem_type(image_paths: List[Path]) -> str:
+def classify_problem_type(image_paths: list[Path]) -> str:
     """对图片内容进行问题类型分类，返回 CODING / MULTIPLE_CHOICE / ... 等标签。"""
     logger.info("步骤 1: 正在进行问题类型分类...")
     response = _call_vision_api(
@@ -160,7 +161,7 @@ def classify_problem_type(image_paths: List[Path]) -> str:
     return "GENERAL"
 
 
-def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
+def transcribe_images_raw(image_paths: list[Path]) -> list[str] | None:
     """对多张图片并行执行 OCR 转录，返回结构化文本列表。"""
     logger.info(f"启动对 {len(image_paths)} 张图片的并行独立转录...")
     transcriptions = [""] * len(image_paths)
@@ -170,7 +171,7 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
             [path], config.TRANSCRIPTION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
         )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.OCR_PARALLEL_WORKERS) as executor:
         future_to_index = {
             executor.submit(transcribe_single, i, p): i
             for i, p in enumerate(image_paths)
@@ -193,7 +194,7 @@ def transcribe_images_raw(image_paths: List[Path]) -> Union[List[str], None]:
     return transcriptions
 
 
-def solve_visual_reasoning_problem(image_paths: List[Path]) -> Union[Generator[str, None, None], None]:
+def solve_visual_reasoning_problem(image_paths: list[Path]) -> Generator[str, None, None] | None:
     """使用专用视觉推理模型解决图形/规律推理类问题。"""
     logger.info(f"步骤 2.2: 正在使用视觉推理模型 '{config.VISION_REASONING_MODEL}' 进行求解...")
     return _call_vision_api(
