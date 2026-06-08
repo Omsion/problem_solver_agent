@@ -7,17 +7,14 @@ vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 
 当前配置: Zhipu GLM-4.6V 系列
 - 分类: GLM-4.6V-FlashX (chat/completions)
-- OCR:   GLM-OCR (layout_parsing)
+- OCR:   GLM-4.6V-FlashX (chat/completions)
 - 视觉推理: GLM-4.6V (chat/completions)
 """
-import json
-import random
 import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any, TypedDict
 
-import httpx
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from . import config, prompts
@@ -142,81 +139,6 @@ def _call_vision_api(image_paths: list[Path], user_prompt: str, model_name: str,
 
 
 # ==============================================================================
-# GLM-OCR — 专用文档解析 API
-# ==============================================================================
-
-def _call_glm_ocr(image_path: Path) -> str | None:
-    """调用 GLM-OCR layout_parsing API 进行单张图片的文档解析。
-
-    GLM-OCR 是智谱 0.9B 参数的专用 OCR 模型，使用 layout_parsing 端点，
-    在文档解析、表格识别、公式提取等场景中达到 SOTA 水平。
-
-    Args:
-        image_path: 单张图片路径
-
-    Returns:
-        解析后的 Markdown 文本，失败返回 None
-    """
-    base64_data = encode_image_to_base64(image_path)
-    if not base64_data:
-        logger.error(f"GLM-OCR: 图片编码失败 {image_path.name}")
-        return None
-
-    url = f"{config.VISION_BASE_URL.rstrip('/')}/layout_parsing"
-    headers = {
-        "Authorization": f"Bearer {config.ZHIPU_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": config.VISION_OCR_MODEL,
-        "file": f"data:image/jpeg;base64,{base64_data}",
-    }
-
-    for attempt in range(config.MAX_RETRIES + 1):
-        try:
-            with httpx.Client(timeout=config.API_TIMEOUT) as client:
-                resp = client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if content:
-                    return content.strip()
-                logger.error(f"GLM-OCR 返回空内容: {image_path.name}")
-                return None
-
-        except httpx.HTTPStatusError as e:
-            is_rate_limited = e.response.status_code == 429
-            log_msg = (
-                f"GLM-OCR {'限流(429)' if is_rate_limited else 'HTTP错误'} (尝试 {attempt + 1}/{config.MAX_RETRIES + 1}): {e}"
-            )
-            if attempt < config.MAX_RETRIES:
-                # 429 限流使用指数退避 + 随机抖动，避免重试风暴
-                delay = config.RETRY_DELAY * (2 ** attempt) + random.uniform(0, 3)
-                logger.warning(log_msg)
-                logger.info(f"将在 {delay:.1f} 秒后重试...")
-                time.sleep(delay)
-            else:
-                logger.error(f"GLM-OCR 达到最大重试次数，最终失败: {image_path.name}")
-                return None
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            log_msg = (
-                f"GLM-OCR 网络错误 (尝试 {attempt + 1}/{config.MAX_RETRIES + 1}): {e}"
-            )
-            if attempt < config.MAX_RETRIES:
-                logger.warning(log_msg)
-                logger.info(f"将在 {config.RETRY_DELAY} 秒后重试...")
-                time.sleep(config.RETRY_DELAY)
-            else:
-                logger.error(f"GLM-OCR 达到最大重试次数，最终失败: {image_path.name}")
-                return None
-        except Exception as e:
-            logger.error(f"GLM-OCR 未知错误: {e}", exc_info=True)
-            return None
-
-    return None
-
-
-# ==============================================================================
 # 公共 API —— 切换模型只需修改 config.py，以下函数无需改动
 # ==============================================================================
 
@@ -240,34 +162,65 @@ def classify_problem_type(image_paths: list[Path]) -> str:
 
 
 def transcribe_images_raw(image_paths: list[Path]) -> list[str] | None:
-    """对多张图片串行执行 OCR 转录（GLM-OCR），返回结构化 Markdown 文本列表。
 
-    返回值仅在所有图片均失败时为 None；部分成功时返回成功部分，
-    后续文本合并步骤将仅处理已成功转录的图片。
-    """
-    logger.info(f"启动 GLM-OCR 对 {len(image_paths)} 张图片的串行转录...")
-    transcriptions: list[str] = []
-    failures = 0
+    """使用专用视觉推理模型解决图形/规律推理类问题。"""
+    logger.info(f"步骤 2.2: 正在使用视觉推理模型 '{config.VISION_REASONING_MODEL}' 进行求解...")
+    return _call_vision_api(
+        image_paths,
+        prompts.PROMPT_TEMPLATES["VISUAL_REASONING"],
+        config.VISION_REASONING_MODEL,
+        stream=True,
+        extra_params={"top_p": 0.8, "temperature": 0.7}
+    )# 公共 API —— 切换模型只需修改 config.py，以下函数无需改动
+    """对图片内容进行问题类型分类，返回 CODING / MULTIPLE_CHOICE / ... 等标签。"""
+    logger.info("步骤 1: 正在进行问题类型分类...")
+    response = _call_vision_api(
+        image_paths, prompts.CLASSIFICATION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
+    )
+    valid_types = [
+        "CODING", "VISUAL_REASONING", "QUESTION_ANSWERING",
+        "GENERAL", "MULTIPLE_CHOICE", "FILL_IN_THE_BLANKS"
+    ]
 
-    for i, p in enumerate(image_paths):
-        text = _call_glm_ocr(p)
-        if isinstance(text, str) and text:
-            transcriptions.append(text)
-            logger.info(f"  - GLM-OCR 成功，图片 {i + 1}/{len(image_paths)}。")
-        else:
-            failures += 1
-            logger.error(f"  - GLM-OCR 失败（返回空内容），图片 {i + 1}/{len(image_paths)}。")
+    if isinstance(response, str) and response in valid_types:
+        logger.info(f"分类成功，识别类型为: {response}")
+        return response
 
-    if not transcriptions:
-        logger.error(f"GLM-OCR 全部 {len(image_paths)} 张图片转录失败。")
-        return None
+    logger.warning(f"分类失败或返回未知类型 ('{response}')。将默认视为 'GENERAL'。")
+    return "GENERAL"
 
-    if failures:
-        logger.warning(f"GLM-OCR 部分失败: {failures}/{len(image_paths)} 张图片未能转录，"
-                       f"将继续处理 {len(transcriptions)} 张成功的图片。")
 
+def transcribe_images_raw(image_paths: list[Path]) -> list[str] | None:
+    """对多张图片并行执行 OCR 转录，返回结构化文本列表。"""
+    logger.info(f"启动对 {len(image_paths)} 张图片的并行转录...")
+    transcriptions = [""] * len(image_paths)
+
+    def transcribe_single(index: int, path: Path):
+        return index, _call_vision_api(
+            [path], prompts.TRANSCRIPTION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.OCR_PARALLEL_WORKERS) as executor:
+        future_to_index = {
+            executor.submit(transcribe_single, i, p): i
+            for i, p in enumerate(image_paths)
+        }
+        all_successful = True
+        for future in concurrent.futures.as_completed(future_to_index):
+            try:
+                index, text = future.result()
+                if isinstance(text, str) and text:
+                    transcriptions[index] = text
+                    logger.info(f"  - 成功完成并行转录，图片 {index + 1}/{len(image_paths)}。")
+                else:
+                    all_successful = False
+                    logger.error(f"  - 并行转录失败（返回空内容），图片 {index + 1}/{len(image_paths)}。")
+            except Exception as e:
+                all_successful = False
+                logger.error(f"转录线程池任务执行时发生异常: {e}")
+        if not all_successful:
+            return None
     return transcriptions
-
 
 def solve_visual_reasoning_problem(image_paths: list[Path]) -> Generator[str, None, None] | None:
     """使用专用视觉推理模型解决图形/规律推理类问题。"""

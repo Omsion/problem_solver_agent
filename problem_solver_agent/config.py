@@ -47,8 +47,6 @@ VISION_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"
 # 专用于视觉推理的、更强大的模型
 VISION_REASONING_MODEL = "GLM-4.6V"
-# GLM-OCR 专用模型（layout_parsing API，高精度文档解析）
-VISION_OCR_MODEL = "glm-ocr"
 # 视觉模型 provider 名称（用于解答文件元数据）
 VISION_PROVIDER_NAME = "zhipu"
 
@@ -98,16 +96,10 @@ GROUP_TIMEOUT = 8.0
 # 建议：1-8（根据 CPU 核心数和 API 并发限制调整）
 # - 1：单任务串行（最稳定）
 # - 4：四任务并发（适合大多数场景）
-# - 8：高并发（需确保 API 有足够并发配额）
-NUM_WORKERS = 4
-
-# OCR 并行线程数（GLM-OCR layout_parsing API）
-# 说明：GLM-OCR 仅 0.9B 参数，推理延迟极低，支持高并发调用。
-#       每张图片独立调用 layout_parsing，线程池并行执行。
-# 建议：1-8（根据 API 并发配额和图片数量调整）
-# - 1：串行（保守）
-# - 4：四图并行（推荐，GLM-OCR 轻量级模型可轻松支撑）
-# - 8：八图并行（大批量场景，需确认 API 配额充足）
+# OCR 并行线程数
+# 说明：控制同时进行的 OCR 转录调用数。
+# - 1：串行转录（最稳定）
+# - 2：两张图并行（需确认 API 配额充足）
 OCR_PARALLEL_WORKERS = 1
 
 # --- 重分类关键词（CLI 和 Web 流水线共享）---

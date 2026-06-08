@@ -50,7 +50,7 @@ def main():
     logger.info("=" * 50)
     logger.info(f"监控目录: {config.MONITOR_DIR}")
     logger.info(f"题目视觉分类模型: {config.VISION_CLASSIFY_MODEL}")
-    logger.info(f"OCR模型: {config.VISION_OCR_MODEL}")
+    logger.info(f"题目OCR模型: {config.VISION_CLASSIFY_MODEL}")
     logger.info(f"视觉推理模型: {config.VISION_REASONING_MODEL}")
     logger.info("核心求解器: [根据问题类型动态选择]")
     logger.info(f"  - 编程类问题 -> {config.SOLVER_ROUTING_CONFIG['CODING_SOLVER']}")
