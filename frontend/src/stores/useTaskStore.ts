@@ -11,6 +11,11 @@ interface TaskState {
   progress: Record<string, ProgressState>;
   /** Active EventSource connections */
   connections: Record<string, EventSource>;
+  /** Auto-imported task IDs that we've seen (for deduplication) */
+  seenAutoImportedTasks: Set<string>;
+  /** Callback when a new task is auto-imported */
+  onAutoImportedTask: ((taskId: string, numImages: number) => void) | null;
+  setOnAutoImportedTask: (cb: ((taskId: string, numImages: number) => void) | null) => void;
 
   /** Connect SSE for a task and start streaming. */
   connectSSE: (taskId: string, thinking?: boolean) => void;
@@ -39,6 +44,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   progress: {},
   connections: {},
+  seenAutoImportedTasks: new Set(),
+  onAutoImportedTask: null,
+  setOnAutoImportedTask: (cb) => set({ onAutoImportedTask: cb }),
 
   connectSSE: (taskId, thinking = true) => {
     // Close existing connection if any
@@ -46,6 +54,33 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
     const url = sseUrl(taskId, thinking);
     const es = new EventSource(url);
+
+    const handleAutoImported = (data: any) => {
+      const importedTaskId = data.task_id;
+      const numImages = data.num_images || 0;
+      if (!importedTaskId) return;
+
+      // Check if we've already seen this auto-imported task
+      const seen = get().seenAutoImportedTasks;
+      if (seen.has(importedTaskId)) return;
+
+      set((s) => ({
+        seenAutoImportedTasks: new Set([...s.seenAutoImportedTasks, importedTaskId])
+      }));
+
+      // Notify callback
+      const cb = get().onAutoImportedTask;
+      if (cb) {
+        cb(importedTaskId, numImages);
+      }
+    };
+
+    es.addEventListener("auto_imported", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleAutoImported(data);
+      } catch { /* ignore parse errors */ }
+    });
 
     es.addEventListener("init", (e: MessageEvent) => {
       const data = JSON.parse(e.data);
@@ -105,6 +140,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (!("data" in e) || !(e as MessageEvent).data) return;
       try {
         const data = JSON.parse((e as MessageEvent).data);
+        // Check if this error event is actually an auto_imported (fallback case)
+        if (data.type === "auto_imported") {
+          handleAutoImported(data);
+          return;
+        }
         get().updateProgress(taskId, {
           phase: "error",
           message: "处理失败",
@@ -121,6 +161,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       try {
         const data = JSON.parse(e.data);
         switch (data.type) {
+          case "auto_imported":
+            handleAutoImported(data);
+            break;
           case "init":
             get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
             break;
@@ -206,6 +249,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const url = sseUrl(taskId, true);
     const es = new EventSource(url);
 
+    const handleAutoImported = (data: any) => {
+      const importedTaskId = data.task_id;
+      const numImages = data.num_images || 0;
+      if (!importedTaskId) return;
+
+      const seen = get().seenAutoImportedTasks;
+      if (seen.has(importedTaskId)) return;
+
+      set((s) => ({
+        seenAutoImportedTasks: new Set([...s.seenAutoImportedTasks, importedTaskId])
+      }));
+
+      const cb = get().onAutoImportedTask;
+      if (cb) {
+        cb(importedTaskId, numImages);
+      }
+    };
+
     const cleanup = () => {
       es.close();
       set((s) => {
@@ -213,6 +274,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         return { connections: rest };
       });
     };
+
+    es.addEventListener("auto_imported", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleAutoImported(data);
+      } catch { /* ignore */ }
+    });
 
     es.addEventListener("init", (e: MessageEvent) => {
       const data = JSON.parse(e.data);
@@ -250,10 +318,51 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (!("data" in e) || !(e as MessageEvent).data) return;
       try {
         const data = JSON.parse((e as MessageEvent).data);
+        if (data.type === "auto_imported") {
+          handleAutoImported(data);
+          return;
+        }
         get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message || "未知错误" });
         cleanup();
       } catch { /* ignore */ }
     });
+
+    es.onmessage = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        switch (data.type) {
+          case "auto_imported":
+            handleAutoImported(data);
+            break;
+          case "init":
+            get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+            break;
+          case "status":
+            get().updateProgress(taskId, { phase: data.phase, message: data.message });
+            break;
+          case "reasoning":
+            set((s) => {
+              const p = s.progress[taskId] ?? emptyProgress();
+              return { progress: { ...s.progress, [taskId]: { ...p, thinking: p.thinking + (data.content ?? "") } } };
+            });
+            break;
+          case "chunk":
+            set((s) => {
+              const p = s.progress[taskId] ?? emptyProgress();
+              return { progress: { ...s.progress, [taskId]: { ...p, answer: p.answer + (data.content ?? "") } } };
+            });
+            break;
+          case "done":
+            get().updateProgress(taskId, { phase: "done", message: "解答完成", filename: data.filename });
+            cleanup();
+            break;
+          case "error":
+            get().updateProgress(taskId, { phase: "error", message: "处理失败", error: data.message });
+            cleanup();
+            break;
+        }
+      } catch { /* ignore */ }
+    };
 
     es.onerror = () => {
       set((s) => {

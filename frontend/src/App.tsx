@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { HashRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
@@ -11,7 +11,7 @@ import { OutputPanel } from "./components/output/OutputPanel";
 import { TaskHistoryPage } from "./components/tasks/TaskHistoryPage";
 import { useUploadStore } from "./stores/useUploadStore";
 import { useTaskStore } from "./stores/useTaskStore";
-import { createTask, getTask } from "./api/client";
+import { createTask, getTask, listTasks } from "./api/client";
 
 /**
  * 监听 hash 变化，返回当前 URL 中的 task 参数。
@@ -42,15 +42,20 @@ function useHashTaskId(): string | null {
 function MainPage() {
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const setActiveTaskId = useTaskStore((s) => s.setActiveTaskId);
+  const connectSSE = useTaskStore((s) => s.connectSSE);
+  const updateProgress = useTaskStore((s) => s.updateProgress);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const files = useUploadStore((s) => s.files);
-  const connectSSE = useTaskStore((s) => s.connectSSE);
-  const updateProgress = useTaskStore((s) => s.updateProgress);
   const navigate = useNavigate();
 
   const taskParam = useHashTaskId();
   const [historyImages, setHistoryImages] = useState<string[]>([]);
+
+  // 轮询状态：记录最新的任务创建时间，用于检测新任务
+  const lastTaskTimeRef = useRef<number>(Date.now());
+  const [hasNewAutoTask, setHasNewAutoTask] = useState(false);
+  const [newTaskInfo, setNewTaskInfo] = useState<{ id: string; numImages: number } | null>(null);
 
   // 从历史记录跳转过来时，加载已完成任务的解答
   useEffect(() => {
@@ -91,12 +96,101 @@ function MainPage() {
     useTaskStore.getState().reconnectSSE(activeTaskId);
   }, [activeTaskId]);
 
+  // 轮询检测自动导入的新任务
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkNewTasks = async () => {
+      if (cancelled) return;
+      try {
+        const { tasks } = await listTasks(20);
+        if (cancelled || tasks.length === 0) return;
+
+        // 找到比上次检查时间更新的任务
+        const latestTask = tasks[0];
+        if (latestTask.created_at * 1000 > lastTaskTimeRef.current) {
+          lastTaskTimeRef.current = latestTask.created_at * 1000;
+
+          // 检查是否是最近创建的（30秒内），避免页面加载时误触发
+          const ageMs = Date.now() - latestTask.created_at * 1000;
+          if (ageMs < 30000) {
+            setNewTaskInfo({ id: latestTask.id, numImages: latestTask.num_images });
+            setHasNewAutoTask(true);
+          }
+        }
+      } catch {
+        // 静默忽略轮询错误
+      }
+    };
+
+    // 初始化时设置基准时间
+    (async () => {
+      try {
+        const { tasks } = await listTasks(1);
+        if (tasks.length > 0) {
+          lastTaskTimeRef.current = tasks[0].created_at * 1000;
+        }
+      } catch { /* ignore */ }
+    })();
+
+    // 开始轮询：每5秒检查一次
+    const interval = setInterval(checkNewTasks, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // 自动切换到新导入的任务
+  useEffect(() => {
+    if (!hasNewAutoTask || !newTaskInfo) return;
+
+    // 如果用户正在处理其他任务，询问是否切换？
+    // 这里我们直接切换，提供更好的体验
+    const switchToNewTask = async () => {
+      try {
+        // 清除 URL 参数并重置状态
+        navigate("/");
+        setHistoryImages([]);
+
+        // 加载新任务并连接 SSE
+        const { task, solution_content, image_urls } = await getTask(newTaskInfo.id);
+        setActiveTaskId(newTaskInfo.id);
+
+        // 如果任务还在处理中，连接 SSE
+        if (task.status === "pending" || task.status === "processing") {
+          connectSSE(newTaskInfo.id, true);
+          setHistoryImages(image_urls);
+        } else {
+          // 任务已完成，直接显示
+          setHistoryImages(image_urls);
+          updateProgress(newTaskInfo.id, {
+            phase: task.status === "completed" ? "done" : "error",
+            message: task.status === "completed" ? "解答完成" : "任务失败",
+            answer: solution_content,
+            filename: task.filename,
+            error: task.error_message,
+          });
+        }
+      } catch (err) {
+        console.error("切换到新任务失败:", err);
+      } finally {
+        setHasNewAutoTask(false);
+        setNewTaskInfo(null);
+      }
+    };
+
+    switchToNewTask();
+  }, [hasNewAutoTask, newTaskInfo, navigate, setActiveTaskId, connectSSE, updateProgress]);
+
   const handleStart = useCallback(async () => {
     if (files.length === 0) return;
     // 清除 URL 中的 task 参数，进入新任务模式
     navigate("/");
     setIsProcessing(true);
     setHistoryImages([]);
+    setHasNewAutoTask(false);
+    setNewTaskInfo(null);
     try {
       const fileObjs = files.map((f) => f.file);
       const { task_id } = await createTask(fileObjs);
@@ -108,10 +202,33 @@ function MainPage() {
     } finally {
       setIsProcessing(false);
     }
-  }, [files, connectSSE, navigate]);
+  }, [files, connectSSE, navigate, setActiveTaskId]);
+
+  const handleDismissNewTask = useCallback(() => {
+    setHasNewAutoTask(false);
+    setNewTaskInfo(null);
+  }, []);
 
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col">
+      {/* 新任务提示条 */}
+      {hasNewAutoTask && newTaskInfo && (
+        <div className="bg-indigo-50 border-b border-indigo-200 px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-2 w-2 rounded-full bg-indigo-400 animate-pulse"></span>
+            <span className="text-sm text-indigo-700">
+              检测到新截图任务（{newTaskInfo.numImages} 张图片），正在加载...
+            </span>
+          </div>
+          <button
+            onClick={handleDismissNewTask}
+            className="text-xs text-indigo-500 hover:text-indigo-600"
+          >
+            忽略
+          </button>
+        </div>
+      )}
+
       <SplitPanelLayout
         left={
           <div className="flex flex-col gap-3 h-full">

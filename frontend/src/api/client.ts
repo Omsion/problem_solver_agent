@@ -36,6 +36,12 @@ export async function deleteTask(taskId: string): Promise<void> {
   if (!res.ok) throw new Error(`Delete failed (${res.status})`);
 }
 
+/** Cancel a running task. */
+export async function cancelTask(taskId: string): Promise<void> {
+  const res = await fetch(`${BASE}/tasks/${taskId}/cancel`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Cancel failed (${res.status})`);
+}
+
 /** Construct SSE URL for streaming task progress. */
 export function sseUrl(taskId: string, thinking = false): string {
   const params = new URLSearchParams();

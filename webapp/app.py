@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config as web_config
+from .auto_import import start_auto_import
 from .models import TaskManager
 from .pipeline import PipelineService
 from .routes import init_router, router
@@ -69,6 +70,13 @@ def create_app() -> FastAPI:
                 logger.info("视觉客户端预热完成")
             except Exception as e:
                 logger.warning("预热视觉客户端失败: %s", e)
+
+            # 启动自动截图导入监控
+            try:
+                start_auto_import(task_manager, pipeline_service)
+                logger.info("自动截图导入功能已启动")
+            except Exception as e:
+                logger.warning("启动自动截图导入失败: %s", e, exc_info=True)
         except Exception as e:
             logger.warning("客户端预热过程出错: %s", e)
 

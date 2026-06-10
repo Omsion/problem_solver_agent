@@ -56,7 +56,7 @@ def _get_vision_client() -> OpenAI | None:
 
 def _call_vision_api(image_paths: list[Path], user_prompt: str, model_name: str,
                      stream: bool = False,
-                     extra_params: dict = None) -> str | Generator[str, None, None] | None:
+                     extra_params: dict | None = None) -> str | Generator[str, None, None] | None:
     """
     核心视觉API调用函数，内置健壮的自动重试逻辑。
 
@@ -144,35 +144,6 @@ def _call_vision_api(image_paths: list[Path], user_prompt: str, model_name: str,
 # ==============================================================================
 
 def classify_problem_type(image_paths: list[Path]) -> str:
-    """对图片内容进行问题类型分类，返回 CODING / MULTIPLE_CHOICE / ... 等标签。"""
-    logger.info("步骤 1: 正在进行问题类型分类...")
-    response = _call_vision_api(
-        image_paths, prompts.CLASSIFICATION_PROMPT, config.VISION_CLASSIFY_MODEL, stream=False
-    )
-    valid_types = [
-        "CODING", "VISUAL_REASONING", "QUESTION_ANSWERING",
-        "GENERAL", "MULTIPLE_CHOICE", "FILL_IN_THE_BLANKS"
-    ]
-
-    if isinstance(response, str) and response in valid_types:
-        logger.info(f"分类成功，识别类型为: {response}")
-        return response
-
-    logger.warning(f"分类失败或返回未知类型 ('{response}')。将默认视为 'GENERAL'。")
-    return "GENERAL"
-
-
-def transcribe_images_raw(image_paths: list[Path]) -> list[str] | None:
-
-    """使用专用视觉推理模型解决图形/规律推理类问题。"""
-    logger.info(f"步骤 2.2: 正在使用视觉推理模型 '{config.VISION_REASONING_MODEL}' 进行求解...")
-    return _call_vision_api(
-        image_paths,
-        prompts.PROMPT_TEMPLATES["VISUAL_REASONING"],
-        config.VISION_REASONING_MODEL,
-        stream=True,
-        extra_params={"top_p": 0.8, "temperature": 0.7}
-    )# 公共 API —— 切换模型只需修改 config.py，以下函数无需改动
     """对图片内容进行问题类型分类，返回 CODING / MULTIPLE_CHOICE / ... 等标签。"""
     logger.info("步骤 1: 正在进行问题类型分类...")
     response = _call_vision_api(

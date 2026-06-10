@@ -21,6 +21,9 @@ router = APIRouter()
 task_manager = None
 pipeline_service = None
 
+# 任务取消事件存储
+_task_cancel_events: dict[str, threading.Event] = {}
+
 
 class TaskEventBus:
     """Per-task event bus — 广播进度事件给同一任务的所有 SSE 订阅者。"""
@@ -146,6 +149,10 @@ async def stream_task(task_id: str, thinking: bool = False):
             should_start = True
 
     if should_start:
+        # 创建取消事件
+        cancel_event = threading.Event()
+        _task_cancel_events[task_id] = cancel_event
+
         def _on_progress(event: dict) -> None:
             event_bus.publish(task_id, event)
 
@@ -155,6 +162,7 @@ async def stream_task(task_id: str, thinking: bool = False):
             finally:
                 with _proc_lock:
                     _processing_locks.pop(task_id, None)
+                _task_cancel_events.pop(task_id, None)
                 event_bus.cleanup(task_id)
 
         thread = threading.Thread(target=_run, daemon=True)
@@ -163,14 +171,64 @@ async def stream_task(task_id: str, thinking: bool = False):
     async def _event_generator():
         init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
         yield f"event: init\ndata: {json.dumps(init_event, ensure_ascii=False)}\n\n"
+
+        # SSE 心跳间隔（秒）
+        heartbeat_interval = 30
+        last_heartbeat = time.time()
+
         while True:
-            event = await q.get()
-            ev_type = event.get("type", "message")
-            yield f"event: {ev_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-            if event["type"] in ("done", "error"):
+            try:
+                # 使用带超时的 get，以便发送心跳
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                except asyncio.TimeoutError:
+                    # 发送心跳
+                    now = time.time()
+                    if now - last_heartbeat >= heartbeat_interval:
+                        yield ": heartbeat\n\n"
+                        last_heartbeat = now
+                    continue
+
+                ev_type = event.get("type", "message")
+                yield f"event: {ev_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+                if event["type"] in ("done", "error"):
+                    break
+            except asyncio.CancelledError:
+                # 客户端断开连接
+                event_bus.unsubscribe(task_id, q)
+                raise
+            except Exception as e:
+                # 其他错误，记录并继续
+                yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
                 break
 
     return StreamingResponse(_event_generator(), media_type="text/event-stream")
+
+
+@router.delete("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """取消正在处理的任务。"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+
+    if task["status"] not in ("pending", "processing"):
+        return JSONResponse({"error": "任务无法取消（已完成或失败）"}, status_code=400)
+
+    cancel_event = _task_cancel_events.get(task_id)
+    if cancel_event:
+        cancel_event.set()
+
+    # 更新任务状态
+    task_manager.update_task(task_id, status="failed", error_message="用户取消任务")
+
+    # 推送取消事件
+    event_bus.publish(task_id, {"type": "error", "message": "任务已被用户取消"})
+
+    return {"status": "ok", "message": "任务取消请求已发送"}
+
+
 @router.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
     """获取单个任务的详情（含解答内容和图片 URL）。"""

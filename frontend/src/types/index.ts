@@ -1,12 +1,13 @@
 // ---- SSE Events ----
 export interface SSEEvent {
-  type: "init" | "status" | "reasoning" | "chunk" | "done" | "error";
+  type: "init" | "status" | "reasoning" | "chunk" | "done" | "error" | "auto_imported";
   task_id?: string;
   num_images?: number;
   phase?: string;
   message?: string;
   content?: string;
   filename?: string;
+  source?: string; // for auto_imported: "monitor"
 }
 
 // ---- Task (from REST API) ----

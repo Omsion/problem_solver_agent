@@ -7,14 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 from problem_solver_agent.config import (
-    reclassify_problem_type,
-    map_final_type,
-    determine_solver,
     ML_KEYWORDS,
     CODING_KEYWORDS,
     NUM_WORKERS,
     OCR_PARALLEL_WORKERS,
     VISION_PROVIDER_NAME,
+)
+from problem_solver_agent.pipeline import (
+    reclassify_problem_type,
+    map_final_type,
+    determine_solver,
 )
 
 
