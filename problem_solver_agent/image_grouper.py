@@ -327,6 +327,17 @@ class ImageGrouper:
             temp_solution_path.rename(final_solution_path)
             logger.info(f"[{thread_name}] 解答已成功保存至: {final_solution_path}")
 
+            # 同步到 webapp/solutions 供 Web 端查看
+            try:
+                from pathlib import Path
+                webapp_solution_dir = Path(__file__).resolve().parent.parent / "webapp" / "solutions"
+                webapp_solution_dir.mkdir(parents=True, exist_ok=True)
+                webapp_solution_path = webapp_solution_dir / final_solution_path.name
+                shutil.copy2(final_solution_path, webapp_solution_path)
+                logger.info(f"[{thread_name}] 解答已同步到 webapp/solutions: {webapp_solution_path}")
+            except Exception as e:
+                logger.warning(f"[{thread_name}] 同步解答到 webapp/solutions 失败: {e}")
+
         except Exception as e:
             # --- 异常处理 ---
             logger.error(f"[{thread_name}] 处理流水线时发生错误: {e}", exc_info=True)

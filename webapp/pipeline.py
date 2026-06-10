@@ -88,6 +88,16 @@ class PipelineService:
             final_path = self._generate_filename(transcribed_text, final_type, task_id)
             temp_path.replace(final_path)
 
+            # 同步到 ROOT_DIR/solutions 供手机端 Samba 查看
+            try:
+                core_config.SOLUTION_DIR.mkdir(parents=True, exist_ok=True)
+                root_solution_path = core_config.SOLUTION_DIR / final_path.name
+                import shutil
+                shutil.copy2(final_path, root_solution_path)
+                logger.info("解答已同步到 %s", root_solution_path)
+            except Exception as e:
+                logger.warning("同步解答到 ROOT_DIR/solutions 失败: %s", e)
+
             # 上传图片保留在 uploads/{task_id}/ 中，供历史查阅
             self.task_manager.update_task(task_id, status="completed", solution_path=str(final_path), filename=final_path.name)
             self._cleanup_old()
