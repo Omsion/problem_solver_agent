@@ -90,6 +90,8 @@ class TaskEventBus:
 event_bus = TaskEventBus()
 _processing_locks: dict[str, bool] = {}
 _proc_lock = threading.Lock()
+# 记录已检测到的远程连接 IP（避免重复推送 remote_connected 事件）
+_remote_connected_ips: set[str] = set()
 
 
 def init_router(tm, ps):
@@ -303,13 +305,36 @@ async def list_tasks(limit: int = 100):
 
 
 @router.get("/api/events/stream")
-async def stream_global_events():
-    """全局 SSE 端点 — 接收 auto_imported 等广播事件。"""
+async def stream_global_events(request: Request):
+    """全局 SSE 端点 — 接收 auto_imported 等广播事件。
+
+    同时检测远程客户端连接：当来自非本地 IP 的客户端（如手机扫码）连接时，
+    推送 remote_connected 事件告知桌面端可以隐藏扫码按钮。
+    """
     q = event_bus.subscribe_global()
+
+    # 检测远程客户端连接
+    client_host = request.client.host if request.client else "unknown"
+    lan_ip = _get_lan_ip()
+    is_client_remote = client_host not in ("127.0.0.1", "::1", "localhost", lan_ip)
+    should_notify_remote = is_client_remote and client_host not in _remote_connected_ips
+
+    if should_notify_remote:
+        _remote_connected_ips.add(client_host)
 
     async def _event_generator():
         # 发送 init 事件确认连接建立
         yield f"event: init\ndata: {json.dumps({'type': 'init', 'message': 'connected'}, ensure_ascii=False)}\n\n"
+
+        # 如果连接来自远程设备，推送全局 remote_connected 事件
+        if should_notify_remote:
+            rc_event = json.dumps({
+                "type": "remote_connected",
+                "client_ip": client_host,
+            }, ensure_ascii=False)
+            yield f"event: remote_connected\ndata: {rc_event}\n\n"
+            # 同步发布到全局事件总线，其他已连接的全局 SSE 订阅者也能收到
+            event_bus.publish_global({"type": "remote_connected", "client_ip": client_host})
 
         # SSE 心跳间隔（秒）
         heartbeat_interval = 30

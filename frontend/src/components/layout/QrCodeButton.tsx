@@ -1,30 +1,36 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useTaskStore } from "../../stores/useTaskStore";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 export const QrCodeButton = () => {
   const [open, setOpen] = useState(false);
-  const [isTouch, setIsTouch] = useState(false);
+  const remoteConnected = useTaskStore((s) => s.remoteConnected);
+  const isMobile = useIsMobile();
 
-  useEffect(() => {
-    setIsTouch("ontouchstart" in window || navigator.maxTouchPoints > 0);
-  }, []);
+  // 移动端不显示扫码按钮（用户已在手机上访问）
+  if (isMobile) return null;
 
-  // 在触摸设备上隐藏扫码按钮（用户已在手机上访问）
-  if (isTouch) return null;
+  // 远程客户端已连接 → 隐藏按钮
+  if (remoteConnected) return null;
 
   return (
     <>
       <button
         onClick={() => setOpen(true)}
-        className="px-3 py-1.5 text-sm font-medium rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 cursor-pointer transition-colors"
+        className="px-3 py-1.5 text-sm font-medium rounded-md text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 cursor-pointer transition-colors flex items-center gap-1.5"
         title="手机扫码访问"
       >
-        📱 手机扫码
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m0 0v-1m0-5V7a1 1 0 00-1-1h-4a1 1 0 00-1 1v3m4 0H9m3 0v3m0-3V7m0 11v-4" />
+        </svg>
+        <span className="hidden sm:inline">手机扫码</span>
       </button>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setOpen(false)}>
           <div
-            className="bg-white rounded-xl shadow-xl p-6 flex flex-col items-center gap-4 max-w-xs w-full"
+            className="bg-white rounded-xl shadow-xl p-6 flex flex-col items-center gap-4 max-w-xs w-full mx-4"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-base font-semibold text-gray-900">手机扫码访问</h3>

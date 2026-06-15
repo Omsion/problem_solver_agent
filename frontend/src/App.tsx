@@ -69,13 +69,29 @@ function MainPage() {
         if (cancelled) return;
         setActiveTaskId(taskParam);
         setHistoryImages(image_urls);
-        updateProgress(taskParam, {
-          phase: task.status === "completed" ? "done" : "error",
-          message: task.status === "completed" ? "解答完成" : "任务失败",
-          answer: solution_content,
-          filename: task.filename,
-          error: task.error_message,
-        });
+
+        if (task.status === "completed") {
+          updateProgress(taskParam, {
+            phase: "done",
+            message: "解答完成",
+            answer: solution_content,
+            filename: task.filename,
+          });
+        } else if (task.status === "failed") {
+          updateProgress(taskParam, {
+            phase: "error",
+            message: "任务失败",
+            error: task.error_message,
+          });
+        } else {
+          // 任务仍在处理中 — 连接 SSE 继续接收进度
+          updateProgress(taskParam, {
+            phase: "solving",
+            message: "正在调用求解器生成解答…",
+            answer: solution_content,
+          });
+          connectSSE(taskParam, true);
+        }
       } catch (err) {
         if (!cancelled) console.error("加载任务失败:", err);
       } finally {

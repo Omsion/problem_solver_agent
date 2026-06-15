@@ -19,6 +19,10 @@ interface TaskState {
   onAutoImportedTask: ((taskId: string, numImages: number) => void) | null;
   setOnAutoImportedTask: (cb: ((taskId: string, numImages: number) => void) | null) => void;
 
+  /** Whether a remote client (e.g. phone via QR code) has connected */
+  remoteConnected: boolean;
+  setRemoteConnected: (val: boolean) => void;
+
   /** Connect SSE for a task and start streaming. */
   connectSSE: (taskId: string, thinking?: boolean) => void;
   /** Disconnect SSE for a task. */
@@ -54,6 +58,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   seenAutoImportedTasks: new Set(),
   onAutoImportedTask: null,
   setOnAutoImportedTask: (cb) => set({ onAutoImportedTask: cb }),
+  remoteConnected: false,
+  setRemoteConnected: (val) => set({ remoteConnected: val }),
 
   connectSSE: (taskId, thinking = true) => {
     // Close existing connection if any
@@ -417,11 +423,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       } catch { /* ignore */ }
     });
 
+    es.addEventListener("remote_connected", () => {
+      get().setRemoteConnected(true);
+    });
+
     es.onmessage = (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);
         if (data.type === "auto_imported") {
           handleAutoImported(data);
+        } else if (data.type === "remote_connected") {
+          get().setRemoteConnected(true);
         }
       } catch { /* ignore */ }
     };
