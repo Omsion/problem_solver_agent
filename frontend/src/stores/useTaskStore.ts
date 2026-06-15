@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ProgressState } from "../types";
-import { sseUrl } from "../api/client";
+import { sseUrl, globalSseUrl } from "../api/client";
 
 interface TaskState {
   /** Currently active task ID (persists across navigation) */
@@ -11,6 +11,8 @@ interface TaskState {
   progress: Record<string, ProgressState>;
   /** Active EventSource connections */
   connections: Record<string, EventSource>;
+  /** Global EventSource connection for auto-import events */
+  globalConnection: EventSource | null;
   /** Auto-imported task IDs that we've seen (for deduplication) */
   seenAutoImportedTasks: Set<string>;
   /** Callback when a new task is auto-imported */
@@ -21,6 +23,10 @@ interface TaskState {
   connectSSE: (taskId: string, thinking?: boolean) => void;
   /** Disconnect SSE for a task. */
   disconnectSSE: (taskId: string) => void;
+  /** Connect global SSE for auto-import events. */
+  connectGlobalSSE: () => void;
+  /** Disconnect global SSE. */
+  disconnectGlobalSSE: () => void;
   /** Update a single task's progress (used by SSE event handler). */
   updateProgress: (taskId: string, patch: Partial<ProgressState>) => void;
   /** Reconnect SSE for a task without resetting accumulated progress. */
@@ -44,6 +50,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   progress: {},
   connections: {},
+  globalConnection: null,
   seenAutoImportedTasks: new Set(),
   onAutoImportedTask: null,
   setOnAutoImportedTask: (cb) => set({ onAutoImportedTask: cb }),
@@ -374,5 +381,69 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((s) => ({
       connections: { ...s.connections, [taskId]: es },
     }));
+  },
+
+  connectGlobalSSE: () => {
+    const existing = get().globalConnection;
+    if (existing) {
+      existing.close();
+    }
+
+    const url = globalSseUrl();
+    const es = new EventSource(url);
+
+    const handleAutoImported = (data: any) => {
+      const taskId = data.task_id;
+      const numImages = data.num_images || 0;
+      if (!taskId) return;
+
+      const seen = get().seenAutoImportedTasks;
+      if (seen.has(taskId)) return;
+
+      set((s) => ({
+        seenAutoImportedTasks: new Set([...s.seenAutoImportedTasks, taskId])
+      }));
+
+      const cb = get().onAutoImportedTask;
+      if (cb) {
+        cb(taskId, numImages);
+      }
+    };
+
+    es.addEventListener("auto_imported", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleAutoImported(data);
+      } catch { /* ignore */ }
+    });
+
+    es.onmessage = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "auto_imported") {
+          handleAutoImported(data);
+        }
+      } catch { /* ignore */ }
+    };
+
+    es.onerror = () => {
+      // 全局连接出错时，尝试在5秒后重连
+      set({ globalConnection: null });
+      setTimeout(() => {
+        if (!get().globalConnection) {
+          get().connectGlobalSSE();
+        }
+      }, 5000);
+    };
+
+    set({ globalConnection: es });
+  },
+
+  disconnectGlobalSSE: () => {
+    const es = get().globalConnection;
+    if (es) {
+      es.close();
+      set({ globalConnection: null });
+    }
   },
 }));

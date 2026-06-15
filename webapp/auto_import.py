@@ -101,7 +101,15 @@ class WebAutoImporter:
             # 2. 创建 Web 任务
             self.task_manager.create_task(task_id, len(web_image_paths))
 
-            # 3. 推送 SSE 事件通知前端有新任务 (type="auto_imported")
+            # 3. 推送 SSE 事件通知前端有新任务
+            # 先发布到全局事件总线，让前端立即知道有新任务
+            event_bus.publish_global({
+                "type": "auto_imported",
+                "task_id": task_id,
+                "num_images": len(web_image_paths),
+                "source": "monitor"
+            })
+            # 同时也发布到该任务的事件总线（用于向后兼容）
             event_bus.publish(task_id, {
                 "type": "auto_imported",
                 "task_id": task_id,

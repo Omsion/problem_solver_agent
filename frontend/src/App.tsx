@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { HashRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
@@ -43,6 +43,9 @@ function MainPage() {
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const setActiveTaskId = useTaskStore((s) => s.setActiveTaskId);
   const connectSSE = useTaskStore((s) => s.connectSSE);
+  const connectGlobalSSE = useTaskStore((s) => s.connectGlobalSSE);
+  const disconnectGlobalSSE = useTaskStore((s) => s.disconnectGlobalSSE);
+  const setOnAutoImportedTask = useTaskStore((s) => s.setOnAutoImportedTask);
   const updateProgress = useTaskStore((s) => s.updateProgress);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -51,9 +54,6 @@ function MainPage() {
 
   const taskParam = useHashTaskId();
   const [historyImages, setHistoryImages] = useState<string[]>([]);
-
-  // 轮询状态：记录最新的任务创建时间，用于检测新任务
-  const lastTaskTimeRef = useRef<number>(Date.now());
   const [hasNewAutoTask, setHasNewAutoTask] = useState(false);
   const [newTaskInfo, setNewTaskInfo] = useState<{ id: string; numImages: number } | null>(null);
 
@@ -96,49 +96,36 @@ function MainPage() {
     useTaskStore.getState().reconnectSSE(activeTaskId);
   }, [activeTaskId]);
 
-  // 轮询检测自动导入的新任务
+  // 连接全局 SSE 监听自动导入事件
   useEffect(() => {
-    let cancelled = false;
+    // 设置回调处理自动导入的新任务
+    setOnAutoImportedTask((taskId: string, numImages: number) => {
+      setNewTaskInfo({ id: taskId, numImages });
+      setHasNewAutoTask(true);
+    });
 
-    const checkNewTasks = async () => {
-      if (cancelled) return;
-      try {
-        const { tasks } = await listTasks(20);
-        if (cancelled || tasks.length === 0) return;
+    // 连接全局 SSE
+    connectGlobalSSE();
 
-        // 找到比上次检查时间更新的任务
-        const latestTask = tasks[0];
-        if (latestTask.created_at * 1000 > lastTaskTimeRef.current) {
-          lastTaskTimeRef.current = latestTask.created_at * 1000;
-
-          // 检查是否是最近创建的（30秒内），避免页面加载时误触发
-          const ageMs = Date.now() - latestTask.created_at * 1000;
-          if (ageMs < 30000) {
-            setNewTaskInfo({ id: latestTask.id, numImages: latestTask.num_images });
-            setHasNewAutoTask(true);
-          }
-        }
-      } catch {
-        // 静默忽略轮询错误
-      }
+    return () => {
+      setOnAutoImportedTask(null);
+      disconnectGlobalSSE();
     };
+  }, [connectGlobalSSE, disconnectGlobalSSE, setOnAutoImportedTask]);
 
-    // 初始化时设置基准时间
-    (async () => {
+  // 初始化时获取最新任务时间作为基准
+  useEffect(() => {
+    const init = async () => {
       try {
         const { tasks } = await listTasks(1);
         if (tasks.length > 0) {
-          lastTaskTimeRef.current = tasks[0].created_at * 1000;
+          // 预填充已见过的任务集合，避免页面加载时误触发
+          const seen = useTaskStore.getState().seenAutoImportedTasks;
+          tasks.forEach(t => seen.add(t.id));
         }
       } catch { /* ignore */ }
-    })();
-
-    // 开始轮询：每5秒检查一次
-    const interval = setInterval(checkNewTasks, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
     };
+    init();
   }, []);
 
   // 自动切换到新导入的任务

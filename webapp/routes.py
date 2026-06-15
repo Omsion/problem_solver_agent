@@ -31,6 +31,7 @@ class TaskEventBus:
     def __init__(self) -> None:
         self._queues: dict[str, list[asyncio.Queue]] = {}
         self._history: dict[str, list[dict]] = {}
+        self._global_queues: list[asyncio.Queue] = []
         self._lock = threading.Lock()
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
@@ -39,6 +40,13 @@ class TaskEventBus:
             self._queues.setdefault(task_id, []).append(q)
             for event in self._history.get(task_id, []):
                 q.put_nowait(event)
+        return q
+
+    def subscribe_global(self) -> asyncio.Queue:
+        """订阅全局事件（用于 auto_imported 等广播事件）。"""
+        q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        with self._lock:
+            self._global_queues.append(q)
         return q
 
     def publish(self, task_id: str, event: dict) -> None:
@@ -51,12 +59,27 @@ class TaskEventBus:
             except asyncio.QueueFull:
                 pass
 
+    def publish_global(self, event: dict) -> None:
+        """发布全局广播事件。"""
+        with self._lock:
+            queues = list(self._global_queues)
+        for q in queues:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
     def unsubscribe(self, task_id: str, q: asyncio.Queue) -> None:
         with self._lock:
             if task_id in self._queues:
                 self._queues[task_id] = [x for x in self._queues[task_id] if x is not q]
                 if not self._queues[task_id]:
                     del self._queues[task_id]
+
+    def unsubscribe_global(self, q: asyncio.Queue) -> None:
+        """取消订阅全局事件。"""
+        with self._lock:
+            self._global_queues = [x for x in self._global_queues if x is not q]
 
     def cleanup(self, task_id: str) -> None:
         with self._lock:
@@ -277,6 +300,42 @@ async def list_tasks(limit: int = 100):
     """获取最近的任务列表。"""
     tasks = task_manager.get_recent_tasks(limit=limit)
     return {"tasks": tasks}
+
+
+@router.get("/api/events/stream")
+async def stream_global_events():
+    """全局 SSE 端点 — 接收 auto_imported 等广播事件。"""
+    q = event_bus.subscribe_global()
+
+    async def _event_generator():
+        # 发送 init 事件确认连接建立
+        yield f"event: init\ndata: {json.dumps({'type': 'init', 'message': 'connected'}, ensure_ascii=False)}\n\n"
+
+        # SSE 心跳间隔（秒）
+        heartbeat_interval = 30
+        last_heartbeat = time.time()
+
+        while True:
+            try:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                except asyncio.TimeoutError:
+                    now = time.time()
+                    if now - last_heartbeat >= heartbeat_interval:
+                        yield ": heartbeat\n\n"
+                        last_heartbeat = now
+                    continue
+
+                ev_type = event.get("type", "message")
+                yield f"event: {ev_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except asyncio.CancelledError:
+                event_bus.unsubscribe_global(q)
+                raise
+            except Exception as e:
+                yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                break
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
 
 
 # ==============================================================================

@@ -49,3 +49,8 @@ export function sseUrl(taskId: string, thinking = false): string {
   const qs = params.toString();
   return `${BASE}/tasks/${taskId}/stream${qs ? "?" + qs : ""}`;
 }
+
+/** Construct global SSE URL for listening to auto-import events. */
+export function globalSseUrl(): string {
+  return `${BASE}/events/stream`;
+}
