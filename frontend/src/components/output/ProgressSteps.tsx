@@ -1,4 +1,5 @@
 import type { ProgressState } from "../../types";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 interface Props {
   phase: ProgressState["phase"];
@@ -24,9 +25,14 @@ const phaseOrder: Record<string, number> = {
 export const ProgressSteps = ({ phase, message }: Props) => {
   const currentIdx = phaseOrder[phase] ?? -1;
   const isError = phase === "error";
+  const isMobile = useIsMobile();
+
+  const circleSize = isMobile ? "w-6 h-6" : "w-8 h-8";
+  const lineWidth = isMobile ? "w-6" : "w-8";
+  const textSize = isMobile ? "text-[10px]" : "text-xs";
 
   return (
-    <div className="py-4">
+    <div className="py-2 sm:py-4">
       <div className="flex items-center justify-center gap-0">
         {steps.map((step, i) => {
           const isCompleted = currentIdx > i;
@@ -37,7 +43,7 @@ export const ProgressSteps = ({ phase, message }: Props) => {
               {/* Step circle */}
               <div className="flex flex-col items-center">
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
+                  className={`${circleSize} rounded-full flex items-center justify-center ${textSize} font-semibold transition-colors ${
                     isError
                       ? "bg-red-100 text-red-600"
                       : isCompleted
@@ -48,7 +54,7 @@ export const ProgressSteps = ({ phase, message }: Props) => {
                   }`}
                 >
                   {isCompleted ? (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className={`${isMobile ? "w-3 h-3" : "w-4 h-4"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
                   ) : isActive ? (
@@ -57,14 +63,14 @@ export const ProgressSteps = ({ phase, message }: Props) => {
                     i + 1
                   )}
                 </div>
-                <span className={`text-xs mt-1 ${isActive ? "text-indigo-600 font-medium" : "text-gray-400"}`}>
+                <span className={`${textSize} mt-1 ${isActive ? "text-indigo-600 font-medium" : "text-gray-400"}`}>
                   {step.label}
                 </span>
               </div>
               {/* Connecting line */}
               {i < steps.length - 1 && (
                 <div
-                  className={`w-8 h-0.5 mx-1 mb-5 transition-colors ${
+                  className={`${lineWidth} h-0.5 mx-0.5 sm:mx-1 mb-5 transition-colors ${
                     isCompleted ? "bg-indigo-400" : "bg-gray-200"
                   }`}
                 />
@@ -74,7 +80,7 @@ export const ProgressSteps = ({ phase, message }: Props) => {
         })}
       </div>
       {message && (
-        <p className={`text-center text-sm mt-3 ${isError ? "text-red-500" : "text-gray-500"}`}>
+        <p className={`text-center text-sm mt-2 sm:mt-3 ${isError ? "text-red-500" : "text-gray-500"}`}>
           {message}
         </p>
       )}

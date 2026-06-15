@@ -1,6 +1,7 @@
 import type { Task } from "../../types";
 import { formatTs, statusLabel } from "../../lib/utils";
 import { Badge } from "../ui/badge";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 const statusVariant: Record<string, "default" | "info" | "success" | "error"> = {
   pending: "default",
@@ -16,10 +17,12 @@ interface Props {
 }
 
 export const TaskCard = ({ task, onDelete, onClick }: Props) => {
+  const isMobile = useIsMobile();
+
   return (
     <div
       onClick={() => onClick(task.id)}
-      className="flex items-center gap-4 px-4 h-14 bg-white border border-gray-100 rounded-lg hover:shadow-sm hover:border-gray-200 transition-all cursor-pointer"
+      className="flex items-center gap-2 sm:gap-4 px-3 sm:px-4 h-14 bg-white border border-gray-100 rounded-lg hover:shadow-sm hover:border-gray-200 transition-all cursor-pointer"
     >
       <Badge variant={statusVariant[task.status] ?? "default"}>
         {task.status === "processing" && (
@@ -37,17 +40,19 @@ export const TaskCard = ({ task, onDelete, onClick }: Props) => {
         )}
       </div>
 
-      <div className="flex items-center gap-3 text-xs text-gray-400 shrink-0">
-        <span>{task.num_images} 张图</span>
-        <span>{formatTs(task.created_at)}</span>
-      </div>
+      {!isMobile && (
+        <div className="flex items-center gap-3 text-xs text-gray-400 shrink-0">
+          <span>{task.num_images} 张图</span>
+          <span>{formatTs(task.created_at)}</span>
+        </div>
+      )}
 
       <button
         onClick={(e) => {
           e.stopPropagation();
           onDelete(task.id);
         }}
-        className="text-gray-300 hover:text-red-500 transition-colors p-1 cursor-pointer"
+        className="text-gray-300 hover:text-red-500 transition-colors p-1 min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer"
         title="删除"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

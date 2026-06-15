@@ -1,4 +1,5 @@
 import { useUploadStore } from "../../stores/useUploadStore";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
 
 interface Props {
@@ -9,15 +10,16 @@ interface Props {
 export const UploadActions = ({ onStart, loading }: Props) => {
   const files = useUploadStore((s) => s.files);
   const clearFiles = useUploadStore((s) => s.clearFiles);
+  const isMobile = useIsMobile();
 
   if (files.length === 0) return null;
 
   return (
-    <div className="flex items-center justify-between gap-3 pt-3">
-      <Button variant="ghost" size="sm" onClick={clearFiles}>
+    <div className={`flex items-center justify-between gap-3 pt-3 ${isMobile ? "flex-col" : ""}`}>
+      <Button variant="ghost" size="sm" onClick={clearFiles} className={isMobile ? "w-full touch-target" : ""}>
         清除全部
       </Button>
-      <Button size="lg" onClick={onStart} disabled={loading}>
+      <Button size="lg" onClick={onStart} disabled={loading} className={isMobile ? "w-full touch-target" : ""}>
         {loading ? (
           <>
             <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">

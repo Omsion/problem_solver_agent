@@ -1,8 +1,10 @@
 import { Link, useLocation } from "react-router-dom";
 import { QrCodeButton } from "./QrCodeButton";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 export const AppHeader = () => {
   const { pathname } = useLocation();
+  const isMobile = useIsMobile();
 
   const linkClass = (path: string) =>
     `px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
@@ -12,15 +14,15 @@ export const AppHeader = () => {
     }`;
 
   return (
-    <header className="sticky top-0 z-10 h-14 bg-white border-b border-gray-200 shadow-sm flex items-center justify-between px-6 shrink-0">
-      <div className="flex items-center gap-3">
-        <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+    <header className={`sticky top-0 z-10 h-14 bg-white border-b border-gray-200 shadow-sm flex items-center justify-between shrink-0 ${isMobile ? "px-3" : "px-6"}`}>
+      <div className="flex items-center gap-2 sm:gap-3">
+        <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
           <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
           </svg>
         </div>
-        <h1 className="text-sm font-bold text-indigo-600 tracking-tight">
+        <h1 className={`text-sm font-bold text-indigo-600 tracking-tight ${isMobile ? "hidden" : ""}`}>
           自动化解题 Agent
         </h1>
       </div>

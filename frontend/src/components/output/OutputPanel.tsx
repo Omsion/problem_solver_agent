@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { useTaskStore } from "../../stores/useTaskStore";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 import { ProgressSteps } from "./ProgressSteps";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { ReadingMode } from "./ReadingMode";
 
 interface Props {
   taskId: string | null;
@@ -12,7 +14,9 @@ type Tab = "answer" | "thinking";
 
 export const OutputPanel = ({ taskId }: Props) => {
   const progress = useTaskStore((s) => (taskId ? s.progress[taskId] : undefined));
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>("answer");
+  const [isReadingMode, setIsReadingMode] = useState(false);
 
   useEffect(() => {
     if (progress?.phase === "done") setTab("answer");
@@ -48,10 +52,10 @@ export const OutputPanel = ({ taskId }: Props) => {
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar */}
-      <div className="flex border-b border-gray-200 px-4">
+      <div className="flex border-b border-gray-200 px-2 sm:px-4">
         <button
           onClick={() => setTab("answer")}
-          className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer ${
+          className={`px-3 sm:px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer ${
             tab === "answer"
               ? "border-indigo-600 text-indigo-600"
               : "border-transparent text-gray-400 hover:text-gray-600"
@@ -62,7 +66,7 @@ export const OutputPanel = ({ taskId }: Props) => {
         {progress.thinking ? (
           <button
             onClick={() => setTab("thinking")}
-            className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer ${
+            className={`px-3 sm:px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer ${
               tab === "thinking"
                 ? "border-indigo-600 text-indigo-600"
                 : "border-transparent text-gray-400 hover:text-gray-600"
@@ -74,6 +78,20 @@ export const OutputPanel = ({ taskId }: Props) => {
             </span>
           </button>
         ) : null}
+        {/* Reading mode button */}
+        {tab === "answer" && progress.answer && (
+          <button
+            onClick={() => setIsReadingMode(true)}
+            className="ml-auto px-2 sm:px-3 py-2.5 text-sm font-medium text-gray-400 hover:text-indigo-600 transition-colors cursor-pointer touch-target flex items-center gap-1"
+            title="阅读模式"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+            </svg>
+            {isMobile ? null : <span className="hidden sm:inline">阅读模式</span>}
+          </button>
+        )}
       </div>
 
       {/* Tab content */}
@@ -102,6 +120,14 @@ export const OutputPanel = ({ taskId }: Props) => {
           </div>
         )}
       </div>
+
+      {/* Reading mode overlay */}
+      {isReadingMode && progress.answer && (
+        <ReadingMode
+          content={progress.answer}
+          onClose={() => setIsReadingMode(false)}
+        />
+      )}
     </div>
   );
 };

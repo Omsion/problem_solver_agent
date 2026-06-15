@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useLayoutStore } from "../../stores/useLayoutStore";
+import { useIsMobile } from "../../hooks/useMediaQuery";
+import { MobileLayout } from "./MobileLayout";
 
 interface Props {
   left: ReactNode;
@@ -8,7 +10,12 @@ interface Props {
 }
 
 export const SplitPanelLayout = ({ left, right }: Props) => {
+  const isMobile = useIsMobile();
   const setRatio = useLayoutStore((s) => s.setLeftPanelRatio);
+
+  if (isMobile) {
+    return <MobileLayout left={left} right={right} />;
+  }
 
   return (
     <Group orientation="horizontal" className="flex-1 min-h-0">

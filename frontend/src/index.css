@@ -7,6 +7,7 @@ body {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* ===== Markdown 正文样式 ===== */
@@ -49,6 +50,17 @@ body {
   border-radius: 8px;
   overflow-x: auto;
   margin: 1em 0;
+  position: relative;
+}
+
+/* Code block wrapper (for CodeBlock component) */
+.code-block-wrapper {
+  margin: 1em 0;
+}
+
+.code-block-wrapper pre {
+  margin: 0;
+  border-radius: 0 0 8px 8px;
 }
 
 .markdown-body pre code {
@@ -93,11 +105,70 @@ body {
   margin-bottom: 0.25em;
 }
 
+/* ===== 移动端 Markdown 优化 ===== */
+@media (max-width: 767px) {
+  .markdown-body {
+    line-height: 1.9;
+    font-size: 16px;
+  }
+
+  .markdown-body h1 { font-size: 1.35rem; }
+  .markdown-body h2 { font-size: 1.15rem; }
+  .markdown-body h3 { font-size: 1.05rem; }
+  .markdown-body h4 { font-size: 0.95rem; }
+
+  .markdown-body p {
+    margin-bottom: 1em;
+  }
+
+  .markdown-body pre {
+    margin: 1em -0.5rem;
+    border-radius: 0;
+    padding: 0.875rem 0.75rem;
+  }
+
+  .code-block-wrapper pre {
+    margin: 0;
+    border-radius: 0 0 8px 8px;
+  }
+
+  .markdown-body code {
+    font-size: 0.85em;
+    word-break: break-word;
+  }
+
+  .markdown-body pre code {
+    font-size: 0.8rem;
+    line-height: 1.6;
+  }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    padding-left: 1.25em;
+  }
+
+  .markdown-body blockquote {
+    margin: 1em -0.25rem;
+    padding-left: 0.75em;
+  }
+}
+
 /* ===== KaTeX 公式 ===== */
 .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0.5em 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 767px) {
+  .katex-display {
+    font-size: 0.9em;
+    margin-left: -0.5rem;
+    margin-right: -0.5rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
 }
 
 /* ===== Scrollbar ===== */
@@ -117,4 +188,70 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
+}
+
+/* ===== 移动端触摸优化 ===== */
+@media (max-width: 767px) {
+  /* 扩大按钮触摸区域 */
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* 防止文字选中造成的闪烁 */
+  .no-select {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* 安全区域适配 */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+}
+
+/* ===== 阅读模式样式 ===== */
+.reading-mode {
+  background: #fafafa;
+}
+
+.reading-mode.dark {
+  background: #1a1a1a;
+}
+
+.reading-mode.dark .markdown-body {
+  color: #e5e5e5;
+}
+
+.reading-mode.dark .markdown-body h1,
+.reading-mode.dark .markdown-body h2,
+.reading-mode.dark .markdown-body h3,
+.reading-mode.dark .markdown-body h4 {
+  color: #f5f5f5;
+}
+
+.reading-mode.dark .markdown-body code {
+  background: #374151;
+}
+
+.reading-mode.dark .markdown-body pre {
+  background: #0f172a;
+}
+
+.reading-mode.dark .markdown-body th {
+  background: #262626;
+}
+
+.reading-mode.dark .markdown-body th,
+.reading-mode.dark .markdown-body td {
+  border-color: #404040;
+}
+
+.reading-mode.dark .markdown-body blockquote {
+  color: #a3a3a3;
+  border-left-color: #818cf8;
 }

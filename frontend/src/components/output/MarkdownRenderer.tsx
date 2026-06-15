@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { CodeBlock } from "./CodeBlock";
 
 interface Props {
   content: string;
@@ -41,6 +42,7 @@ export const MarkdownRenderer = ({ content, className = "" }: Props) => {
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
+        components={{ code: CodeBlock }}
       >
         {normalized}
       </ReactMarkdown>
