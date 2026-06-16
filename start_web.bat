@@ -9,48 +9,10 @@ echo.
 
 cd /d "%~dp0"
 
-:: ---- 尝试激活 Conda 环境 ----
-:: 优先尝试 pytorch_271_env（用户配置），不存在则 fallback 到 llm
-call conda activate pytorch_271_env 2>nul
-if errorlevel 1 (
-    echo [*] Conda 环境 "pytorch_271_env" 不存在，尝试 "llm"...
-    call conda activate llm 2>nul
-    if errorlevel 1 (
-        echo [*] Conda 不可用，尝试直接使用 llm 环境的 Python...
-        set PYTHON=E:\ProgramData\anaconda3\envs\llm\python.exe
-        if not exist "%PYTHON%" (
-            echo [错误] 找不到 Conda 环境或 Python 解释器！
-            echo   请先手动激活 Conda 环境后运行：conda activate llm ^&^& run_web.py
-            pause
-            exit /b 1
-        )
-        goto :env_ok
-    ) else (
-        echo [✓] 已激活 Conda 环境: llm
-    )
-) else (
-    echo [✓] 已激活 Conda 环境: pytorch_271_env
-)
-set PYTHON=python
-goto :env_ok
-
-:env_skip_conda
-:: 直接路径 fallback
-if exist "E:\ProgramData\anaconda3\envs\llm\python.exe" (
-    set PYTHON=E:\ProgramData\anaconda3\envs\llm\python.exe
-    echo [✓] 直接使用 Python: %PYTHON%
-    goto :env_ok
-)
-echo [错误] 找不到可用 Python
-pause
-exit /b 1
-
-:env_ok
-
 :: ---- 检查 Python ----
-%PYTHON% --version
-if errorlevel 1 (
-    echo [错误] Python 不可用
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [错误] 未找到 Python，请先安装 Python 3.9+
     pause
     exit /b 1
 )
@@ -67,8 +29,8 @@ if not exist ".env" (
 :: ---- 检查/安装 Python 依赖 ----
 if not exist ".deps_ok" (
     echo [1/3] 安装 Python 依赖...
-    %PYTHON% -m pip install -r requirements.txt -q
-    if errorlevel 1 (
+    pip install -r requirements.txt -q
+    if %errorlevel% neq 0 (
         echo [错误] Python 依赖安装失败
         pause
         exit /b 1
@@ -85,7 +47,7 @@ if exist "frontend\package.json" (
 
     :: 检查 Node.js
     node --version >nul 2>&1
-    if errorlevel 1 (
+    if %errorlevel% neq 0 (
         echo [警告] 未找到 Node.js，跳过前端构建
         echo   后端启动后将从 webapp/static/ 读取静态文件
         goto :start_server
@@ -97,7 +59,7 @@ if exist "frontend\package.json" (
     if not exist "node_modules" (
         echo   安装前端依赖 (npm install)...
         call npm install
-        if errorlevel 1 (
+        if %errorlevel% neq 0 (
             popd
             echo [警告] 前端依赖安装失败，跳过前端构建
             goto :start_server
@@ -108,7 +70,7 @@ if exist "frontend\package.json" (
     if not exist "..\webapp\static\index.html" (
         echo   构建前端 (npm run build)...
         call npm run build
-        if errorlevel 1 (
+        if %errorlevel% neq 0 (
             popd
             echo [警告] 前端构建失败，后端仍可通过 API 工作
             goto :start_server
@@ -128,12 +90,21 @@ if exist "frontend\package.json" (
 echo [3/3] 启动 Web 服务...
 echo.
 echo ============================================
+echo   服务启动中，请在浏览器中打开:
+echo   http://localhost:8000
+echo.
+echo   手机访问（同一局域网）:
+echo   请查看终端输出的二维码地址
+echo ============================================
+echo.
+echo 按 Ctrl+C 停止服务
 echo   服务启动中，即将自动打开浏览器...
 echo   若未自动打开，请手动访问 http://localhost:8000
 echo   按 Ctrl+C 停止服务
 echo ============================================
 echo.
 
-%PYTHON% run_web.py
+python run_web.py
 
 pause
+
