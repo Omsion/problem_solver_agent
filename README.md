@@ -1,196 +1,202 @@
-# **自动化多图解题Agent**
+# 自动化多图解题 Agent
 
-**实时监控 → 智能分组 → 多模型协同，将连续截图自动转化为结构化 AI 解答。**
+**实时监控 → 智能分组 → 多模型协同，把连续截图自动变成结构化解答。**
 
-当一道复杂题目（数学、逻辑、编程挑战）内容过长无法容纳于单张截图时，本 Agent 自动将连续截取的多张图片合并为单个任务，驱动完整流水线——从问题分类、OCR 识别、内容整合，到调用推理模型求解，最终生成结构化的 Markdown 解答文档。
+一道长题目一张截图装不下时，本工具把你连续截的几张图自动归为一组，跑完
+「题型分类 → 文字识别 → 合并润色 → 模型求解」的完整流水线，并实时把过程与
+答案推送到浏览器（手机也能看）。
 
----
+提供两条入口，共用同一套流水线实现：
 
-## **核心功能**
-
-- **📂 实时文件监控**: `watchdog` 库低延迟监控截图目录，新图片到达即刻触发。
-
-- **🧠 智能图片分组**: 基于 `threading.Timer` 的时间窗口分组。自动判断用户是否完成连续截图，将短时间内的一系列图片归为同一组。
-
-- **🚀 高并发处理**: 经典的"生产者-消费者"架构。文件监控器为生产者，多个后台工作线程为消费者并行处理，高负载下依然流畅。
-
-- **🤖 多模型协同流水线**:
-
-  | 环节 | 模型 | 用途 |
-  |---|---|---|
-  | 视觉分类 | `GLM-4.6V-FlashX` | 识别题型（选择/填空/编程/视觉推理等） |
-  | OCR 转录 | `GLM-4.6V-FlashX` | 并行提取图片中文字、表格、公式 |
-  | 文本润色 | `deepseek-v4-flash` | 合并多张图 OCR 结果、去重、修正 |
-  | 视觉推理 | `GLM-4.6V` | 图形/规律类问题专项求解 |
-  | 编程求解 | `deepseek-v4-pro` | LeetCode / ACM / ML 编程题（思考模式） |
-  | 通用求解 | `deepseek-v4-pro` | 选择/填空/问答题（思考模式） |
-  | 文件命名 | `deepseek-v4-flash` | AI 自动生成信息丰富的文件名 |
-
-- **💪 健壮性设计**:
-  - **API 自动重试**: 网络波动时自动重试（次数/间隔可配）。
-  - **失败日志**: 任何步骤失败生成 `.md` 失败日志，含完整上下文。
-  - **原子化操作**: 临时文件 + 重命名机制，意外中断不产生损坏文件。
-
-- **🛠️ 辅助工具集**:
-  - `silent_screencapper.py` — 全局热键静默截图（专为在线考试设计）
-  - `remote_trigger.py` — 手机远程遥控截图（Web 服务 + 二维码）
-  - `human_typer.py` — 模拟真人打字，将 AI 代码自然输入 IDE
+- **Web 应用**（推荐）：FastAPI + React SPA，自动截图导入 + 手动上传，SSE 实时推送
+- **命令行 Agent**：只监控截图目录，处理完把 Markdown 写到 `solutions/`
 
 ---
 
-## **项目架构**
-
-事件驱动设计，模块高度解耦：
-
-1. **启动**: `main.py` 初始化配置、检查 API 健康状况、启动 `ImageGrouper` 和 `FileMonitor`。
-2. **监控**: `file_monitor.py` 后台线程监控截图目录，新图片立即传递给调度器。
-3. **分组**: `image_grouper.py` 通过可重置定时器将连续截图归组，作为任务推入队列。
-4. **处理**: 多个后台工作线程从队列取任务，执行 `_execute_pipeline`。
-5. **流水线**: 分类 → OCR → 润色 → 求解 → 命名 → 归档。
-
----
-
-## **文件结构**
-
-```
-OnlineTest/
-│
-├── .env                  # API 密钥（不入库）
-├── .gitignore
-├── LICENSE
-├── README.md
-├── requirements.txt
-│
-├── problem_solver_agent/ # 核心包
-│   ├── __init__.py       # 包定义与公共 API
-│   ├── main.py           # 主入口
-│   ├── config.py         # 所有配置（模型、路径、超时等）
-│   ├── file_monitor.py   # 文件系统监控
-│   ├── image_grouper.py  # 核心调度器 / 流水线编排
-│   ├── prompts.py        # Prompt 模板
-│   ├── vision_client.py  # 视觉 API 客户端（分类/OCR/视觉推理）
-│   ├── solver_client.py  # 求解器客户端（统一多模型接口）
-│   └── utils.py          # 工具函数
-│
-└── tools/                # 独立工具
-    ├── __init__.py
-    ├── human_typer.py
-    ├── remote_trigger.py
-    └── silent_screencapper.py
-```
-
----
-
-## **安装与配置**
+## 快速开始
 
 ### 1. 环境准备
 
 - Python 3.10+
-- `conda` 或 `venv` 虚拟环境
+- Node.js 20+（仅构建前端时需要）
 
 ### 2. 安装依赖
 
-```bash
+```powershell
 pip install -r requirements.txt
 ```
 
-### 3. 配置 API 密钥
-
-在项目根目录创建 `.env` 文件，填入密钥：
-
-```env
-DEEPSEEK_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-ZHIPU_API_KEY="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-```
-
-| 密钥 | 用途 |
-|---|---|
-| `DEEPSEEK_API_KEY` | 求解模型（deepseek-v4-pro）+ 辅助模型（deepseek-v4-flash） |
-| `ZHIPU_API_KEY` | 视觉模型（GLM-4.6V-FlashX / GLM-4.6V） |
-
-### 4. 调整配置（可选）
-
-所有可调参数在 `problem_solver_agent/config.py` 中：
-
-| 配置项 | 说明 | 默认值 |
-|---|---|---|
-| `VISION_CLASSIFY_MODEL` | 分类 + OCR 模型 | `GLM-4.6V-FlashX` |
-| `VISION_REASONING_MODEL` | 视觉推理模型 | `GLM-4.6V` |
-| `AUX_MODEL_NAME` | 文本润色 + 命名 | `deepseek-v4-flash` |
-| `SOLVER_ROUTING_CONFIG` | 路由规则（编程 / 默认） | 均 → `deepseek` |
-| `SOLVER_CONFIG["deepseek"]["model"]` | 核心求解模型 | `deepseek-v4-pro` |
-| `GROUP_TIMEOUT` | 截图分组超时（秒） | `8.0` |
-| `SOLUTION_STYLE` | 编程题风格 | `OPTIMAL` / `EXPLORATORY` |
-
-**路径自动检测**：`ROOT_DIR` 默认为项目父目录（即 `OnlineTest/` 的上级）。如需自定义，设环境变量：
+### 3. 配置密钥
 
 ```powershell
-$env:SOLVER_ROOT_DIR = "D:\MyWork"
+copy .env.example .env
 ```
 
-**切换模型只需修改 `config.py` 中的模型名称常量，无需改动业务代码。**
+编辑 `.env`，至少填入两个密钥：
+
+| 变量 | 用途 | 获取地址 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | 求解模型 `deepseek-v4-pro` + 辅助模型 `deepseek-v4-flash` | platform.deepseek.com |
+| `ZHIPU_API_KEY` | 视觉模型 `GLM-4.6V` 系列（分类 / OCR / 视觉推理） | open.bigmodel.cn |
+
+完整可配置项见 `.env.example`（每项都有注释说明）。
+
+### 4. 构建前端并启动
+
+```powershell
+cd frontend
+npm install
+npm run build     # 产物输出到 webapp/static/
+cd ..
+python run_web.py # 默认 http://localhost:8000
+```
+
+Windows 上也可以直接双击 `start_web.bat`（会做版本与依赖检查）。
+
+### 5. 开始使用
+
+1. 打开 `http://localhost:8000`
+2. 用**静默截图工具**连续截图（见下），或直接在网页/手机上上传图片
+3. 停止截图约 8 秒后自动分组并开始处理
+4. 在「解题台」实时查看过程，答案生成后一键复制
 
 ---
 
-## **使用方法**
+## 三种输入方式
 
-> 所有命令在项目根目录执行，并确保已激活包含依赖的虚拟环境。
-> 截图 / 热键工具需**以管理员身份**运行终端。
+| 方式 | 命令 / 入口 | 说明 |
+|---|---|---|
+| **热键静默截图** | `python tools/silent_screencapper.py`（需管理员权限） | 默认 `Alt+X`，用 GDI 直接抓屏，无闪烁。截图落到监控目录后自动触发 |
+| **手机上传** | 网页右上角「手机扫码」 | 手机与电脑同一局域网，扫码后可直接传图/拍照 |
+| **网页手动上传** | 解题台左侧 | 拖拽、点击选择或直接粘贴截图 |
 
-### 启动主 Agent
+另外 `python tools/remote_trigger.py` 提供手机远程触发截图的备用方案。
+
+---
+
+## 目录与产物路径
+
+默认情况下，工作根目录是**项目目录的父目录**（历史行为）：
+
+```
+<工作根目录>/                 # 默认 = OnlineTest 的上一级，可用 SOLVER_ROOT_DIR 覆盖
+├── Screenshots/              # 截图监控目录（工具往里写，Agent 从这里读）
+├── processed/                # 处理完的截图归档
+└── solutions/                # Markdown 解答（方便文件管理器/Samba 查看）
+
+OnlineTest/
+├── webapp/solutions/         # Web 端解答（网页「任务」页读取这里）
+├── webapp/uploads/           # 每次上传的原图（按任务 id 分目录）
+├── webapp/cache/images/      # 图片预处理缓存（可安全删除）
+└── webapp/data/tasks.db      # 任务数据库（可安全删除，会重建）
+```
+
+⚠️ 默认的 `ROOT_DIR` 会落在项目**外面**（例如 `D:\Users\wzw\Pictures`）。
+如果你希望所有产物都留在项目内，在 `.env` 里显式指定：
+
+```env
+SOLVER_ROOT_DIR=D:\Users\wzw\Pictures\OnlineTest\workspace
+```
+
+启动时终端会打印实际使用的各个路径，便于确认产物去哪了。
+
+---
+
+## 界面说明
+
+| 页面 | 用途 |
+|---|---|
+| **解题台** | 顶部状态条显示自动截图是否在跑；左栏任务时间线；右栏解答与实时进度（阶段耗时、字符数、取消/重试） |
+| **任务** | 历史任务列表：状态、题型、图片数、总耗时；失败或已取消的任务可一键重试（复用已识别内容，不重复消耗额度） |
+| **设置** | 监控目录与运行状态、磁盘占用、模型与密钥状态、阶段耗时统计、局域网地址与二维码 |
+
+**手机端**：底部两个标签（题目 / 解答）。解答页支持一键复制、阅读模式（可调字号与暗色）。
+自动截图产生新任务时只提示不抢屏，可自行决定是否切换（或打开「自动切换」）。
+
+---
+
+## 性能与可靠性设计
+
+这部分决定了「出一份答案要等多久」，值得了解：
+
+| 机制 | 效果 |
+|---|---|
+| **发送前图片预处理** | EXIF 校正 → 最长边 1600 → JPEG q80，实测单张 2.96 MB → 187 KB（缩小约 16 倍），4 图请求从约 15 MB 降到约 1 MB |
+| **分类 + 识别合并调用** | 一次视觉调用同时得到题型与逐页文本，省一轮往返与一次重复图片计费；解析失败自动回退 |
+| **回退路径并行** | 分类与逐页 OCR 并行执行，关键路径从「相加」变成「取最大」 |
+| **按需润色** | 单图题直接采用识别原文；多图合并后文本较短也跳过润色（省一次 2–10 秒调用） |
+| **识别失败兜底** | 部分页识别失败时改用原图直读求解，而不是整体失败 |
+| **真实取消** | 取消在阶段边界与流式分片之间生效，已生成内容保留为 `*.partial.md` |
+| **重试复用缓存** | 分类/识别结果写入 `stage_cache`，重试直接从求解阶段开始 |
+| **并发上限** | `MAX_CONCURRENT_TASKS`（默认 2）避免高峰期把 API 配额打满导致全部超时 |
+| **自动清理** | 超出保留数量或天数的任务，连同上传原图与缓存一起清理 |
+
+相关参数都在 `.env.example` 里，按需调整即可（例如小字识别不准时把
+`IMAGE_MAX_EDGE` 调到 2000，或把 `IMAGE_JPEG_QUALITY` 提到 90）。
+
+---
+
+## 使用命令行 Agent
 
 ```powershell
 python -m problem_solver_agent.main
 ```
 
-**工作流程**:
-1. 启动 Agent，看到健康检查通过。
-2. 遇到长题目，快速连续截图。
-3. 停止截图，等待几秒——Agent 自动分组并开始处理。
-4. 解答保存在 `solutions/` 目录下。
-
-### 运行独立工具
-
-```powershell
-# 静默热键截图（默认 Alt + X）
-python tools/silent_screencapper.py
-
-# 手机远程截图（扫描终端二维码）
-python tools/remote_trigger.py
-
-# 模拟真人打字（复制代码 → 聚焦输入框 → Ctrl + V）
-python tools/human_typer.py
-```
+启动时会做一次健康检查（密钥 + 各求解器连通性），失败即退出。之后它只监控
+`Screenshots/`，每组处理完把解答写入 `solutions/`，并同步一份到 `webapp/solutions/`。
+CLI 与 Web 可以同时运行，共用同一套配置与流水线。
 
 ---
 
-## **模型切换指南**
+## 开发
 
-本项目的 `vision_client.py` 和 `solver_client.py` 是 **provider-agnostic** 的通用客户端，切换模型只需修改 `config.py` 中的常量：
+```powershell
+# 前端开发服务器（带 /api 代理到 8000 端口）
+cd frontend && npm run dev
 
-```python
-# 示例：切换到其他视觉模型
-VISION_CLASSIFY_MODEL = "glm-4.6v-flashx"   # 更换分类/OCR 模型
-VISION_REASONING_MODEL = "glm-4.6v"         # 更换视觉推理模型
+# 前端类型检查 / 代码检查 / 生产构建
+npm run build
+npm run lint
 
-# 示例：切换到其他求解模型
-SOLVER_CONFIG = {
-    "deepseek": {
-        "model": "deepseek-v4-pro",
-        "base_url": "https://api.deepseek.com/v1"
-    },
-    # 添加新 provider
-    "new_provider": {
-        "model": "new-model",
-        "base_url": "https://api.new-provider.com/v1"
-    }
-}
+# 后端测试（116 个用例，全部打桩，不产生真实 API 调用）
+pip install -r requirements-dev.txt
+pytest                    # 配置见 pytest.ini，用例在 tests/
 
-# 更新路由
-SOLVER_ROUTING_CONFIG = {
-    "CODING_SOLVER": "new_provider",
-    "DEFAULT_SOLVER": "deepseek",
-}
+# 一键自检：路径、密钥、服务可达性、图片压缩收益
+python tools/diag.py
 ```
 
-**添加新 provider 到 `SOLVER_CONFIG` 后，需在 `.env` 中配置对应的 API 密钥。密钥命名遵循约定：`{PROVIDER}_API_KEY`（全大写）。例如添加 `new_provider`，则需配置 `NEW_PROVIDER_API_KEY`。**
+改动前端源码后**必须** `npm run build`，否则生产页面仍是旧产物。
+
+详细架构、接口契约与排障说明见：
+
+- `docs/ARCHITECTURE.md` — 分层、数据流、并发与取消模型
+- `docs/API.md` — REST 与 SSE 事件契约
+- `docs/DEVELOPMENT.md` — 开发环境、常用命令、常见问题排查
+- `.claude/CLAUDE.md` — 面向 AI 助手的项目说明与约定
+
+---
+
+## 切换模型
+
+`vision_client.py` 与 `solver_client.py` 都是 provider-agnostic 的，改模型只需动
+`problem_solver_agent/config.py`：
+
+```python
+VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"   # 分类 + OCR
+VISION_REASONING_MODEL = "GLM-4.6V"         # 图形推理
+
+SOLVER_CONFIG = {
+    "deepseek": {"model": "deepseek-v4-pro", "base_url": "https://api.deepseek.com/v1"},
+}
+SOLVER_ROUTING_CONFIG = {"CODING_SOLVER": "deepseek", "DEFAULT_SOLVER": "deepseek"}
+```
+
+新增 provider 后需在 `.env` 配置 `{PROVIDER}_API_KEY`（全大写），例如添加
+`new_provider` 就要配 `NEW_PROVIDER_API_KEY`。
+
+---
+
+## 许可证
+
+见 `LICENSE`。

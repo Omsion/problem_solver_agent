@@ -1,8 +1,8 @@
-import type { ProgressState } from "../../types";
+import type { ProgressPhase } from "../../types";
 import { useIsMobile } from "../../hooks/useMediaQuery";
 
 interface Props {
-  phase: ProgressState["phase"];
+  phase: ProgressPhase;
   message: string;
 }
 
@@ -18,13 +18,17 @@ const phaseOrder: Record<string, number> = {
   classifying: 0,
   ocr: 1,
   solving: 2,
+  verifying: 2,
+  archiving: 2,
   done: 3,
+  cancelled: -2,
   error: -2,
 };
 
 export const ProgressSteps = ({ phase, message }: Props) => {
   const currentIdx = phaseOrder[phase] ?? -1;
   const isError = phase === "error";
+  const isCancelled = phase === "cancelled";
   const isMobile = useIsMobile();
 
   const circleSize = isMobile ? "w-6 h-6" : "w-8 h-8";
@@ -40,24 +44,25 @@ export const ProgressSteps = ({ phase, message }: Props) => {
 
           return (
             <div key={step.key} className="flex items-center">
-              {/* Step circle */}
               <div className="flex flex-col items-center">
                 <div
                   className={`${circleSize} rounded-full flex items-center justify-center ${textSize} font-semibold transition-colors ${
                     isError
                       ? "bg-red-100 text-red-600"
-                      : isCompleted
-                        ? "bg-indigo-600 text-white"
-                        : isActive
-                          ? "bg-indigo-100 text-indigo-600 ring-2 ring-indigo-300"
-                          : "bg-gray-100 text-gray-400"
+                      : isCancelled
+                        ? "bg-gray-200 text-gray-500"
+                        : isCompleted
+                          ? "bg-indigo-600 text-white"
+                          : isActive
+                            ? "bg-indigo-100 text-indigo-600 ring-2 ring-indigo-300"
+                            : "bg-gray-100 text-gray-400"
                   }`}
                 >
                   {isCompleted ? (
                     <svg className={`${isMobile ? "w-3 h-3" : "w-4 h-4"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
-                  ) : isActive ? (
+                  ) : isActive && !isError && !isCancelled ? (
                     <span className="animate-pulse">&#9679;</span>
                   ) : (
                     i + 1
@@ -67,7 +72,6 @@ export const ProgressSteps = ({ phase, message }: Props) => {
                   {step.label}
                 </span>
               </div>
-              {/* Connecting line */}
               {i < steps.length - 1 && (
                 <div
                   className={`${lineWidth} h-0.5 mx-0.5 sm:mx-1 mb-5 transition-colors ${
@@ -80,7 +84,11 @@ export const ProgressSteps = ({ phase, message }: Props) => {
         })}
       </div>
       {message && (
-        <p className={`text-center text-sm mt-2 sm:mt-3 ${isError ? "text-red-500" : "text-gray-500"}`}>
+        <p
+          className={`text-center text-sm mt-2 sm:mt-3 ${
+            isError ? "text-red-500" : isCancelled ? "text-gray-500" : "text-gray-500"
+          }`}
+        >
           {message}
         </p>
       )}

@@ -1,195 +1,170 @@
-"""流水线服务 — 将截图转为结构化解答，通过回调推送进度事件"""
+"""流水线服务 — 把共享 core 流水线适配成 Web 事件流
 
+本文件只负责三件事：
+1. 订阅 core 流水线的事件，转发给 SSE 事件总线
+2. 把任务状态/耗时/答案卡写进数据库
+3. 提供一个阶段缓存实现，让"重试"可以复用已完成的分类与转录
+
+真正的流水线逻辑在 `problem_solver_agent/core_pipeline.py`，与 CLI Agent 共用。
+"""
+
+from __future__ import annotations
+
+import json
 import logging
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 from problem_solver_agent import config as core_config
-from problem_solver_agent import pipeline as core_pipeline, prompts as core_prompts
-from problem_solver_agent import solver_client, vision_client
-from problem_solver_agent.utils import extract_question_numbers, format_number_prefix, sanitize_filename
+from problem_solver_agent.cancel import CancelToken
+from problem_solver_agent.core_pipeline import SolutionPipeline
 
 logger = logging.getLogger("WebappPipeline")
 
+# 需要在解答文件里保留的状态（用于判断"是否已完成"）
+TERMINAL_COMPLETED = "completed"
+TERMINAL_CANCELLED = "cancelled"
+
+
+class _StageCache:
+    """把阶段结果写进 SQLite，供重试时复用（避免重复调用付费 API）。"""
+
+    STAGES = ("vision",)
+
+    def __init__(self, task_manager) -> None:
+        self.task_manager = task_manager
+
+    def get(self, task_id: str, stage: str):
+        if stage not in self.STAGES:
+            return None
+        return self.task_manager.get_cached_stage(task_id, stage)
+
+    def set(self, task_id: str, stage: str, payload) -> None:
+        if stage not in self.STAGES:
+            return
+        try:
+            self.task_manager.set_cached_stage(task_id, stage, payload)
+        except Exception as exc:  # 缓存写入失败不影响主流程
+            logger.warning("写入阶段缓存失败: %s", exc)
+
 
 class PipelineService:
+    """Web 端的流水线服务，保留既有 `run()` 签名以免调用点改动。"""
 
-    def __init__(self, solution_dir: Path, task_manager):
-        self.solution_dir = solution_dir
+    def __init__(self, solution_dir: Path, task_manager) -> None:
+        self.solution_dir = Path(solution_dir)
         self.solution_dir.mkdir(parents=True, exist_ok=True)
         self.task_manager = task_manager
+        self.stage_cache = _StageCache(task_manager)
 
     # ------------------------------------------------------------------
     # 公开入口
     # ------------------------------------------------------------------
 
-    def run(self, task_id: str, image_paths: list[Path], on_progress: Callable[[dict], None],
-            enable_thinking: bool = True) -> None:
-        """串行执行完整流水线，阶段切换 / 流式内容均通过 on_progress 推送。
+    def run(
+        self,
+        task_id: str,
+        image_paths: list[Path],
+        on_progress: Callable[[dict], None],
+        enable_thinking: bool = True,
+        cancel: CancelToken | None = None,
+        style: str | None = None,
+    ) -> dict:
+        """执行流水线，事件通过 on_progress 推送。
 
         Args:
-            enable_thinking: 是否启用求解器思考模式（DeepSeek reasoning）。开启后
-                            思考过程以 type="reasoning" 事件独立推送，不影响最终答案。
+            cancel: 取消令牌；由 TaskRegistry 在收到取消请求时置位。
+            style: 编程题求解风格（OPTIMAL / EXPLORATORY），None 用全局配置。
         """
-        transcribed_text = "N/A"
-        temp_path = None
+        self.task_manager.update_task(task_id, status="processing", error_message="")
+
+        def _forward(event: dict) -> None:
+            # 事件类型保持与前端契约一致（status/chunk/reasoning/timings/done/error/cancelled）
+            if event.get("type") == "done":
+                self.task_manager.update_task(
+                    task_id,
+                    timings_json=json.dumps(event.get("timings") or {}, ensure_ascii=False),
+                )
+            on_progress(event)
+
+        pipeline = SolutionPipeline(
+            solution_dir=self.solution_dir,
+            on_event=_forward,
+            stage_cache=self.stage_cache,
+        )
 
         try:
-            self.task_manager.update_task(task_id, status="processing")
-
-            # ---- 步骤 1：分类 ----
-            on_progress({"type": "status", "phase": "classifying", "message": "正在进行问题类型分类…"})
-            problem_type = vision_client.classify_problem_type(image_paths)
-            self.task_manager.update_task(task_id, problem_type=problem_type)
-
-            # ---- 步骤 2：OCR + 润色 ----
-            if problem_type != "VISUAL_REASONING":
-                on_progress({"type": "status", "phase": "ocr", "message": f"正在进行 OCR 转录（{len(image_paths)} 张图片）…"})
-                transcribed_text = self._textualize_problem(image_paths)
-                problem_type = core_pipeline.reclassify_problem_type(problem_type, transcribed_text)
-                self.task_manager.update_task(task_id, problem_type=problem_type)
-
-            # ---- 步骤 3：求解 ----
-            on_progress({"type": "status", "phase": "solving", "message": "正在调用求解器生成解答…"})
-            final_type, solver_provider, solver_model, stream = self._start_solve(problem_type, transcribed_text, image_paths, enable_thinking)
-            self.task_manager.update_task(task_id, solver_provider=solver_provider, solver_model=solver_model)
-
-            # ---- 写入文件 + 流式推送 ----
-            temp_path = self.solution_dir / f"{task_id}_inprogress.md"
-            full_answer: list[str] = []
-            with open(temp_path, "w", encoding="utf-8") as f:
-                self._write_header(f, image_paths, final_type, transcribed_text, solver_provider, solver_model)
-                for event in stream:
-                    ev_type = event.get("type", "") if isinstance(event, dict) else ""
-                    if ev_type == "reasoning":
-                        # 思考过程：仅推送 SSE，不写入解答文件
-                        on_progress({"type": "reasoning", "content": event["content"]})
-                    elif ev_type == "content":
-                        # 解答内容：写入文件 + 推送 SSE
-                        full_answer.append(event["content"])
-                        f.write(event["content"])
-                        f.flush()
-                        on_progress({"type": "chunk", "content": event["content"]})
-                    elif ev_type == "error":
-                        raise ValueError(event["content"])
-                    else:
-                        # 向后兼容：纯字符串 chunk（来自非 dict 流）
-                        chunk = event if isinstance(event, str) else event.get("content", "")
-                        full_answer.append(chunk)
-                        f.write(chunk)
-                        f.flush()
-                        on_progress({"type": "chunk", "content": chunk})
-
-            full_text = "".join(full_answer)
-            if not full_text.strip() or "--- ERROR ---" in full_text:
-                raise ValueError("求解器返回空响应或包含内部错误")
-
-            # ---- 步骤 4：命名 & 归档 ----
-            final_path = self._generate_filename(transcribed_text, final_type, task_id)
-            temp_path.replace(final_path)
-
-            # 同步到 ROOT_DIR/solutions 供手机端 Samba 查看
-            try:
-                core_config.SOLUTION_DIR.mkdir(parents=True, exist_ok=True)
-                root_solution_path = core_config.SOLUTION_DIR / final_path.name
-                import shutil
-                shutil.copy2(final_path, root_solution_path)
-                logger.info("解答已同步到 %s", root_solution_path)
-            except Exception as e:
-                logger.warning("同步解答到 ROOT_DIR/solutions 失败: %s", e)
-
-            # 上传图片保留在 uploads/{task_id}/ 中，供历史查阅
-            self.task_manager.update_task(task_id, status="completed", solution_path=str(final_path), filename=final_path.name)
-            self._cleanup_old()
-
-            on_progress({"type": "done", "task_id": task_id, "filename": final_path.name})
-
+            result = pipeline.run(
+                task_id,
+                image_paths,
+                cancel=cancel,
+                enable_thinking=enable_thinking,
+                style=style,
+            )
         except Exception as exc:
             logger.error("流水线异常 task=%s: %s", task_id, exc, exc_info=True)
-            if temp_path and temp_path.exists():
-                temp_path.unlink(missing_ok=True)
             self.task_manager.update_task(task_id, status="failed", error_message=str(exc))
-            on_progress({"type": "error", "message": str(exc)})
+            raise
 
-    # ------------------------------------------------------------------
-    # 内部步骤
-    # ------------------------------------------------------------------
+        status = result.get("status")
+        path: Path | None = result.get("path")
+        timings_json = json.dumps(result.get("timings") or {}, ensure_ascii=False)
 
-    def _textualize_problem(self, image_paths: list[Path]) -> str:
-        raw = vision_client.transcribe_images_raw(image_paths)
-        if not raw:
-            raise ValueError("OCR 转录返回空结果")
-        joined = "\n---[NEXT]---\n".join(raw)
-        safe_joined = joined.replace("{", "{{").replace("}", "}}")
-        prompt = core_prompts.TEXT_MERGE_AND_POLISH_PROMPT.format(raw_texts=safe_joined)
-        polished = solver_client.ask_for_analysis(prompt, provider=core_config.AUX_PROVIDER, model=core_config.AUX_MODEL_NAME)
-        if not polished:
-            raise ValueError("文本合并 / 润色失败")
-        if len(polished) < 5:
-            raise ValueError("合并后文本过短，质量检查未通过")
-        return polished
-
-    # _reclassify 已替换为 core_config.reclassify_problem_type()
-
-    def _start_solve(self, problem_type: str, transcribed_text: str, image_paths: list[Path],
-                     enable_thinking: bool = True):
-        if problem_type == "VISUAL_REASONING":
-            final_type = "VISUAL_REASONING"
-            provider = core_config.VISION_PROVIDER_NAME
-            model = core_config.VISION_REASONING_MODEL
-            stream = vision_client.solve_visual_reasoning_problem(image_paths)
+        if status == TERMINAL_COMPLETED and path is not None:
+            self.task_manager.update_task(
+                task_id,
+                status="completed",
+                solution_path=str(path),
+                filename=path.name,
+                timings_json=timings_json,
+                answer_card=result.get("answer_card", {}).get("text", ""),
+                problem_type=str(result.get("problem_type") or ""),
+            )
+            self._sync_to_root_solutions(path)
+            self._cleanup_old()
         else:
-            final_type = core_pipeline.map_final_type(problem_type, transcribed_text)
-            provider, model = core_pipeline.determine_solver(final_type)
-            prompt = self._build_prompt(final_type, transcribed_text)
-            stream = solver_client.stream_solve(prompt, provider, model, enable_thinking=enable_thinking)
-        return final_type, provider, model, stream
+            # 取消：保留部分内容，记录路径以便前端继续查看
+            self.task_manager.update_task(
+                task_id,
+                status="cancelled",
+                solution_path=str(path) if path else "",
+                filename=path.name if path else "",
+                timings_json=timings_json,
+                error_message="",
+            )
 
-    # _map_final_type / _determine_solver 已替换为 core_config 共享函数
-
-    def _build_prompt(self, final_type: str, text: str) -> str:
-        template = core_prompts.PROMPT_TEMPLATES.get(final_type)
-        if not template:
-            raise ValueError(f"缺少 '{final_type}' 的 Prompt 模板")
-        if final_type in ("LEETCODE", "ACM", "ML_CODING"):
-            template = template[core_config.SOLUTION_STYLE]
-        return template.replace("{transcribed_text}", text)
+        return result
 
     # ------------------------------------------------------------------
     # 辅助
     # ------------------------------------------------------------------
 
-    def _write_header(self, f, image_paths, problem_type, transcribed_text, solver_provider, solver_model):
-        f.write("Processed by Web Agent:\n- " + "\n- ".join(p.name for p in image_paths) + "\n\n")
-        f.write("=" * 50 + "\n")
-        f.write(f"- Detected Problem Type: {problem_type}\n")
-        f.write(f"- Selected Solver: {solver_provider} ({solver_model})\n")
-        f.write(f"- Auxiliary Model: {core_config.AUX_PROVIDER} ({core_config.AUX_MODEL_NAME})\n\n")
-        f.write("=" * 50 + "\n\n")
-        f.write("Transcribed & Polished Text:\n\n" + transcribed_text + "\n\n")
-        f.write("=" * 50 + "\n\n")
-        style = f" (Style: {core_config.SOLUTION_STYLE})" if problem_type in ("LEETCODE", "ACM", "ML_CODING") else ""
-        f.write(f"Final Solution{style}:\n\n")
-        f.flush()
-
-    def _generate_filename(self, text: str, problem_type: str, task_id: str) -> Path:
-        prompt = core_prompts.FILENAME_GENERATION_PROMPT.replace("{transcribed_text}", text)
-        filename_body = solver_client.ask_for_analysis(
-            prompt, provider=core_config.AUX_PROVIDER, model=core_config.AUX_MODEL_NAME
-        )
-        if not filename_body:
-            numbers = extract_question_numbers(text)
-            prefix = format_number_prefix(numbers)
-            fallback = f"{problem_type}_Solution"
-            filename_body = f"{prefix}_{fallback}" if prefix else fallback
-
-        safe = sanitize_filename(filename_body)
-        return self.solution_dir / f"{safe}.md"
+    def _sync_to_root_solutions(self, final_path: Path) -> None:
+        """把解答同步到 ROOT_DIR/solutions，供手机端 Samba/文件管理器查看。"""
+        try:
+            target_dir = Path(core_config.SOLUTION_DIR)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(final_path, target_dir / final_path.name)
+            logger.info("解答已同步到 %s", target_dir / final_path.name)
+        except Exception as exc:
+            logger.warning("同步解答到 ROOT_DIR/solutions 失败: %s", exc)
 
     def _cleanup_old(self) -> None:
-        paths = self.task_manager.cleanup_old_tasks(keep=100)
-        for p in paths:
+        """按数量与天数清理旧任务，并同步删除上传目录与缓存。"""
+        from .retention import cutoff_timestamp, prune_uploads
+
+        paths = self.task_manager.cleanup_old_tasks(
+            keep=core_config.TASK_RETENTION_COUNT,
+            older_than=cutoff_timestamp(core_config.TASK_RETENTION_DAYS),
+        )
+        for path in paths:
             try:
-                Path(p).unlink(missing_ok=True)
+                Path(path).unlink(missing_ok=True)
             except OSError:
                 pass
+
+        # 上传目录按"数据库里仍存在的任务"保留（缺陷 N2：图片此前从不清理）
+        from . import config as web_config
+
+        prune_uploads(web_config.UPLOAD_DIR, self.task_manager.all_task_ids())

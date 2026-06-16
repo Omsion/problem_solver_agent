@@ -41,6 +41,9 @@ class WebAutoImporter:
         self._running = False
         self._lock = threading.Lock()
         self._processing_tasks = set()  # 防重复
+        self._started_at: float | None = None
+        self._last_group_at: float | None = None
+        self._groups_handled = 0
 
         # 检查是否启用自动导入（通过环境变量控制）
         self._enabled = os.getenv("AUTO_IMPORT_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -48,6 +51,27 @@ class WebAutoImporter:
         # 覆盖 ImageGrouper 的 _execute_pipeline，改为调用 Web 流水线
         self._original_execute = self.image_grouper._execute_pipeline
         self.image_grouper._execute_pipeline = self._web_pipeline_wrapper
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def status(self) -> dict:
+        """对外暴露的监控状态，供 /api/status 与设置页展示。"""
+        return {
+            "enabled": self._enabled,
+            "running": self._running,
+            "monitor_dir": str(core_config.MONITOR_DIR),
+            "group_timeout": core_config.GROUP_TIMEOUT,
+            "started_at": self._started_at,
+            "last_group_at": self._last_group_at,
+            "groups_handled": self._groups_handled,
+            "processing": len(self._processing_tasks),
+        }
 
     def start(self):
         """启动监控"""
@@ -61,8 +85,9 @@ class WebAutoImporter:
         # 确保监控目录存在
         core_config.MONITOR_DIR.mkdir(parents=True, exist_ok=True)
 
-        self._observer = start_monitoring(core_config.MONITOR_DIR, self.image_grouper)
+        self._observer = start_monitoring(core_config.MONITOR_DIR, self.image_grouper.add_image)
         self._running = True
+        self._started_at = time.time()
         logger.info("Web 自动截图导入已启动，监控目录: %s", core_config.MONITOR_DIR)
 
     def stop(self):
@@ -75,6 +100,8 @@ class WebAutoImporter:
     def _web_pipeline_wrapper(self, image_group: list[Path]):
         """包装 ImageGrouper 的执行，调用 Web 流水线"""
         task_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+        self._last_group_at = time.time()
+        self._groups_handled += 1
 
         # 防重复检查
         group_key = tuple(sorted(p.name for p in image_group))
@@ -155,3 +182,12 @@ def start_auto_import(task_manager, pipeline_service) -> WebAutoImporter | None:
     if importer:
         importer.start()
     return importer
+
+
+def stop_auto_import() -> None:
+    """停止全局自动导入器（应用关闭时调用，避免观察者线程悬挂）。"""
+    global _auto_importer_instance
+    with _instance_lock:
+        importer = _auto_importer_instance
+    if importer is not None:
+        importer.stop()

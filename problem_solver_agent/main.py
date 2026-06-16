@@ -59,7 +59,8 @@ def main():
     logger.info("=" * 50)
 
     image_grouper = ImageGrouper()
-    observer = file_monitor.start_monitoring(config.MONITOR_DIR, image_grouper)
+    # file_monitor 现在接收任意回调，不再反向依赖 ImageGrouper
+    observer = file_monitor.start_monitoring(config.MONITOR_DIR, image_grouper.add_image)
 
     try:
         while observer.is_alive():

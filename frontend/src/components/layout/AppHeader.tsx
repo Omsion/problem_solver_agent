@@ -29,10 +29,13 @@ export const AppHeader = () => {
 
       <nav className="flex items-center gap-1">
         <Link to="/" className={linkClass("/")}>
-          首页
+          解题台
         </Link>
         <Link to="/history" className={linkClass("/history")}>
-          历史记录
+          任务
+        </Link>
+        <Link to="/settings" className={linkClass("/settings")}>
+          设置
         </Link>
         <QrCodeButton />
       </nav>

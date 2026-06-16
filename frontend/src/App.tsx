@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
-import { HashRouter, Routes, Route, useNavigate, useSearchParams } from "react-router-dom";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { HashRouter, Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
 import { UploadZone } from "./components/upload/UploadZone";
@@ -9,337 +9,362 @@ import { ImageViewer } from "./components/viewer/ImageViewer";
 import { ImageLightbox } from "./components/viewer/ImageLightbox";
 import { OutputPanel } from "./components/output/OutputPanel";
 import { TaskHistoryPage } from "./components/tasks/TaskHistoryPage";
+import { SettingsPage } from "./components/settings/SettingsPage";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useUploadStore } from "./stores/useUploadStore";
 import { useTaskStore } from "./stores/useTaskStore";
-import { createTask, getTask, listTasks } from "./api/client";
+import { useLayoutStore } from "./stores/useLayoutStore";
+import { createTask, getTask, listTasks } from "./lib/api";
+import { isTerminalStatus } from "./lib/taskStatus";
 
 /**
- * 返回当前 URL 中的 task 参数。
- * 使用 useSearchParams 确保 react-router 导航时正确触发重渲染。
+ * 任务页面。
+ *
+ * 缺陷 B 的修复要点：任务 id 来自路由 path 参数，加载逻辑是**幂等**的——
+ * 不再用 `loadingTaskRef` 做"我加载过就不再加载"的早退守卫。那个守卫在快速
+ * 交替点击历史记录时会让整段加载被跳过，页面停在"等待任务开始"，必须手动
+ * 刷新才恢复。
  */
-function useSearchParamTaskId(): string | null {
-  const [searchParams] = useSearchParams();
-  return searchParams.get("task");
-}
-
-function MainPage() {
-  const activeTaskId = useTaskStore((s) => s.activeTaskId);
+function TaskPage({ taskId }: { taskId: string }) {
+  const navigate = useNavigate();
   const setActiveTaskId = useTaskStore((s) => s.setActiveTaskId);
   const connectSSE = useTaskStore((s) => s.connectSSE);
-  const connectGlobalSSE = useTaskStore((s) => s.connectGlobalSSE);
-  const disconnectGlobalSSE = useTaskStore((s) => s.disconnectGlobalSSE);
-  const setOnAutoImportedTask = useTaskStore((s) => s.setOnAutoImportedTask);
   const updateProgress = useTaskStore((s) => s.updateProgress);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const files = useUploadStore((s) => s.files);
-  const navigate = useNavigate();
+  const resetProgress = useTaskStore((s) => s.resetProgress);
+  const disconnectSSE = useTaskStore((s) => s.disconnectSSE);
+  const [images, setImages] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSeq = useRef(0);
+  const openLightbox = useLayoutStore((s) => s.openLightbox);
 
-  const taskParam = useSearchParamTaskId();
-  const [historyImages, setHistoryImages] = useState<string[]>([]);
-  const [hasNewAutoTask, setHasNewAutoTask] = useState(false);
-  const [newTaskInfo, setNewTaskInfo] = useState<{ id: string; numImages: number } | null>(null);
-
-  // 从历史记录跳转过来时，加载已完成任务的解答
+  // 加载任务详情（幂等：同一 id 重复触发只会各自完成，最后写入的是最新请求）
   useEffect(() => {
-    if (!taskParam) {
-      setHistoryImages([]);
-      setIsLoadingHistory(false);
-      return;
+    const seq = ++requestSeq.current;
+    setActiveTaskId(taskId);
+    setLoading(true);
+    setLoadError(null);
+    resetProgress(taskId);
+
+    // 已连接同一任务时保留已有进度，避免重挂载把流式内容清空
+    const existing = useTaskStore.getState().progress[taskId];
+    if (!existing) {
+      updateProgress(taskId, { phase: "idle", message: "加载任务中…" });
     }
 
-    const currentTaskId = taskParam;
-    setIsLoadingHistory(true);
-
-    // 先设置 activeTaskId 并初始化 progress，确保 UI 能立即响应
-    setActiveTaskId(currentTaskId);
-    useTaskStore.getState().updateProgress(currentTaskId, {
-      phase: "idle",
-      message: "加载任务中...",
-    });
-
-    (async () => {
-      try {
-        const { task, solution_content, image_urls } = await getTask(currentTaskId);
-
-        // 检查是否仍在处理这个任务（防止竞态条件）
-        if (useTaskStore.getState().activeTaskId !== currentTaskId) {
-          // 如果用户已切换到其他任务，忽略这个结果
-          return;
-        }
-
-        setHistoryImages(image_urls);
-
+    getTask(taskId)
+      .then(({ task, solution_content, image_urls }) => {
+        if (seq !== requestSeq.current) return; // 用户已切到别的任务
+        setImages(image_urls);
         if (task.status === "completed") {
-          updateProgress(currentTaskId, {
+          updateProgress(taskId, {
             phase: "done",
             message: "解答完成",
             answer: solution_content,
             filename: task.filename,
+            timings: task.timings ?? null,
           });
         } else if (task.status === "failed") {
-          updateProgress(currentTaskId, {
+          updateProgress(taskId, {
             phase: "error",
             message: "任务失败",
-            error: task.error_message,
+            error: task.error_message || "未知错误",
           });
-        } else {
-          // 任务仍在处理中 — 连接 SSE 继续接收进度
-          updateProgress(currentTaskId, {
-            phase: task.status === "processing" ? "solving" : "classifying",
-            message: task.status === "processing" ? "正在调用求解器生成解答…" : "分类题目类型中…",
+        } else if (task.status === "cancelled") {
+          updateProgress(taskId, {
+            phase: "cancelled",
+            message: "任务已取消",
             answer: solution_content,
           });
-          // 确保连接 SSE
-          const existingConn = useTaskStore.getState().connections[currentTaskId];
-          if (!existingConn) {
-            connectSSE(currentTaskId, true);
-          }
-        }
-      } catch (err) {
-        // 仅在用户仍在这个任务时才显示错误
-        if (useTaskStore.getState().activeTaskId === currentTaskId) {
-          console.error("加载任务失败:", err);
-          updateProgress(currentTaskId, {
-            phase: "error",
-            message: "加载失败",
-            error: "无法加载任务数据",
+        } else {
+          // 仍在处理中：先给出大致阶段，随后由 SSE 覆盖
+          updateProgress(taskId, {
+            phase: task.status === "processing" ? "solving" : "classifying",
+            message: task.status === "processing" ? "正在生成解答…" : "分类题目类型中…",
+            answer: solution_content,
           });
         }
-      } finally {
-        if (useTaskStore.getState().activeTaskId === currentTaskId) {
-          setIsLoadingHistory(false);
-        }
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskParam]);
+      })
+      .catch((err: unknown) => {
+        if (seq !== requestSeq.current) return;
+        setLoadError(err instanceof Error ? err.message : "无法加载任务数据");
+      })
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setLoading(false);
+      });
 
-  // 当活跃任务 SSE 连接意外断开时自动重连（保留已累计进度）
-  useEffect(() => {
-    if (!activeTaskId) return;
-    const p = useTaskStore.getState().progress[activeTaskId];
-    const conn = useTaskStore.getState().connections[activeTaskId];
-    if (!p || p.phase === "done" || p.phase === "error") return;
-    if (conn) return; // already connected
-    useTaskStore.getState().reconnectSSE(activeTaskId);
-  }, [activeTaskId]);
+    return () => {
+      // 离开任务页时断开该任务的流，避免后台连接堆积
+      disconnectSSE(taskId);
+    };
+  }, [taskId, setActiveTaskId, updateProgress, resetProgress, disconnectSSE]);
 
-  // 连接全局 SSE 监听自动导入事件
+  // 连接流：等详情加载完成后按实际状态决定是否需要流
+  const phase = useTaskStore((s) => (taskId ? s.progress[taskId]?.phase : undefined));
   useEffect(() => {
-    // 设置回调处理自动导入的新任务
-    setOnAutoImportedTask((taskId: string, numImages: number) => {
-      setNewTaskInfo({ id: taskId, numImages });
-      setHasNewAutoTask(true);
+    if (!taskId || loading || loadError) return;
+    if (phase === undefined || phase === "done" || phase === "error" || phase === "cancelled") return;
+    connectSSE(taskId, true);
+  }, [taskId, loading, loadError, phase, connectSSE]);
+
+  const backToNew = () => {
+    disconnectSSE(taskId);
+    setActiveTaskId(null);
+    setImages([]);
+    navigate("/");
+  };
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 h-full text-center px-6">
+        <p className="text-sm text-gray-600 font-medium">任务加载失败</p>
+        <p className="text-xs text-gray-400">{loadError}</p>
+        <button
+          onClick={() => {
+            setLoadError(null);
+            // 触发重载：改变 ref 序号即可让 effect 重新执行
+            requestSeq.current += 1;
+            setLoading(true);
+            getTask(taskId)
+              .then(({ task, solution_content, image_urls }) => {
+                setImages(image_urls);
+                setLoadError(null);
+                updateProgress(taskId, {
+                  phase: task.status === "completed" ? "done" : isTerminalStatus(task.status) ? "error" : "solving",
+                  answer: solution_content,
+                  filename: task.filename,
+                  error: task.error_message,
+                });
+              })
+              .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : "重试失败"))
+              .finally(() => setLoading(false));
+          }}
+          className="mt-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg cursor-pointer"
+        >
+          重试
+        </button>
+        <button onClick={backToNew} className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer">
+          返回新建任务
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex flex-col items-center gap-3 text-gray-400">
+          <svg className="animate-spin w-8 h-8" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <p className="text-sm">加载历史任务…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (images.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-8 bg-gray-50 rounded-lg border border-gray-200 h-full text-center">
+        <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <p className="text-sm text-gray-500 font-medium">题目图片已清理</p>
+        <p className="text-xs text-gray-400">解答内容仍可在右侧查看</p>
+        <button onClick={backToNew} className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer">
+          返回新建任务
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 h-full overflow-auto">
+      <div className="flex items-center justify-between px-1">
+        <span className="text-xs text-gray-400">{images.length} 张题目图片</span>
+        <button onClick={backToNew} className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer">
+          返回新建任务
+        </button>
+      </div>
+      {images.map((url, i) => (
+        <button
+          key={url}
+          onClick={() => openLightbox(images, i)}
+          className="block w-full cursor-zoom-in"
+          title="点击查看大图"
+        >
+          <img
+            src={url}
+            alt={`题目图片 ${i + 1}`}
+            className="w-full rounded-lg border border-gray-200 object-contain bg-gray-100"
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NewTaskPage() {
+  const navigate = useNavigate();
+  const setActiveTaskId = useTaskStore((s) => s.setActiveTaskId);
+  const resetProgress = useTaskStore((s) => s.resetProgress);
+  const disconnectSSE = useTaskStore((s) => s.disconnectSSE);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const files = useUploadStore((s) => s.files);
+  const clearFiles = useUploadStore((s) => s.clearFiles);
+
+  const handleStart = useCallback(async () => {
+    if (files.length === 0) return;
+
+    const prevTaskId = useTaskStore.getState().activeTaskId;
+    if (prevTaskId) disconnectSSE(prevTaskId);
+
+    setIsProcessing(true);
+    setUploadError(null);
+    try {
+      const { task_id } = await createTask(files.map((f) => f.file));
+      resetProgress(task_id);
+      setActiveTaskId(task_id);
+      clearFiles();
+      navigate(`/task/${task_id}`);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "创建任务失败，请重试");
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [files, clearFiles, navigate, setActiveTaskId, resetProgress, disconnectSSE]);
+
+  return (
+    <div className="flex flex-col gap-3 h-full">
+      {files.length === 0 ? (
+        <UploadZone />
+      ) : (
+        <>
+          <ImageViewer />
+          <FilePreviewList />
+        </>
+      )}
+      {uploadError && (
+        <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600">
+          {uploadError}
+        </div>
+      )}
+      <UploadActions onStart={handleStart} loading={isProcessing} />
+    </div>
+  );
+}
+
+function MainPage() {
+  const { taskId } = useParams<{ taskId: string }>();
+  const connectGlobalSSE = useTaskStore((s) => s.connectGlobalSSE);
+  const disconnectGlobalSSE = useTaskStore((s) => s.disconnectGlobalSSE);
+  const setOnAutoImportedTask = useTaskStore((s) => s.setOnAutoImportedTask);
+  const navigate = useNavigate();
+  const [newTaskInfo, setNewTaskInfo] = useState<{ id: string; numImages: number } | null>(null);
+  const [autoSwitch, setAutoSwitch] = useState(false);
+
+  // 全局 SSE：监听自动导入与手机连接状态
+  useEffect(() => {
+    setOnAutoImportedTask((id: string, numImages: number) => {
+      setNewTaskInfo({ id, numImages });
     });
-
-    // 连接全局 SSE
     connectGlobalSSE();
-
     return () => {
       setOnAutoImportedTask(null);
       disconnectGlobalSSE();
     };
   }, [connectGlobalSSE, disconnectGlobalSSE, setOnAutoImportedTask]);
 
-  // 初始化时获取最新任务时间作为基准
+  // 预填充"已见过"的任务，避免刷新页面时把历史任务当成新导入
   useEffect(() => {
-    const init = async () => {
-      try {
-        const { tasks } = await listTasks(1);
-        if (tasks.length > 0) {
-          // 预填充已见过的任务集合，避免页面加载时误触发
-          const seen = useTaskStore.getState().seenAutoImportedTasks;
-          tasks.forEach(t => seen.add(t.id));
-        }
-      } catch { /* ignore */ }
-    };
-    init();
-  }, []);
-
-  // 自动切换到新导入的任务
-  useEffect(() => {
-    if (!hasNewAutoTask || !newTaskInfo) return;
-
-    // 如果用户正在处理其他任务，询问是否切换？
-    // 这里我们直接切换，提供更好的体验
-    const switchToNewTask = async () => {
-      try {
-        // 清除 URL 参数并重置状态
-        navigate("/");
-        setHistoryImages([]);
-
-        // 加载新任务并连接 SSE
-        const { task, solution_content, image_urls } = await getTask(newTaskInfo.id);
-        setActiveTaskId(newTaskInfo.id);
-
-        // 如果任务还在处理中，连接 SSE
-        if (task.status === "pending" || task.status === "processing") {
-          connectSSE(newTaskInfo.id, true);
-          setHistoryImages(image_urls);
-        } else {
-          // 任务已完成，直接显示
-          setHistoryImages(image_urls);
-          updateProgress(newTaskInfo.id, {
-            phase: task.status === "completed" ? "done" : "error",
-            message: task.status === "completed" ? "解答完成" : "任务失败",
-            answer: solution_content,
-            filename: task.filename,
-            error: task.error_message,
-          });
-        }
-      } catch (err) {
-        console.error("切换到新任务失败:", err);
-      } finally {
-        setHasNewAutoTask(false);
-        setNewTaskInfo(null);
-      }
-    };
-
-    switchToNewTask();
-  }, [hasNewAutoTask, newTaskInfo, navigate, setActiveTaskId, connectSSE, updateProgress]);
-
-  const handleStart = useCallback(async () => {
-    if (files.length === 0) return;
-
-    // 先断开所有现有连接并重置状态
-    const { activeTaskId: prevTaskId, connections } = useTaskStore.getState();
-    if (prevTaskId && connections[prevTaskId]) {
-      useTaskStore.getState().disconnectSSE(prevTaskId);
-    }
-
-    // 清除 URL 中的 task 参数，进入新任务模式
-    navigate("/");
-    setIsProcessing(true);
-    setHistoryImages([]);
-    setHasNewAutoTask(false);
-    setNewTaskInfo(null);
-
-    try {
-      const fileObjs = files.map((f) => f.file);
-      const { task_id } = await createTask(fileObjs);
-
-      // 确保在设置 activeTaskId 前先初始化 progress
-      useTaskStore.getState().updateProgress(task_id, {
-        phase: "idle",
-        message: "",
+    listTasks(1)
+      .then(({ tasks }) => {
+        const seen = useTaskStore.getState().seenAutoImportedTasks;
+        tasks.forEach((t) => seen.add(t.id));
+      })
+      .catch(() => {
+        /* 忽略：仅用于去重 */
       });
-
-      setActiveTaskId(task_id);
-      connectSSE(task_id, true);
-    } catch (err) {
-      console.error("创建任务失败:", err);
-      alert("创建任务失败，请重试");
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [files, connectSSE, navigate, setActiveTaskId]);
-
-  const handleDismissNewTask = useCallback(() => {
-    setHasNewAutoTask(false);
-    setNewTaskInfo(null);
   }, []);
+
+  // 自动导入的新任务：默认只提示，不打断当前阅读（考试场景不该被抢屏）
+  useEffect(() => {
+    if (!newTaskInfo || !autoSwitch) return;
+    navigate(`/task/${newTaskInfo.id}`);
+    setNewTaskInfo(null);
+  }, [newTaskInfo, autoSwitch, navigate]);
+
+  const dismissNewTask = useCallback(() => setNewTaskInfo(null), []);
 
   return (
-    <div className="h-[calc(100vh-3.5rem)] flex flex-col">
-      {/* 新任务提示条 */}
-      {hasNewAutoTask && newTaskInfo && (
-        <div className="bg-indigo-50 border-b border-indigo-200 px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-2 w-2 rounded-full bg-indigo-400 animate-pulse"></span>
-            <span className="text-sm text-indigo-700">
-              检测到新截图任务（{newTaskInfo.numImages} 张图片），正在加载...
+    <div className="h-[calc(100dvh-3.5rem)] flex flex-col">
+      {newTaskInfo && (
+        <div className="bg-indigo-50 border-b border-indigo-200 px-4 py-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="inline-flex h-2 w-2 rounded-full bg-indigo-400 animate-pulse shrink-0" />
+            <span className="text-sm text-indigo-700 truncate">
+              检测到新截图任务（{newTaskInfo.numImages} 张图片）
             </span>
           </div>
-          <button
-            onClick={handleDismissNewTask}
-            className="text-xs text-indigo-500 hover:text-indigo-600"
-          >
-            忽略
-          </button>
+          <div className="flex items-center gap-3 shrink-0">
+            <label className="flex items-center gap-1.5 text-xs text-indigo-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoSwitch}
+                onChange={(e) => setAutoSwitch(e.target.checked)}
+                className="cursor-pointer"
+              />
+              自动切换
+            </label>
+            <button
+              onClick={() => navigate(`/task/${newTaskInfo.id}`)}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-700 cursor-pointer"
+            >
+              查看
+            </button>
+            <button onClick={dismissNewTask} className="text-xs text-indigo-400 hover:text-indigo-500 cursor-pointer">
+              忽略
+            </button>
+          </div>
         </div>
       )}
 
       <SplitPanelLayout
         left={
-          <div className="flex flex-col gap-3 h-full">
-            {isLoadingHistory ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="flex flex-col items-center gap-3 text-gray-400">
-                  <svg className="animate-spin w-8 h-8" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  <p className="text-sm">加载历史任务...</p>
-                </div>
-              </div>
-            ) : taskParam ? (
-              historyImages.length > 0 ? (
-                <div className="flex flex-col gap-2 h-full overflow-auto">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-xs text-gray-400">{historyImages.length} 张题目图片</span>
-                  <button
-                    onClick={() => { setActiveTaskId(null); setHistoryImages([]); navigate("/"); }}
-                    className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
-                  >
-                      返回新建任务
-                    </button>
-                  </div>
-                  {historyImages.map((url, i) => (
-                    <img
-                      key={i}
-                      src={url}
-                      alt={`题目图片 ${i + 1}`}
-                      className="w-full rounded-lg border border-gray-200 object-contain bg-gray-100"
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center gap-3 p-8 bg-gray-50 rounded-lg border border-gray-200 h-full text-center">
-                  <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  <p className="text-sm text-gray-500 font-medium">查看历史解答</p>
-                  <p className="text-xs text-gray-400">题目图片已清理，可查看右侧解答内容</p>
-                  <button
-                    onClick={() => { setActiveTaskId(null); setHistoryImages([]); navigate("/"); }}
-                    className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
-                  >
-                    返回新建任务
-                  </button>
-                </div>
-              )
-            ) : files.length === 0 ? (
-              <UploadZone />
-            ) : (
-              <>
-                <ImageViewer />
-                <FilePreviewList />
-              </>
-            )}
-            {!taskParam && !isLoadingHistory && (
-              <UploadActions onStart={handleStart} loading={isProcessing} />
-            )}
-          </div>
+          <ErrorBoundary title="题目面板出错">
+            {taskId ? <TaskPage key={taskId} taskId={taskId} /> : <NewTaskPage />}
+          </ErrorBoundary>
         }
-        right={<OutputPanel taskId={activeTaskId} />}
+        right={
+          <ErrorBoundary title="解答面板出错">
+            <OutputPanel taskId={taskId ?? null} />
+          </ErrorBoundary>
+        }
       />
       <ImageLightbox />
     </div>
   );
 }
 
+function SettingsRoute() {
+  return (
+    <ErrorBoundary title="设置页出错">
+      <SettingsPage />
+    </ErrorBoundary>
+  );
+}
+
 function HistoryPage() {
   const navigate = useNavigate();
-
-  const handleSelectTask = (taskId: string) => {
-    navigate(`/?task=${taskId}`);
-  };
-
   return (
-    <div className="h-[calc(100vh-3.5rem)] bg-white">
-      <TaskHistoryPage onSelectTask={handleSelectTask} />
+    <div className="h-[calc(100dvh-3.5rem)] bg-white">
+      <ErrorBoundary title="历史记录出错">
+        <TaskHistoryPage onSelectTask={(id) => navigate(`/task/${id}`)} />
+      </ErrorBoundary>
     </div>
   );
 }
@@ -351,7 +376,10 @@ export default function App() {
         <AppHeader />
         <Routes>
           <Route path="/" element={<MainPage />} />
+          <Route path="/task/:taskId" element={<MainPage />} />
           <Route path="/history" element={<HistoryPage />} />
+          <Route path="/settings" element={<SettingsRoute />} />
+          <Route path="*" element={<MainPage />} />
         </Routes>
       </div>
     </HashRouter>

@@ -1,14 +1,15 @@
 """
 utils.py - 通用工具模块
 
-存放项目中可被多处调用的辅助函数，例如：
+存放项目中可被多处调用的辅助函数：
 - 日志记录器设置（单例模式）
-- 图片到Base64的编码
 - 清理字符串以适配为合法的文件名
 - 智能题号提取与格式化
+
+说明：图片的 base64 编码已迁移到 `image_prep.py`，那里会先做 EXIF 校正、
+缩放与 JPEG 压缩，直接送原图 base64 会让请求体积大十几倍。
 """
 
-import base64
 import logging
 import re
 from pathlib import Path
@@ -63,25 +64,13 @@ def setup_logger() -> logging.Logger:
     return _logger
 
 
-def encode_image_to_base64(image_path: Path) -> str | None:
-    """
-    读取指定路径的图片文件，并将其编码为Base64字符串。
-    """
-    logger = setup_logger()
-    try:
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode('utf-8')
-    except FileNotFoundError:
-        logger.error(f"图片文件未找到: {image_path}")
-        return None
-    except Exception as e:
-        logger.error(f"编码图片 '{image_path}' 时发生错误: {e}")
-        return None
-
-
 def sanitize_filename(filename: str) -> str:
     """
     清理字符串，移除或替换其中不适用于文件名的非法字符。
+
+    注意：这里只处理非法字符，不做路径解析。调用方如果拿到的是
+    客户端提供的文件名，必须先用 `Path(name).name` 去掉目录部分，
+    否则 `..\\..\\evil.png` 这类输入仍有风险。
     """
     illegal_chars = r'[\\/:"*?<>|]+'
     return re.sub(illegal_chars, '', filename)

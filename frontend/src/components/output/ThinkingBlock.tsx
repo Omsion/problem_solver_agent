@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { LazyThinking } from "./lazy";
 
 interface Props {
   content: string;
@@ -27,7 +27,7 @@ export const ThinkingBlock = ({ content }: Props) => {
       </button>
       {expanded && (
         <div className="p-4 bg-gray-50 border-t border-indigo-100 max-h-96 overflow-y-auto">
-          <MarkdownRenderer content={content} className="text-sm" />
+          <LazyThinking content={content} />
         </div>
       )}
     </div>

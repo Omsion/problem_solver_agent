@@ -11,7 +11,7 @@ prompts.py - Prompt 模板模块 (V5.0 — 模块级常量)
 # 视觉模型提示词
 # ==============================================================================
 
-CLASSIFICATION_PROMPT = """
+CLASSIFICATION_PROMPT = r"""
 Analyze the content of the image(s). Your response MUST be ONLY ONE of the following keywords based on this priority order:
 
 1.  **'MULTIPLE_CHOICE'**: If the problem consists of one or more questions, each followed by options (e.g., A, B, C, D). This classification takes the HIGHEST priority.
@@ -23,7 +23,7 @@ Analyze the content of the image(s). Your response MUST be ONLY ONE of the follo
 Respond with only the single, most appropriate keyword and nothing else.
 """
 
-TRANSCRIPTION_PROMPT = """
+TRANSCRIPTION_PROMPT = r"""
 你是一个世界顶级的、专门用于文档数字化的多模态识别引擎。你的任务是精确地识别单张图片中的所有内容，并将其转化为结构化的文本。
 **核心要求：**
 - **精确识别**: 识别图片中的所有文字、段落、列表、表格和数学公式。
@@ -36,11 +36,39 @@ TRANSCRIPTION_PROMPT = """
 现在，请处理你收到的**单张图片**，并严格按照上述规则，输出其包含的结构化文本。
 """
 
+# ------------------------------------------------------------------------------
+# 合并调用：一次请求同时完成"题型分类"与"逐页转录"
+# 相比先分类、再逐页 OCR 的两轮调用，可省一轮网络往返与一次重复的图片计费。
+# 解析失败时调用方会自动回退到上面两个独立 Prompt。
+# ------------------------------------------------------------------------------
+CLASSIFY_AND_TRANSCRIBE_PROMPT = r"""
+你是一个多模态文档解析引擎。请同时完成两件事：
+
+**任务 A —— 题型分类**：从下列标签中选出唯一最合适的一个：
+1. `MULTIPLE_CHOICE`：题目由一个或多个小题组成，每个小题后面跟着选项（A/B/C/D）。**优先级最高**。
+2. `FILL_IN_THE_BLANKS`：填空题，通常含有编号占位符、下划线，或"请输入答案"之类的提示。**第二优先**。
+3. `CODING`：编程题（ACM / LeetCode 风格），且不属于上面两类。
+4. `VISUAL_REASONING`：需要在图形、图案、规律中找规律的题，且不是选择题。
+5. `QUESTION_ANSWERING`：针对给定上下文提问，且不属于填空或选择。
+6. `GENERAL`：其他所有文字类题目。
+
+**任务 B —— 逐页转录**：按顺序转录每一张图片的全部内容，输出一个数组，数组长度必须等于图片数量，顺序与图片顺序一致。
+- 表格用 Markdown 表格语法输出。
+- 数学公式用 LaTeX，行内用 `$...$`，块级用 `$$...$$`，`\begin{}`/`\end{}` 环境必须用 `$$...$$` 包裹。
+- 保持原文的换行与缩进；不要添加任何解释、评论或额外文字。
+- 单张图片若无文字内容（例如纯图形题），对应元素输出空字符串。
+
+**输出格式（必须严格遵守）**：只输出一个 JSON 对象，不要输出 Markdown 代码块，不要输出任何其他文字。
+
+{"problem_type": "<标签>", "pages": ["第一张图的文本", "第二张图的文本"]}
+"""
+
+
 # ==============================================================================
 # 辅助模型提示词
 # ==============================================================================
 
-TEXT_MERGE_AND_POLISH_PROMPT = """
+TEXT_MERGE_AND_POLISH_PROMPT = r"""
 # 角色/任务
 你是一位顶级的文档编辑专家。你的任务是接收多个由 '---[NEXT]---' 分隔的文本片段，并将它们智能地合并成一篇流畅、准确、格式正确的最终文档。
 
@@ -49,8 +77,8 @@ TEXT_MERGE_AND_POLISH_PROMPT = """
 2.  **格式继承**: 严格保持所有Markdown表格的原始格式。
 3.  **数学公式规范化**: **必须**将所有数学表达式用正确的 LaTeX 分隔符包裹。这是本任务最重要的要求。
    - 行内公式（短公式、变量、符号如 `X=1`、`b₁`、`E[X]`）：用 `$...$` 包裹，例如 `$X=1$`、`$E[X]=0.5$`。
-   - 块级公式（矩阵、多行公式如 `\begin{{bmatrix}}...\end{{bmatrix}}`）：用 `$$...$$` 包裹并独占一行。
-   - 所有 `\begin{{...}}` 到 `\end{{...}}` 的环境（如 matrix, bmatrix, align, cases 等）**必须**用 `$$...$$` 包裹。
+   - 块级公式（矩阵、多行公式如 `\begin{bmatrix}...\end{bmatrix}`）：用 `$$...$$` 包裹并独占一行。
+   - 所有 `\begin{...}` 到 `\end{...}` 的环境（如 matrix, bmatrix, align, cases 等）**必须**用 `$$...$$` 包裹。
    - 确保每个 `$` 或 `$$` 都成对出现，不要出现未闭合的数学分隔符。
 4.  **无缝拼接**: 必须识别并完美处理片段间的重叠内容，确保过渡自然。
 
@@ -72,7 +100,7 @@ TEXT_MERGE_AND_POLISH_PROMPT = """
 ---
 """
 
-FILENAME_GENERATION_PROMPT = """
+FILENAME_GENERATION_PROMPT = r"""
 # 角色/任务
 你是一个专业的文件命名专家。你的任务是根据提供的文本内容，生成一个结构化的、信息丰富的文件名。
 
@@ -109,7 +137,7 @@ FILENAME_GENERATION_PROMPT = """
 # 核心求解器 Prompt 模板
 # ==============================================================================
 
-_FILL_IN_THE_BLANKS = """
+_FILL_IN_THE_BLANKS = r"""
 # 角色/任务
 你是一位知识渊博的、精确的学科专家。你的任务是根据你的内部知识库，准确地回答下面的填空题。
 # 核心原则
@@ -137,7 +165,7 @@ _FILL_IN_THE_BLANKS = """
 [在此处提供一个关于正确答案的简洁、清晰的背景知识说明。]
 """
 
-_MULTIPLE_CHOICE = """
+_MULTIPLE_CHOICE = r"""
 # 角色/任务
 你是一位全知全能的、严谨的学科专家。你的任务是准确地解答下面文本中列出的所有选择题（包括单选和多选）。
 # 核心原则
@@ -169,7 +197,7 @@ _MULTIPLE_CHOICE = """
 (根据题目数量，继续以相同的格式进行解答...)
 """
 
-_VISUAL_REASONING = """
+_VISUAL_REASONING = r"""
 # 角色/任务
 你是一位顶级的逻辑推理专家，尤其擅长解决图形推理问题。
 # 核心原则
@@ -188,7 +216,7 @@ _VISUAL_REASONING = """
 严格按照上述三步思维框架的结构进行输出，并在最后明确给出最终答案。
 """
 
-_QUESTION_ANSWERING = """
+_QUESTION_ANSWERING = r"""
 # 角色/任务
 你是一个精准、高效的"信息提取与计算"机器人。
 # 核心原则
@@ -211,7 +239,7 @@ _QUESTION_ANSWERING = """
 *   [明确地给出答案...]
 """
 
-_GENERAL = """
+_GENERAL = r"""
 # 角色/任务
 你是一位逻辑严谨、善于分析问题的专家。
 # CoT (Chain of Thoughts) - 执行步骤
@@ -230,7 +258,7 @@ _GENERAL = """
 *   [明确地给出答案...]
 """
 
-_ML_CODING = """
+_ML_CODING = r"""
 # 角色/任务
 你是一位顶级的机器学习工程师和研究员，正在进行一场技术面试。你的任务是根据题目要求，从零开始（通常使用Numpy或PyTorch）实现一个经典的机器学习或深度学习模型/组件，并向面试官清晰地讲解其核心原理、实现思路和代码细节。
 # 核心原则
@@ -264,7 +292,7 @@ _ML_CODING = """
 ---
 """
 
-_LEETCODE_OPTIMAL = """
+_LEETCODE_OPTIMAL = r"""
 # 角色/任务
 你是一位顶级的算法专家和软件架构师，精通各种数据结构和算法，并拥有丰富的竞赛和工程经验。
 # 核心原则
@@ -303,7 +331,7 @@ _LEETCODE_OPTIMAL = """
 ---
 """
 
-_LEETCODE_EXPLORATORY = """
+_LEETCODE_EXPLORATORY = r"""
 # 角色/任务
 你是一位正在参加技术面试的算法工程师候选人。你的任务是解决一道 LeetCode 风格的编程题，并以清晰、结构化的方式向面试官讲解你的整个思考过程和最终实现。
 
@@ -343,7 +371,7 @@ _LEETCODE_EXPLORATORY = """
 ---
 """
 
-_ACM_OPTIMAL = """
+_ACM_OPTIMAL = r"""
 # 角色/任务
 你是一位顶级的ACM竞赛金牌教练，你的核心优势在于能够系统性地分析问题，评估多种算法路径，并最终选择最精确、最健壮的解决方案。
 # 核心原则
@@ -385,7 +413,7 @@ _ACM_OPTIMAL = """
 ---
 """
 
-_ACM_EXPLORATORY = """
+_ACM_EXPLORATORY = r"""
 # 角色/任务
 你是一位正在参加ACM区域赛的队员，目标是"先做对，再想快"。你的任务是快速分析题目，找到一个虽然不一定最优，但逻辑清晰、确保能通过样例的解法。
 

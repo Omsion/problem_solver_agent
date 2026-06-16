@@ -41,6 +41,8 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+pytest-out.txt
+eslint-out.txt
 
 # --- 日志 ---
 *.log
@@ -64,3 +66,7 @@ LPT[0-9]
 !/webapp/data/.gitkeep
 /webapp/uploads/*
 !/webapp/uploads/.gitkeep
+# 图片预处理缓存（可安全删除，会自动重建）
+/webapp/cache/
+# 任务取消后保留的部分解答
+/webapp/solutions/*.partial.md

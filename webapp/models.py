@@ -1,8 +1,19 @@
 """webapp 数据模型 — 基于 sqlite3 的任务持久化管理器"""
 
+import json
 import sqlite3
 import time
 from pathlib import Path
+
+# 任务表需要的列及其 DDL 片段（用于幂等迁移：旧库只有前面几列）
+_TASK_COLUMNS: dict[str, str] = {
+    "timings_json": "TEXT DEFAULT ''",
+    "answer_card": "TEXT DEFAULT ''",
+    "verified": "INTEGER NOT NULL DEFAULT 0",
+}
+
+# 合法任务状态（用于校验与文档化）
+TASK_STATUSES = ("pending", "processing", "completed", "failed", "cancelled")
 
 
 class TaskManager:
@@ -14,8 +25,11 @@ class TaskManager:
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
         conn.execute("PRAGMA journal_mode=WAL")
+        # 多个后台线程会并发写库（流水线进度 + 阶段缓存），
+        # 设置 busy_timeout 避免立刻抛 "database is locked"。
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _init_db(self):
@@ -35,7 +49,30 @@ class TaskManager:
                     error_message   TEXT DEFAULT ''
                 )
             """)
+            self._migrate_tasks(conn)
+            # 列表查询按创建时间倒序，加索引避免全表扫描
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)")
+            # 阶段缓存：重试时复用分类/OCR 结果，避免重复付费
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS stage_cache (
+                    task_id     TEXT NOT NULL,
+                    stage       TEXT NOT NULL,
+                    payload     TEXT NOT NULL,
+                    created_at  REAL NOT NULL,
+                    PRIMARY KEY (task_id, stage)
+                )
+            """)
             conn.commit()
+
+    def _migrate_tasks(self, conn: sqlite3.Connection) -> None:
+        """幂等地补齐缺失列，保证既有 tasks.db 可以继续使用。"""
+        existing = {
+            row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        for column, ddl in _TASK_COLUMNS.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {ddl}")
 
     # ---- CRUD ----
 
@@ -43,7 +80,7 @@ class TaskManager:
         now = time.time()
         with self._get_conn() as conn:
             conn.execute(
-                "INSERT INTO tasks (id, status, created_at, updated_at, num_images) "
+                "INSERT OR REPLACE INTO tasks (id, status, created_at, updated_at, num_images) "
                 "VALUES (?, 'pending', ?, ?, ?)",
                 (task_id, now, now, num_images),
             )
@@ -52,6 +89,22 @@ class TaskManager:
     def update_task(self, task_id: str, **kwargs) -> None:
         if not kwargs:
             return
+        # 显式拒绝未知字段，避免 SQL 注入与静默拼错列名
+        allowed = {
+            "status",
+            "problem_type",
+            "solver_provider",
+            "solver_model",
+            "solution_path",
+            "filename",
+            "error_message",
+            "timings_json",
+            "answer_card",
+            "verified",
+        }
+        unknown = set(kwargs) - allowed
+        if unknown:
+            raise ValueError(f"未知的任务字段: {', '.join(sorted(unknown))}")
         kwargs["updated_at"] = time.time()
         set_clause = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [task_id]
@@ -63,7 +116,7 @@ class TaskManager:
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-            return dict(row) if row else None
+            return _row_to_task(row) if row else None
 
     def get_recent_tasks(self, limit: int = 100) -> list[dict]:
         with self._get_conn() as conn:
@@ -71,32 +124,115 @@ class TaskManager:
             rows = conn.execute(
                 "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [_row_to_task(r) for r in rows]
+
+    def all_task_ids(self) -> set[str]:
+        with self._get_conn() as conn:
+            return {row[0] for row in conn.execute("SELECT id FROM tasks").fetchall()}
+
+    def list_timings(self, limit: int = 50) -> list[dict]:
+        """只取状态与耗时，供 /api/stats 聚合使用。"""
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT status, timings_json FROM tasks ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            result = []
+            for row in rows:
+                timings: dict | None = None
+                raw = row["timings_json"]
+                if raw:
+                    try:
+                        timings = json.loads(raw)
+                    except (ValueError, TypeError):
+                        timings = None
+                result.append({"status": row["status"], "timings": timings})
+            return result
+
+    # ---- 阶段缓存（重试时复用）----
+
+    def set_cached_stage(self, task_id: str, stage: str, payload: object) -> None:
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO stage_cache (task_id, stage, payload, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (task_id, stage, json.dumps(payload, ensure_ascii=False), time.time()),
+            )
+            conn.commit()
+
+    def get_cached_stage(self, task_id: str, stage: str) -> object | None:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM stage_cache WHERE task_id = ? AND stage = ?",
+                (task_id, stage),
+            ).fetchone()
+            if not row:
+                return None
+            try:
+                return json.loads(row[0])
+            except (ValueError, TypeError):
+                return None
+
+    def clear_stage_cache(self, task_id: str) -> None:
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM stage_cache WHERE task_id = ?", (task_id,))
+            conn.commit()
 
     # ---- 历史管理 ----
 
-    def cleanup_old_tasks(self, keep: int = 100) -> list[str]:
-        """删除超出保留数量的旧任务记录，返回需清理的 solution_path 列表。"""
+    def cleanup_old_tasks(self, keep: int = 100, older_than: float = 0.0) -> list[str]:
+        """删除超出保留数量或超过保留时间的任务记录。
+
+        Args:
+            keep: 最多保留的任务数（按创建时间倒序）
+            older_than: 早于该时间戳（秒）的任务也一并删除；0 表示不按时间清理
+
+        Returns:
+            被删除任务的 solution_path 列表（供调用方删除文件）
+        """
         with self._get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, solution_path FROM tasks ORDER BY created_at DESC"
+                "SELECT id, solution_path, created_at FROM tasks ORDER BY created_at DESC"
             ).fetchall()
-            if len(rows) <= keep:
+            to_delete: list[tuple[str, str]] = []
+            for index, row in enumerate(rows):
+                over_count = index >= keep
+                too_old = bool(older_than) and row[2] < older_than
+                if over_count or too_old:
+                    to_delete.append((row[0], row[1] or ""))
+
+            if not to_delete:
                 return []
-            to_delete = rows[keep:]
-            ids = [row[0] for row in to_delete]
-            paths = [row[1] for row in to_delete if row[1]]
+
+            ids = [task_id for task_id, _ in to_delete]
             placeholders = ",".join("?" * len(ids))
             conn.execute(f"DELETE FROM tasks WHERE id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM stage_cache WHERE task_id IN ({placeholders})", ids)
             conn.commit()
-            return paths
+            return [path for _, path in to_delete if path]
 
     def delete_task(self, task_id: str) -> str | None:
-        """删除指定任务，返回其 solution_path（如果有）。"""
+        """删除指定任务（含其阶段缓存），返回其 solution_path（如果有）。"""
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT solution_path FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
             conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            conn.execute("DELETE FROM stage_cache WHERE task_id = ?", (task_id,))
             conn.commit()
             return row[0] if row and row[0] else None
+
+
+def _row_to_task(row: sqlite3.Row) -> dict:
+    """把数据库行转成字典，并把 timings_json 解析成 timings 字段。"""
+    task = dict(row)
+    raw = task.pop("timings_json", "") or ""
+    timings = None
+    if raw:
+        try:
+            timings = json.loads(raw)
+        except (ValueError, TypeError):
+            timings = None
+    task["timings"] = timings
+    return task

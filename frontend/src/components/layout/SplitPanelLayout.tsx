@@ -7,14 +7,15 @@ import { MobileLayout } from "./MobileLayout";
 interface Props {
   left: ReactNode;
   right: ReactNode;
+  hasTask?: boolean;
 }
 
-export const SplitPanelLayout = ({ left, right }: Props) => {
+export const SplitPanelLayout = ({ left, right, hasTask = false }: Props) => {
   const isMobile = useIsMobile();
   const setRatio = useLayoutStore((s) => s.setLeftPanelRatio);
 
   if (isMobile) {
-    return <MobileLayout left={left} right={right} />;
+    return <MobileLayout left={left} right={right} hasTask={hasTask} />;
   }
 
   return (

@@ -1,5 +1,6 @@
 import type { Task } from "../../types";
-import { formatTs, statusLabel } from "../../lib/utils";
+import { formatTs, formatDuration } from "../../lib/utils";
+import { statusLabel, isTerminalStatus } from "../../lib/taskStatus";
 import { Badge } from "../ui/badge";
 import { useIsMobile } from "../../hooks/useMediaQuery";
 
@@ -8,16 +9,22 @@ const statusVariant: Record<string, "default" | "info" | "success" | "error"> = 
   processing: "info",
   completed: "success",
   failed: "error",
+  cancelled: "default",
 };
 
 interface Props {
   task: Task;
+  /** 已本地化的题型名 */
+  kindLabel: string;
+  retrying?: boolean;
   onDelete: (id: string) => void;
   onClick: (id: string) => void;
+  onRetry: (id: string) => void;
 }
 
-export const TaskCard = ({ task, onDelete, onClick }: Props) => {
+export const TaskCard = ({ task, kindLabel, retrying, onDelete, onClick, onRetry }: Props) => {
   const isMobile = useIsMobile();
+  const canRetry = isTerminalStatus(task.status) && task.status !== "completed";
 
   return (
     <div
@@ -32,19 +39,30 @@ export const TaskCard = ({ task, onDelete, onClick }: Props) => {
       </Badge>
 
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">
-          {task.problem_type || "未知题型"}
+        <p className="text-sm font-medium text-gray-900 truncate">{kindLabel}</p>
+        <p className="text-xs text-gray-400 truncate">
+          {task.filename || formatTs(task.created_at)}
         </p>
-        {task.filename && (
-          <p className="text-xs text-gray-400 truncate">{task.filename}</p>
-        )}
       </div>
 
-      {!isMobile && (
-        <div className="flex items-center gap-3 text-xs text-gray-400 shrink-0">
-          <span>{task.num_images} 张图</span>
-          <span>{formatTs(task.created_at)}</span>
-        </div>
+      <div className="flex items-center gap-3 text-xs text-gray-400 shrink-0">
+        <span>{task.num_images} 张图</span>
+        {!isMobile && <span>{formatTs(task.created_at)}</span>}
+        {task.timings?.total ? <span>{formatDuration(task.timings.total)}</span> : null}
+      </div>
+
+      {canRetry && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRetry(task.id);
+          }}
+          disabled={retrying}
+          className="text-xs text-indigo-500 hover:text-indigo-700 disabled:opacity-50 px-2 py-1 cursor-pointer shrink-0"
+          title="重试该任务"
+        >
+          {retrying ? "重试中…" : "重试"}
+        </button>
       )}
 
       <button
@@ -52,7 +70,7 @@ export const TaskCard = ({ task, onDelete, onClick }: Props) => {
           e.stopPropagation();
           onDelete(task.id);
         }}
-        className="text-gray-300 hover:text-red-500 transition-colors p-1 min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer"
+        className="text-gray-300 hover:text-red-500 transition-colors p-1 min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer shrink-0"
         title="删除"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -71,16 +71,63 @@ SOLVER_CONFIG = {
 }
 
 # --- 5. 求解风格配置 ---
-SOLUTION_STYLE = "OPTIMAL"# 'EXPLORATORY' or 'OPTIMAL'
+# 支持通过 .env 覆盖（SOLVER_STYLE=OPTIMAL / EXPLORATORY）。
+# 此前 .env 里的 SOLVER_STYLE 会被这里写死的常量静默忽略。
+SOLUTION_STYLE = os.getenv("SOLVER_STYLE", "OPTIMAL").strip().upper()
+if SOLUTION_STYLE not in ("OPTIMAL", "EXPLORATORY"):
+    SOLUTION_STYLE = "OPTIMAL"
+
+# --- 5.1 图片预处理配置（影响发送给视觉模型的请求体积）---
+# 实测：2288×1764 的截图 2.96 MB → 最长边 1600 + JPEG q80 后 187 KB
+# （base64 约 243 KB，缩小约 16 倍）。1600px 对文字 OCR 完全够用。
+# 若发现小字识别变差，把 IMAGE_MAX_EDGE 调大或把 IMAGE_JPEG_QUALITY 提到 90。
+IMAGE_MAX_EDGE = int(os.getenv("IMAGE_MAX_EDGE", "1600"))
+IMAGE_JPEG_QUALITY = int(os.getenv("IMAGE_JPEG_QUALITY", "80"))
+IMAGE_CACHE_ENABLED = os.getenv("IMAGE_CACHE_ENABLED", "true").lower() in ("true", "1", "yes")
+# 图片缓存总上限（MB），超出后按最旧优先清理
+IMAGE_CACHE_MAX_MB = int(os.getenv("IMAGE_CACHE_MAX_MB", "512"))
+
+# --- 5.2 任务保留策略（防止 uploads/processed 无限增长）---
+# 最多保留的任务数，以及任务的最长保留天数（<=0 表示不按天数清理）
+TASK_RETENTION_COUNT = int(os.getenv("TASK_RETENTION_COUNT", "100"))
+TASK_RETENTION_DAYS = int(os.getenv("TASK_RETENTION_DAYS", "30"))
+# 同时处理的任务上限（自动导入 + 手动上传共享），避免高峰期把 API 配额打满
+MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
+
+# --- 5.3 视觉模型调用参数 ---
+# 分类 / OCR 等短任务用较短超时，避免网络异常时长时间挂起
+VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "120"))
+# 是否把"分类"与"OCR"合并成一次视觉调用（失败会自动回退到两步）
+USE_COMBINED_VISION_CALL = os.getenv("USE_COMBINED_VISION_CALL", "true").lower() in ("true", "1", "yes")
+# 多图 OCR 合并文本短于该长度时跳过"润色"调用
+MERGE_SKIP_THRESHOLD = int(os.getenv("MERGE_SKIP_THRESHOLD", "1200"))
+
 
 # --- 6. 核心文件路径配置 ---
-# ROOT_DIR 自动检测为项目父目录，可通过环境变量 SOLVER_ROOT_DIR 覆盖
-# 例: 项目位于 D:\Pictures\OnlineTest\ → ROOT_DIR = D:\Pictures
+# ROOT_DIR 的解析顺序：
+#   1. 环境变量 SOLVER_ROOT_DIR（显式指定，推荐）
+#   2. 项目根目录下的 workspace/（自包含，不污染用户目录）
+#   3. 项目父目录（历史默认行为，保持兼容）
+# 说明：历史默认值会把 Screenshots/processed/solutions 建在项目**父目录**，
+# 也就是用户的 Pictures 目录里。为兼容既有数据，默认行为不变，但会在启动时
+# 明确打印实际路径，便于发现"产物跑到别处去了"。
 _PROJECT_DIR = Path(__file__).resolve().parent.parent
-ROOT_DIR = Path(os.getenv("SOLVER_ROOT_DIR", str(_PROJECT_DIR.parent)))
+_EXPLICIT_ROOT = os.getenv("SOLVER_ROOT_DIR")
+
+
+def _resolve_root_dir() -> Path:
+    if _EXPLICIT_ROOT:
+        return Path(_EXPLICIT_ROOT)
+    return _PROJECT_DIR.parent
+
+
+ROOT_DIR = _resolve_root_dir()
 MONITOR_DIR = ROOT_DIR / "Screenshots"
 PROCESSED_DIR = ROOT_DIR / "processed"
 SOLUTION_DIR = ROOT_DIR / "solutions"
+
+# 图片预处理缓存目录（放在项目内，而不是用户目录）
+IMAGE_CACHE_DIR = _PROJECT_DIR / "webapp" / "cache" / "images"
 
 # --- 7. Agent 行为配置 ---
 # 分组超时时间（秒）

@@ -75,12 +75,13 @@ def determine_solver(final_type: str) -> tuple[str, str]:
     return provider, config.SOLVER_CONFIG[provider]["model"]
 
 
-def build_prompt(final_type: str, transcribed_text: str) -> str:
+def build_prompt(final_type: str, transcribed_text: str, style: str | None = None) -> str:
     """根据最终问题类型构建求解器 Prompt。
 
     Args:
         final_type: 最终问题类型
         transcribed_text: 题目文本
+        style: 编程题的求解风格（OPTIMAL / EXPLORATORY）；None 时用全局配置
 
     Returns:
         格式化后的 Prompt 字符串
@@ -89,7 +90,11 @@ def build_prompt(final_type: str, transcribed_text: str) -> str:
     if not template:
         raise ValueError(f"缺少 '{final_type}' 的 Prompt 模板")
     if final_type in ("LEETCODE", "ACM", "ML_CODING"):
-        template = template[config.SOLUTION_STYLE]
+        chosen = (style or config.SOLUTION_STYLE).upper()
+        if chosen not in template:
+            chosen = config.SOLUTION_STYLE
+        template = template[chosen]
+    # 用 replace 而不是 format：题目正文里的花括号不应被当作占位符
     return template.replace("{transcribed_text}", transcribed_text)
 
 

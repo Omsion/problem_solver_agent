@@ -1,23 +1,22 @@
-# requirements.txt - 项目依赖清单
-
-# 安装方法：
-#   pip install -r requirements.txt
+# requirements.txt - 运行依赖
+#
+# 安装：pip install -r requirements.txt
+# 开发（含测试）：pip install -r requirements.txt -r requirements-dev.txt
 
 # --- 核心依赖 ---
-openai>=1.0.0,<3.0.0      # OpenAI SDK，调用 DeepSeek / Zhipu 等 LLM API
-Pillow>=10.0.0,<13.0.0    # 图像处理，截图
-watchdog>=3.0.0,<7.0.0    # 文件系统监控，实时监控截图目录
+openai>=1.0.0,<3.0.0         # OpenAI SDK，调用 DeepSeek / Zhipu 等 LLM API
+Pillow>=10.0.0,<13.0.0       # 图像处理：截图、缩放压缩、EXIF 校正、上传校验
+watchdog>=3.0.0,<7.0.0       # 文件系统监控，实时监听截图目录
 python-dotenv>=1.0.0,<3.0.0  # 从 .env 文件加载环境变量
 
 # --- Web 应用依赖 ---
-fastapi>=0.100.0           # Web 框架
-uvicorn[standard]>=0.20.0  # ASGI 服务器
-python-multipart>=0.0.5    # 文件上传支持
+fastapi>=0.100.0             # Web 框架
+uvicorn[standard]>=0.20.0    # ASGI 服务器
+python-multipart>=0.0.5      # 文件上传支持
 
 # --- 工具依赖 ---
-keyboard>=0.13.0           # 键盘热键监听（silent_screencapper / human_typer）
+keyboard>=0.13.0             # 键盘热键监听（silent_screencapper / human_typer）
 pywin32>=306.0.0; sys_platform == "win32"  # Windows GDI 截图
-flask>=3.0.0,<5.0.0       # Web 服务器（remote_trigger）
-qrcode>=7.4.0,<9.0.0      # 二维码生成（remote_trigger）
-pyperclip>=1.8.0           # 剪贴板操作（human_typer）
-pyautogui>=0.9.0           # GUI 自动化（human_typer）
+qrcode>=7.4.0,<9.0.0         # 二维码生成（Web 端 /api/qrcode、remote_trigger）
+pyperclip>=1.8.0             # 剪贴板操作（human_typer）
+pyautogui>=0.9.0             # GUI 自动化（human_typer）
