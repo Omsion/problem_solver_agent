@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import type { Task } from "../../types";
 import { listTasks, deleteTask } from "../../api/client";
 import { TaskCard } from "./TaskCard";
@@ -41,8 +41,8 @@ export const TaskHistoryPage = ({ onSelectTask }: Props) => {
   };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+    <div className="h-full flex flex-col min-h-0">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200 shrink-0">
         <div className="flex items-center gap-2">
           <h2 className="text-base font-semibold text-gray-900">历史任务</h2>
           {!loading && (
@@ -53,7 +53,7 @@ export const TaskHistoryPage = ({ onSelectTask }: Props) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto px-4 py-4 min-h-0">
         {loading && (
           <div className="space-y-2">
             {Array.from({ length: 5 }).map((_, i) => (

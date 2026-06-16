@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { HashRouter, Routes, Route, useNavigate, useSearchParams } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
@@ -30,6 +30,8 @@ function MainPage() {
   const disconnectGlobalSSE = useTaskStore((s) => s.disconnectGlobalSSE);
   const setOnAutoImportedTask = useTaskStore((s) => s.setOnAutoImportedTask);
   const updateProgress = useTaskStore((s) => s.updateProgress);
+  const resetProgress = useTaskStore((s) => s.resetProgress);
+  const disconnectSSE = useTaskStore((s) => s.disconnectSSE);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const files = useUploadStore((s) => s.files);
@@ -39,21 +41,31 @@ function MainPage() {
   const [historyImages, setHistoryImages] = useState<string[]>([]);
   const [hasNewAutoTask, setHasNewAutoTask] = useState(false);
   const [newTaskInfo, setNewTaskInfo] = useState<{ id: string; numImages: number } | null>(null);
+  const loadingTaskRef = useRef<string | null>(null);
 
   // 从历史记录跳转过来时，加载已完成任务的解答
   useEffect(() => {
     if (!taskParam) {
       setHistoryImages([]);
       setIsLoadingHistory(false);
+      setActiveTaskId(null);
+      loadingTaskRef.current = null;
+      return;
+    }
+
+    // 如果正在加载同一个任务，不要重复加载
+    if (loadingTaskRef.current === taskParam) {
       return;
     }
 
     const currentTaskId = taskParam;
+    loadingTaskRef.current = currentTaskId;
     setIsLoadingHistory(true);
 
-    // 先设置 activeTaskId 并初始化 progress，确保 UI 能立即响应
+    // 先设置 activeTaskId 并重置 progress，确保 UI 立即响应
     setActiveTaskId(currentTaskId);
-    useTaskStore.getState().updateProgress(currentTaskId, {
+    resetProgress(currentTaskId);
+    updateProgress(currentTaskId, {
       phase: "idle",
       message: "加载任务中...",
     });
@@ -62,9 +74,8 @@ function MainPage() {
       try {
         const { task, solution_content, image_urls } = await getTask(currentTaskId);
 
-        // 检查是否仍在处理这个任务（防止竞态条件）
-        if (useTaskStore.getState().activeTaskId !== currentTaskId) {
-          // 如果用户已切换到其他任务，忽略这个结果
+        // 检查用户是否已经切换到其他任务
+        if (loadingTaskRef.current !== currentTaskId) {
           return;
         }
 
@@ -84,21 +95,18 @@ function MainPage() {
             error: task.error_message,
           });
         } else {
-          // 任务仍在处理中 — 连接 SSE 继续接收进度
+          // 任务仍在处理中 — 先根据当前状态设置进度，再连接 SSE
           updateProgress(currentTaskId, {
             phase: task.status === "processing" ? "solving" : "classifying",
             message: task.status === "processing" ? "正在调用求解器生成解答…" : "分类题目类型中…",
             answer: solution_content,
           });
           // 确保连接 SSE
-          const existingConn = useTaskStore.getState().connections[currentTaskId];
-          if (!existingConn) {
-            connectSSE(currentTaskId, true);
-          }
+          connectSSE(currentTaskId, true);
         }
       } catch (err) {
         // 仅在用户仍在这个任务时才显示错误
-        if (useTaskStore.getState().activeTaskId === currentTaskId) {
+        if (loadingTaskRef.current === currentTaskId) {
           console.error("加载任务失败:", err);
           updateProgress(currentTaskId, {
             phase: "error",
@@ -107,21 +115,27 @@ function MainPage() {
           });
         }
       } finally {
-        if (useTaskStore.getState().activeTaskId === currentTaskId) {
+        if (loadingTaskRef.current === currentTaskId) {
           setIsLoadingHistory(false);
         }
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskParam]);
+
+    return () => {
+      // 清理：如果切换到其他任务，重置加载标记
+      if (loadingTaskRef.current === currentTaskId) {
+        loadingTaskRef.current = null;
+      }
+    };
+  }, [taskParam, setActiveTaskId, updateProgress, resetProgress, connectSSE]);
 
   // 当活跃任务 SSE 连接意外断开时自动重连（保留已累计进度）
   useEffect(() => {
     if (!activeTaskId) return;
-    const p = useTaskStore.getState().progress[activeTaskId];
-    const conn = useTaskStore.getState().connections[activeTaskId];
-    if (!p || p.phase === "done" || p.phase === "error") return;
-    if (conn) return; // already connected
+    const progress = useTaskStore.getState().progress[activeTaskId];
+    const connections = useTaskStore.getState().connections;
+    if (!progress || progress.phase === "done" || progress.phase === "error") return;
+    if (connections[activeTaskId]) return; // already connected
     useTaskStore.getState().reconnectSSE(activeTaskId);
   }, [activeTaskId]);
 
@@ -168,10 +182,12 @@ function MainPage() {
         // 清除 URL 参数并重置状态
         navigate("/");
         setHistoryImages([]);
+        loadingTaskRef.current = null;
 
         // 加载新任务并连接 SSE
         const { task, solution_content, image_urls } = await getTask(newTaskInfo.id);
         setActiveTaskId(newTaskInfo.id);
+        loadingTaskRef.current = newTaskInfo.id;
 
         // 如果任务还在处理中，连接 SSE
         if (task.status === "pending" || task.status === "processing") {
@@ -205,7 +221,7 @@ function MainPage() {
     // 先断开所有现有连接并重置状态
     const { activeTaskId: prevTaskId, connections } = useTaskStore.getState();
     if (prevTaskId && connections[prevTaskId]) {
-      useTaskStore.getState().disconnectSSE(prevTaskId);
+      disconnectSSE(prevTaskId);
     }
 
     // 清除 URL 中的 task 参数，进入新任务模式
@@ -214,18 +230,21 @@ function MainPage() {
     setHistoryImages([]);
     setHasNewAutoTask(false);
     setNewTaskInfo(null);
+    loadingTaskRef.current = null;
 
     try {
       const fileObjs = files.map((f) => f.file);
       const { task_id } = await createTask(fileObjs);
 
       // 确保在设置 activeTaskId 前先初始化 progress
-      useTaskStore.getState().updateProgress(task_id, {
+      resetProgress(task_id);
+      updateProgress(task_id, {
         phase: "idle",
         message: "",
       });
 
       setActiveTaskId(task_id);
+      loadingTaskRef.current = task_id;
       connectSSE(task_id, true);
     } catch (err) {
       console.error("创建任务失败:", err);
@@ -233,7 +252,7 @@ function MainPage() {
     } finally {
       setIsProcessing(false);
     }
-  }, [files, connectSSE, navigate, setActiveTaskId]);
+  }, [files, connectSSE, navigate, setActiveTaskId, updateProgress, resetProgress, disconnectSSE]);
 
   const handleDismissNewTask = useCallback(() => {
     setHasNewAutoTask(false);
@@ -278,10 +297,15 @@ function MainPage() {
                 <div className="flex flex-col gap-2 h-full overflow-auto">
                   <div className="flex items-center justify-between px-1">
                     <span className="text-xs text-gray-400">{historyImages.length} 张题目图片</span>
-                  <button
-                    onClick={() => { setActiveTaskId(null); setHistoryImages([]); navigate("/"); }}
-                    className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
-                  >
+                    <button
+                      onClick={() => {
+                        setActiveTaskId(null);
+                        setHistoryImages([]);
+                        loadingTaskRef.current = null;
+                        navigate("/");
+                      }}
+                      className="text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
+                    >
                       返回新建任务
                     </button>
                   </div>
@@ -303,7 +327,12 @@ function MainPage() {
                   <p className="text-sm text-gray-500 font-medium">查看历史解答</p>
                   <p className="text-xs text-gray-400">题目图片已清理，可查看右侧解答内容</p>
                   <button
-                    onClick={() => { setActiveTaskId(null); setHistoryImages([]); navigate("/"); }}
+                    onClick={() => {
+                      setActiveTaskId(null);
+                      setHistoryImages([]);
+                      loadingTaskRef.current = null;
+                      navigate("/");
+                    }}
                     className="mt-2 text-xs text-indigo-500 hover:text-indigo-600 cursor-pointer"
                   >
                     返回新建任务
@@ -339,7 +368,9 @@ function HistoryPage() {
 
   return (
     <div className="h-[calc(100vh-3.5rem)] bg-white">
-      <TaskHistoryPage onSelectTask={handleSelectTask} />
+      <div className="h-full">
+        <TaskHistoryPage onSelectTask={handleSelectTask} />
+      </div>
     </div>
   );
 }

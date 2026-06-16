@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useState, useEffect } from "react";
 import { useTaskStore } from "../../stores/useTaskStore";
+import { useSearchParams } from "react-router-dom";
 
 interface Props {
   left: ReactNode;
@@ -10,13 +11,22 @@ interface Props {
 type Tab = "left" | "right";
 
 export const MobileLayout = ({ left, right }: Props) => {
-  const [tab, setTab] = useState<Tab>("right");
+  const [searchParams] = useSearchParams();
+  const taskParam = searchParams.get("task");
+  const [tab, setTab] = useState<Tab>(taskParam ? "left" : "right");
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const progress = activeTaskId ? useTaskStore((s) => s.progress[activeTaskId]) : undefined;
 
-  // 当有活跃任务时，自动切换到解答标签页
+  // 当 URL 中的 task 参数变化时，切换到题目标签页
   useEffect(() => {
-    if (activeTaskId && progress && progress.phase !== "idle") {
+    if (taskParam) {
+      setTab("left");
+    }
+  }, [taskParam]);
+
+  // 当有新活跃任务开始处理时，自动切换到解答标签页
+  useEffect(() => {
+    if (activeTaskId && progress && progress.phase !== "idle" && progress.phase !== "done") {
       setTab("right");
     }
   }, [activeTaskId, progress?.phase]);
@@ -76,6 +86,9 @@ export const MobileLayout = ({ left, right }: Props) => {
             解答
             {activeTaskId && progress && progress.phase !== "idle" && progress.phase !== "done" && (
               <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+            )}
+            {activeTaskId && progress && progress.phase === "done" && (
+              <span className="w-2 h-2 rounded-full bg-green-500" />
             )}
           </button>
         </div>

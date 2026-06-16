@@ -1,18 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTaskStore } from "../../stores/useTaskStore";
-import { useIsMobile, useMediaQuery } from "../../hooks/useMediaQuery";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 export const QrCodeButton = () => {
   const [open, setOpen] = useState(false);
-  const remoteConnected = useTaskStore((s) => s.remoteConnected);
-  const isMobile = useIsMobile();
+  const remoteConnected = useTaskStore((s: any) => s.remoteConnected);
+  const setRemoteConnected = useTaskStore((s: any) => s.setRemoteConnected);
 
-  // 移动端不显示扫码按钮（用户已在手机上访问）
-  const isMobileOrSmall = useMediaQuery("(max-width: 1023px)");
-  if (isMobile || isMobileOrSmall) return null;
+  // 移动端判断：屏幕宽度小于 1024px 时认为是移动设备，不显示扫码按钮
+  const isMobileOrTablet = useMediaQuery("(max-width: 1023px)");
 
-  // 远程客户端已连接 → 隐藏按钮
-  if (remoteConnected) return null;
+  // 调试用：在 localStorage 中可以强制显示/隐藏
+  const [forceShow, setForceShow] = useState<boolean | null>(null);
+  useEffect(() => {
+    const forced = localStorage.getItem("forceShowQr");
+    if (forced === "1") setForceShow(true);
+    else if (forced === "0") setForceShow(false);
+  }, []);
+
+  // 如果是移动端或远程设备已连接，则不显示按钮
+  const shouldShow = !isMobileOrTablet && !remoteConnected;
+  if (forceShow === false) return null;
+  if (!shouldShow && forceShow !== true) return null;
 
   return (
     <>
@@ -43,12 +52,23 @@ export const QrCodeButton = () => {
             <p className="text-xs text-gray-400 text-center">
               手机与电脑连接同一局域网后，扫码即可在手机上使用
             </p>
-            <button
-              onClick={() => setOpen(false)}
-              className="px-4 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors cursor-pointer"
-            >
-              关闭
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setRemoteConnected(true);
+                  setOpen(false);
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors cursor-pointer"
+              >
+                模拟连接
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                className="px-4 py-2 text-sm font-medium bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-lg transition-colors cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
           </div>
         </div>
       )}

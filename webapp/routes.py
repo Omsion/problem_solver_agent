@@ -322,20 +322,20 @@ async def stream_global_events(request: Request):
 
     if should_notify_remote:
         _remote_connected_ips.add(client_host)
+        # 立即广播给所有已连接的客户端
+        event_bus.publish_global({"type": "remote_connected", "client_ip": client_host})
 
     async def _event_generator():
         # 发送 init 事件确认连接建立
         yield f"event: init\ndata: {json.dumps({'type': 'init', 'message': 'connected'}, ensure_ascii=False)}\n\n"
 
-        # 如果连接来自远程设备，推送全局 remote_connected 事件
+        # 如果连接来自远程设备，也发送给这个客户端
         if should_notify_remote:
             rc_event = json.dumps({
                 "type": "remote_connected",
                 "client_ip": client_host,
             }, ensure_ascii=False)
             yield f"event: remote_connected\ndata: {rc_event}\n\n"
-            # 同步发布到全局事件总线，其他已连接的全局 SSE 订阅者也能收到
-            event_bus.publish_global({"type": "remote_connected", "client_ip": client_host})
 
         # SSE 心跳间隔（秒）
         heartbeat_interval = 30

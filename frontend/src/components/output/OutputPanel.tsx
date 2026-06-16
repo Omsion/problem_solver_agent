@@ -13,7 +13,7 @@ interface Props {
 type Tab = "answer" | "thinking";
 
 export const OutputPanel = ({ taskId }: Props) => {
-  const progress = useTaskStore((s) => (taskId ? s.progress[taskId] : undefined));
+  const progress = useTaskStore((s: any) => (taskId ? s.progress[taskId] : undefined));
   const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>("answer");
   const [isReadingMode, setIsReadingMode] = useState(false);
@@ -30,20 +30,21 @@ export const OutputPanel = ({ taskId }: Props) => {
     );
   }
 
-  // 如果有 taskId 但还没有 progress，先尝试获取任务
-  if (!progress) {
+  // 如果有 taskId 但还没有 progress，或者是 idle 状态但有 message，显示加载中
+  if (!progress || (progress.phase === "idle" && progress.message)) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400 text-sm">
         <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
-        <span>加载任务中...</span>
+        <span>{progress?.message || "加载任务中..."}</span>
       </div>
     );
   }
 
-  if (progress.phase === "idle") {
+  // 如果是纯 idle 状态且没有消息，才显示"等待任务开始"
+  if (progress.phase === "idle" && !progress.message) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400 text-sm">
         <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24">
