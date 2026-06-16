@@ -195,6 +195,7 @@ async def stream_task(task_id: str, thinking: bool = False):
 
     async def _event_generator():
         init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
+        event_bus.publish(task_id, init_event)  # 存入 history，后加入的客户端也能收到
         yield f"event: init\ndata: {json.dumps(init_event, ensure_ascii=False)}\n\n"
 
         # SSE 心跳间隔（秒）

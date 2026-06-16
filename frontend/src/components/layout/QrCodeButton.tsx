@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTaskStore } from "../../stores/useTaskStore";
-import { useIsMobile } from "../../hooks/useMediaQuery";
+import { useIsMobile, useMediaQuery } from "../../hooks/useMediaQuery";
 
 export const QrCodeButton = () => {
   const [open, setOpen] = useState(false);
@@ -8,7 +8,8 @@ export const QrCodeButton = () => {
   const isMobile = useIsMobile();
 
   // 移动端不显示扫码按钮（用户已在手机上访问）
-  if (isMobile) return null;
+  const isMobileOrSmall = useMediaQuery("(max-width: 1023px)");
+  if (isMobile || isMobileOrSmall) return null;
 
   // 远程客户端已连接 → 隐藏按钮
   if (remoteConnected) return null;

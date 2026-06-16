@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { HashRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { HashRouter, Routes, Route, useNavigate, useSearchParams } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
 import { UploadZone } from "./components/upload/UploadZone";
@@ -14,29 +14,12 @@ import { useTaskStore } from "./stores/useTaskStore";
 import { createTask, getTask, listTasks } from "./api/client";
 
 /**
- * 监听 hash 变化，返回当前 URL 中的 task 参数。
- * 使用 state + hashchange 事件确保 React Router 导航时能正确触发重渲染。
+ * 返回当前 URL 中的 task 参数。
+ * 使用 useSearchParams 确保 react-router 导航时正确触发重渲染。
  */
-function useHashTaskId(): string | null {
-  const [taskId, setTaskId] = useState<string | null>(() => {
-    const hash = window.location.hash;
-    const qi = hash.indexOf("?");
-    if (qi === -1) return null;
-    return new URLSearchParams(hash.slice(qi + 1)).get("task");
-  });
-
-  useEffect(() => {
-    const handler = () => {
-      const hash = window.location.hash;
-      const qi = hash.indexOf("?");
-      const next = qi === -1 ? null : new URLSearchParams(hash.slice(qi + 1)).get("task");
-      setTaskId(next);
-    };
-    window.addEventListener("hashchange", handler);
-    return () => window.removeEventListener("hashchange", handler);
-  }, []);
-
-  return taskId;
+function useSearchParamTaskId(): string | null {
+  const [searchParams] = useSearchParams();
+  return searchParams.get("task");
 }
 
 function MainPage() {
@@ -52,7 +35,7 @@ function MainPage() {
   const files = useUploadStore((s) => s.files);
   const navigate = useNavigate();
 
-  const taskParam = useHashTaskId();
+  const taskParam = useSearchParamTaskId();
   const [historyImages, setHistoryImages] = useState<string[]>([]);
   const [hasNewAutoTask, setHasNewAutoTask] = useState(false);
   const [newTaskInfo, setNewTaskInfo] = useState<{ id: string; numImages: number } | null>(null);

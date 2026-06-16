@@ -97,10 +97,19 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
     es.addEventListener("init", (e: MessageEvent) => {
       const data = JSON.parse(e.data);
-      get().updateProgress(taskId, {
-        phase: "classifying",
-        message: `已接收 ${data.num_images} 张图片`,
-      });
+      const current = get().progress[taskId];
+      // 只在还没有进度（首次连接）时设置 phase，避免 reconnect 时降级已有阶段
+      if (!current || current.phase === "idle") {
+        get().updateProgress(taskId, {
+          phase: "classifying",
+          message: `已接收 ${data.num_images} 张图片`,
+        });
+      } else {
+        // 已有进度 → 只更新 message，不降级 phase
+        get().updateProgress(taskId, {
+          message: current.message,
+        });
+      }
     });
 
     es.addEventListener("status", (e: MessageEvent) => {
@@ -177,9 +186,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           case "auto_imported":
             handleAutoImported(data);
             break;
-          case "init":
-            get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+          case "init": {
+            const current = get().progress[taskId];
+            if (!current || current.phase === "idle") {
+              get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+            } else {
+              get().updateProgress(taskId, { message: current.message });
+            }
             break;
+          }
           case "status":
             get().updateProgress(taskId, { phase: data.phase, message: data.message });
             break;
@@ -220,7 +235,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
     set((s) => ({
       connections: { ...s.connections, [taskId]: es },
-      progress: { ...s.progress, [taskId]: emptyProgress() },
+      progress: s.progress[taskId]
+        ? s.progress // 已有进度 → 不要重置，保留现有 phase
+        : { ...s.progress, [taskId]: emptyProgress() },
     }));
   },
 
@@ -297,7 +314,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
     es.addEventListener("init", (e: MessageEvent) => {
       const data = JSON.parse(e.data);
-      get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+      const current = get().progress[taskId];
+      if (!current || current.phase === "idle") {
+        get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+      } else {
+        get().updateProgress(taskId, { message: current.message });
+      }
     });
 
     es.addEventListener("status", (e: MessageEvent) => {
@@ -347,9 +369,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           case "auto_imported":
             handleAutoImported(data);
             break;
-          case "init":
-            get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+          case "init": {
+            const current = get().progress[taskId];
+            if (!current || current.phase === "idle") {
+              get().updateProgress(taskId, { phase: "classifying", message: `已接收 ${data.num_images} 张图片` });
+            } else {
+              get().updateProgress(taskId, { message: current.message });
+            }
             break;
+          }
           case "status":
             get().updateProgress(taskId, { phase: data.phase, message: data.message });
             break;
