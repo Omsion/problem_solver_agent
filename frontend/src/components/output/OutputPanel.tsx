@@ -22,7 +22,7 @@ export const OutputPanel = ({ taskId }: Props) => {
     if (progress?.phase === "done") setTab("answer");
   }, [progress?.phase]);
 
-  if (!taskId || !progress) {
+  if (!taskId) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400 text-sm">
         选择一个任务查看解答
@@ -30,10 +30,27 @@ export const OutputPanel = ({ taskId }: Props) => {
     );
   }
 
+  // 如果有 taskId 但还没有 progress，先尝试获取任务
+  if (!progress) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400 text-sm">
+        <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <span>加载任务中...</span>
+      </div>
+    );
+  }
+
   if (progress.phase === "idle") {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        等待任务开始...
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400 text-sm">
+        <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <span>等待任务开始...</span>
       </div>
     );
   }

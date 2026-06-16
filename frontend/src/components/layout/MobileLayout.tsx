@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useTaskStore } from "../../stores/useTaskStore";
 
 interface Props {
   left: ReactNode;
@@ -10,6 +11,15 @@ type Tab = "left" | "right";
 
 export const MobileLayout = ({ left, right }: Props) => {
   const [tab, setTab] = useState<Tab>("right");
+  const activeTaskId = useTaskStore((s) => s.activeTaskId);
+  const progress = activeTaskId ? useTaskStore((s) => s.progress[activeTaskId]) : undefined;
+
+  // 当有活跃任务时，自动切换到解答标签页
+  useEffect(() => {
+    if (activeTaskId && progress && progress.phase !== "idle") {
+      setTab("right");
+    }
+  }, [activeTaskId, progress?.phase]);
 
   return (
     <div className="flex flex-col h-full">
@@ -43,6 +53,9 @@ export const MobileLayout = ({ left, right }: Props) => {
               />
             </svg>
             题目
+            {activeTaskId && progress && progress.phase !== "idle" && progress.phase !== "done" && (
+              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+            )}
           </button>
           <button
             onClick={() => setTab("right")}
@@ -61,6 +74,9 @@ export const MobileLayout = ({ left, right }: Props) => {
               />
             </svg>
             解答
+            {activeTaskId && progress && progress.phase !== "idle" && progress.phase !== "done" && (
+              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+            )}
           </button>
         </div>
       </div>

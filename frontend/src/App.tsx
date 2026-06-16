@@ -42,46 +42,76 @@ function MainPage() {
 
   // 从历史记录跳转过来时，加载已完成任务的解答
   useEffect(() => {
-    if (!taskParam) return;
+    if (!taskParam) {
+      setHistoryImages([]);
+      setIsLoadingHistory(false);
+      return;
+    }
 
-    let cancelled = false;
+    const currentTaskId = taskParam;
     setIsLoadingHistory(true);
+
+    // 先设置 activeTaskId 并初始化 progress，确保 UI 能立即响应
+    setActiveTaskId(currentTaskId);
+    useTaskStore.getState().updateProgress(currentTaskId, {
+      phase: "idle",
+      message: "加载任务中...",
+    });
+
     (async () => {
       try {
-        const { task, solution_content, image_urls } = await getTask(taskParam);
-        if (cancelled) return;
-        setActiveTaskId(taskParam);
+        const { task, solution_content, image_urls } = await getTask(currentTaskId);
+
+        // 检查是否仍在处理这个任务（防止竞态条件）
+        if (useTaskStore.getState().activeTaskId !== currentTaskId) {
+          // 如果用户已切换到其他任务，忽略这个结果
+          return;
+        }
+
         setHistoryImages(image_urls);
 
         if (task.status === "completed") {
-          updateProgress(taskParam, {
+          updateProgress(currentTaskId, {
             phase: "done",
             message: "解答完成",
             answer: solution_content,
             filename: task.filename,
           });
         } else if (task.status === "failed") {
-          updateProgress(taskParam, {
+          updateProgress(currentTaskId, {
             phase: "error",
             message: "任务失败",
             error: task.error_message,
           });
         } else {
           // 任务仍在处理中 — 连接 SSE 继续接收进度
-          updateProgress(taskParam, {
-            phase: "solving",
-            message: "正在调用求解器生成解答…",
+          updateProgress(currentTaskId, {
+            phase: task.status === "processing" ? "solving" : "classifying",
+            message: task.status === "processing" ? "正在调用求解器生成解答…" : "分类题目类型中…",
             answer: solution_content,
           });
-          connectSSE(taskParam, true);
+          // 确保连接 SSE
+          const existingConn = useTaskStore.getState().connections[currentTaskId];
+          if (!existingConn) {
+            connectSSE(currentTaskId, true);
+          }
         }
       } catch (err) {
-        if (!cancelled) console.error("加载任务失败:", err);
+        // 仅在用户仍在这个任务时才显示错误
+        if (useTaskStore.getState().activeTaskId === currentTaskId) {
+          console.error("加载任务失败:", err);
+          updateProgress(currentTaskId, {
+            phase: "error",
+            message: "加载失败",
+            error: "无法加载任务数据",
+          });
+        }
       } finally {
-        if (!cancelled) setIsLoadingHistory(false);
+        if (useTaskStore.getState().activeTaskId === currentTaskId) {
+          setIsLoadingHistory(false);
+        }
       }
     })();
-    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskParam]);
 
@@ -171,15 +201,30 @@ function MainPage() {
 
   const handleStart = useCallback(async () => {
     if (files.length === 0) return;
+
+    // 先断开所有现有连接并重置状态
+    const { activeTaskId: prevTaskId, connections } = useTaskStore.getState();
+    if (prevTaskId && connections[prevTaskId]) {
+      useTaskStore.getState().disconnectSSE(prevTaskId);
+    }
+
     // 清除 URL 中的 task 参数，进入新任务模式
     navigate("/");
     setIsProcessing(true);
     setHistoryImages([]);
     setHasNewAutoTask(false);
     setNewTaskInfo(null);
+
     try {
       const fileObjs = files.map((f) => f.file);
       const { task_id } = await createTask(fileObjs);
+
+      // 确保在设置 activeTaskId 前先初始化 progress
+      useTaskStore.getState().updateProgress(task_id, {
+        phase: "idle",
+        message: "",
+      });
+
       setActiveTaskId(task_id);
       connectSSE(task_id, true);
     } catch (err) {
