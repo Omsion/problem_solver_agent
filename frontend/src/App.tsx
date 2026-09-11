@@ -41,7 +41,7 @@ function TaskPage({ taskId }: { taskId: string }) {
   const setActiveTaskId = useTaskStore((s) => s.setActiveTaskId);
   const connectSSE = useTaskStore((s) => s.connectSSE);
   const updateProgress = useTaskStore((s) => s.updateProgress);
-  const resetProgress = useTaskStore((s) => s.resetProgress);
+  const ensureProgress = useTaskStore((s) => s.ensureProgress);
   const disconnectSSE = useTaskStore((s) => s.disconnectSSE);
   const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,18 +55,26 @@ function TaskPage({ taskId }: { taskId: string }) {
     setActiveTaskId(taskId);
     setLoading(true);
     setLoadError(null);
-    resetProgress(taskId);
 
-    // 已连接同一任务时保留已有进度，避免重挂载把流式内容清空
-    const existing = useTaskStore.getState().progress[taskId];
-    if (!existing) {
+    // 只在"这个任务还没有任何进度"时初始化。已有进度必须保留：来回切换历史任务时
+    // 清空状态会让已累积的思考过程/解答归零，而服务端不会重放已经发过的事件。
+    const before = useTaskStore.getState().progress[taskId];
+    ensureProgress(taskId);
+    if (!before || (before.phase === "idle" && !before.message)) {
       updateProgress(taskId, { phase: "idle", message: "加载任务中…" });
     }
 
     getTask(taskId)
-      .then(({ task, solution_content, image_urls }) => {
+      .then(({ task, solution_content, image_urls, answer_card }) => {
         if (seq !== requestSeq.current) return; // 用户已切到别的任务
         setImages(image_urls);
+        updateProgress(taskId, {
+          // 「已用时」的起点优先用任务的真实创建时间（后端给的是秒）；
+          // 已经有起点时不要覆盖——换路重解后重新进入本页，计时不该跳回任务创建时刻
+          ...(task.created_at && !before?.startedAt ? { startedAt: task.created_at * 1000 } : {}),
+          // 答案卡用后端抽取的结果，前端只在拿不到时才回退
+          ...(answer_card ? { answerCard: answer_card } : {}),
+        });
         if (task.status === "completed") {
           updateProgress(taskId, {
             phase: "done",
@@ -109,7 +117,7 @@ function TaskPage({ taskId }: { taskId: string }) {
       // 离开任务页时断开该任务的流，避免后台连接堆积
       disconnectSSE(taskId);
     };
-  }, [taskId, setActiveTaskId, updateProgress, resetProgress, disconnectSSE]);
+  }, [taskId, setActiveTaskId, updateProgress, ensureProgress, disconnectSSE]);
 
   // 连接流：等详情加载完成后按实际状态决定是否需要流
   const phase = useTaskStore((s) => (taskId ? s.progress[taskId]?.phase : undefined));

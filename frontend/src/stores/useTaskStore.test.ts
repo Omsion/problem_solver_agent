@@ -146,6 +146,31 @@ describe("useTaskStore 流式状态", () => {
     expect(progress.phase).toBe("idle");
   });
 
+  it("ensureProgress 为没有进度的任务建初始条目", () => {
+    expect(useTaskStore.getState().ensureProgress("t9")).toBe(true);
+
+    expect(progressOf("t9").phase).toBe("idle");
+    expect(progressOf("t9").thinking).toBe("");
+  });
+
+  it("ensureProgress 不会清空已有进度（来回切换任务不丢思考过程与解答）", () => {
+    useTaskStore.getState().connectSSE("t1");
+    FakeEventSource.last.emit("reasoning", { type: "reasoning", content: "思考 A" });
+    FakeEventSource.last.emit("chunk", { type: "chunk", content: "解答 A" });
+    useTaskStore.getState().updateProgress("t1", { phase: "solving", startedAt: 1_700_000_000_000 });
+
+    // 切到 t2 再切回 t1：TaskPage 会对 t1 调一次 ensureProgress
+    useTaskStore.getState().connectSSE("t2");
+    expect(useTaskStore.getState().ensureProgress("t1")).toBe(false);
+
+    const progress = progressOf("t1");
+    expect(progress.thinking).toBe("思考 A");
+    expect(progress.answer).toBe("解答 A");
+    expect(progress.phase).toBe("solving");
+    // 计时起点同样保留，否则"已用时"会归零
+    expect(progress.startedAt).toBe(1_700_000_000_000);
+  });
+
   it("disconnectSSE 关闭连接并移除注册", () => {
     useTaskStore.getState().connectSSE("t1");
     const source = FakeEventSource.last;

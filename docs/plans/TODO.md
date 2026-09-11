@@ -74,8 +74,8 @@ cd frontend; npx tsc -b; npx eslint . --max-warnings=0; npx vitest run   # 117 p
 - **根因**：先 `INSERT usage_events`，再 `UPDATE users SET spent = spent + ?`；当 `user_id` 不存在时后者匹配 0 行静默 no-op，但流水已落库
 - **复现**：
   ```python
-  m.record_usage(user_id="u_ghost", stage="solve", model="deepseek-v4-pro", output_tokens=1_000_000)
-  m.global_usage_summary()   # {'calls': 1, 'cost': 8.0, 'top_users': []}  ← 无法归属的花费
+  m.record_usage(user_id="u_ghost", stage="solve", model="deepseek-flash", output_tokens=1_000_000)
+  m.global_usage_summary()   # {'calls': 1, 'cost': 2.0, 'top_users': []}  ← 无法归属的花费
   ```
 - **触发路径**：`webapp/usage.py:80` 只做 `if not user_id` 真值判断；用户被删除后任务完成即可触发
 - **建议修法**：`record_usage` 开头校验用户存在，不存在则 `logger.warning` 并返回 `None`；或改为 `UPDATE ... WHERE id = ?` 后用 `cursor.rowcount == 0` 判定并回滚事务

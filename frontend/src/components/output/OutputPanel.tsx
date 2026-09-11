@@ -3,8 +3,10 @@ import { RefreshCw, NotebookPen } from "lucide-react";
 import { useTaskStore } from "../../stores/useTaskStore";
 import { useIsMobile } from "../../hooks/useMediaQuery";
 import { useWakeLock, vibrateReady } from "../../hooks/useWakeLock";
+import { useElapsed } from "../../hooks/useElapsed";
 import { cancelTask, retryTask, verifyTask, resolveTask } from "../../lib/api";
 import { formatDuration } from "../../lib/utils";
+import { fallbackAnswerCard, stripFrontmatter } from "../../lib/solutionText";
 import { ProgressSteps } from "./ProgressSteps";
 import { LazyAnswer, LazyReader, LazyTimings } from "./lazy";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -21,34 +23,6 @@ interface Props {
 type Tab = "answer" | "thinking";
 
 const RUNNING_PHASES = new Set(["classifying", "ocr", "solving", "verifying", "archiving"]);
-/** 兜底答案卡的长度上限：避免把整篇解答塞进卡片 */
-const FALLBACK_CARD_CHARS = 400;
-
-/**
- * 从纯文本里粗略提取"看起来像答案"的片段。
- *
- * 正常情况下答案卡由后端抽取（`answer_card` 事件字段）；只有旧任务或抽取失败时
- * 才走这里。刻意不做 markdown 解析，保持零成本。
- */
-function fallbackCard(answer: string): AnswerCardData {
-  const text = answer.trim();
-  const match = /(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?\*{0,2}[ \t]*最终答案[^\n]*\n+/m.exec(text);
-  if (match) {
-    const body = text.slice(match.index + match[0].length).trim();
-    if (body) {
-      return {
-        text: body.slice(0, FALLBACK_CARD_CHARS),
-        extracted: true,
-        truncated: body.length > FALLBACK_CARD_CHARS,
-      };
-    }
-  }
-  return {
-    text: text.slice(0, FALLBACK_CARD_CHARS),
-    extracted: false,
-    truncated: text.length > FALLBACK_CARD_CHARS,
-  };
-}
 
 export const OutputPanel = ({ taskId }: Props) => {
   const progress = useTaskStore((s) => (taskId ? s.progress[taskId] : undefined));
@@ -63,7 +37,6 @@ export const OutputPanel = ({ taskId }: Props) => {
   const [copiedAll, setCopiedAll] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
 
   const phase = progress?.phase ?? "idle";
   const running = RUNNING_PHASES.has(phase);
@@ -90,27 +63,27 @@ export const OutputPanel = ({ taskId }: Props) => {
     if (finished) setShowFull(false);
   }, [finished, taskId]);
 
-  // 处理中的实时计时，让"是否还在跑"一眼可见
-  useEffect(() => {
-    if (!running) {
-      setElapsed(0);
-      return;
-    }
-    const startedAt = Date.now();
-    setElapsed(0);
-    const timer = setInterval(() => setElapsed(Date.now() - startedAt), 500);
-    return () => clearInterval(timer);
-  }, [running, taskId]);
+  // 处理中的实时计时，让"是否还在跑"一眼可见。
+  // 起点是任务的真实开始时间（startedAt），切换任务不会归零——见 useElapsed。
+  const startedAt = progress?.startedAt ?? null;
+  const elapsed = useElapsed(running, startedAt, taskId);
 
   const card = useMemo<AnswerCardData | null>(() => {
     if (!progress || !finished) return null;
-    if (progress.answerCard) return progress.answerCard;
-    if (progress.answer) return fallbackCard(progress.answer);
+    // 空卡片会把完整解答折叠起来，等于什么都看不到，所以按"没有卡"处理
+    if (progress.answerCard?.text?.trim()) return progress.answerCard;
+    if (progress.answer) {
+      const fallback = fallbackAnswerCard(progress.answer);
+      return fallback.text.trim() ? fallback : null;
+    }
     return null;
   }, [progress, finished]);
 
+  // 展示与复制都去掉文件头的 YAML 元信息：那是内部记账字段，不是答案内容
+  const answerBody = useMemo(() => stripFrontmatter(progress?.answer ?? ""), [progress?.answer]);
+
   const handleCopyAll = useCallback(async () => {
-    const text = progress?.answer ?? "";
+    const text = answerBody;
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -130,7 +103,7 @@ export const OutputPanel = ({ taskId }: Props) => {
     }
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
-  }, [progress?.answer]);
+  }, [answerBody]);
 
   const handleVerify = useCallback(async () => {
     if (!taskId) return;
@@ -168,6 +141,8 @@ export const OutputPanel = ({ taskId }: Props) => {
           answerCard: null,
           verification: null,
           error: null,
+          // 新一轮求解：计时起点重算
+          startedAt: Date.now(),
         });
         retryStream(taskId);
         notify.info("已开始重新求解", "复用已识别的题目文本，跳过识别步骤");
@@ -212,7 +187,7 @@ export const OutputPanel = ({ taskId }: Props) => {
     setActionError(null);
     try {
       await retryTask(taskId);
-      updateProgress(taskId, { phase: "solving", message: "正在重试…", error: null });
+      updateProgress(taskId, { phase: "solving", message: "正在重试…", error: null, startedAt: Date.now() });
       retryStream(taskId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "重试失败";
@@ -313,6 +288,14 @@ export const OutputPanel = ({ taskId }: Props) => {
         ) : null}
 
         <div className="ml-auto flex items-center">
+          {/* 运行状态与操作放在同一行：状态在左、操作在右，正文区只留内容 */}
+          {running && (
+            <span className="flex items-center gap-1.5 px-1 text-xs text-gray-400 tabular-nums whitespace-nowrap">
+              <span className="hidden sm:inline">{answerBody.length} 字符</span>
+              <span className="hidden text-gray-300 sm:inline">·</span>
+              <span>已用时 {formatDuration(elapsed)}</span>
+            </span>
+          )}
           {progress.answer && (
             <button
               onClick={handleCopyAll}
@@ -342,6 +325,16 @@ export const OutputPanel = ({ taskId }: Props) => {
               ]}
             />
           )}
+          {running && (
+            <button
+              onClick={handleCancel}
+              disabled={busy}
+              className="px-2 sm:px-3 py-2.5 text-sm font-medium text-red-400 hover:text-red-600 disabled:opacity-50 transition-colors cursor-pointer touch-target"
+              title="取消这个任务"
+            >
+              {isMobile ? "取消" : "取消任务"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -349,20 +342,6 @@ export const OutputPanel = ({ taskId }: Props) => {
         {tab === "answer" && (
           <div className="p-4 space-y-4">
             {running && <ProgressSteps phase={phase} message={progress.message} />}
-
-            {running && (
-              <div className="flex items-center justify-between text-xs text-gray-400 px-1">
-                <span>已用时 {formatDuration(elapsed)}</span>
-                <span>{progress.answer.length} 字符</span>
-                <button
-                  onClick={handleCancel}
-                  disabled={busy}
-                  className="text-red-400 hover:text-red-600 disabled:opacity-50 cursor-pointer"
-                >
-                  取消任务
-                </button>
-              </div>
-            )}
 
             {statusHint && (
               <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
@@ -394,10 +373,10 @@ export const OutputPanel = ({ taskId }: Props) => {
               />
             )}
 
-            {running && progress.answer && (
+            {running && answerBody && (
               <div className="rounded-xl border border-gray-200 bg-white p-4">
                 <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-gray-800 max-h-[55vh] overflow-auto">
-                  {progress.answer}
+                  {answerBody}
                 </pre>
               </div>
             )}
@@ -415,7 +394,7 @@ export const OutputPanel = ({ taskId }: Props) => {
                   <NotebookPen className="w-3.5 h-3.5" />
                   完整解答
                 </div>
-                <LazyAnswer content={progress.answer} />
+                <LazyAnswer content={answerBody} />
               </div>
             )}
 
@@ -429,13 +408,13 @@ export const OutputPanel = ({ taskId }: Props) => {
 
         {tab === "thinking" && (
           <div className="p-4">
-            <ThinkingBlock content={progress.thinking} />
+            <ThinkingBlock content={progress.thinking} streaming={running} />
           </div>
         )}
       </div>
 
       {isReadingMode && progress.answer && (
-        <LazyReader content={progress.answer} onClose={() => setIsReadingMode(false)} />
+        <LazyReader content={answerBody} onClose={() => setIsReadingMode(false)} />
       )}
     </div>
   );

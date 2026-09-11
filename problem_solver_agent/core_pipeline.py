@@ -280,7 +280,7 @@ class SolutionPipeline:
             timings.solve = int((time.time() - solve_started) * 1000)
             answer_text = "".join(chunks)
             if not answer_text.strip() or "--- ERROR ---" in answer_text:
-                raise RuntimeError("求解器返回空响应或包含内部错误")
+                raise RuntimeError(f"求解器返回空响应或包含内部错误（模型 {model}）")
 
             # 求解阶段用量（输入按题目文本长度估算，输出按实际生成字符数）
             self._emit_usage(UsageReport(
@@ -426,7 +426,7 @@ class SolutionPipeline:
             timings.solve = int((time.time() - solve_started) * 1000)
             answer_text = "".join(chunks)
             if not answer_text.strip() or "--- ERROR ---" in answer_text:
-                raise RuntimeError("求解器返回空响应或包含内部错误")
+                raise RuntimeError(f"求解器返回空响应或包含内部错误（模型 {model}）")
 
             # 换路重解也要计入用量，否则用户能靠反复重解绕过计费
             self._emit_usage(UsageReport(

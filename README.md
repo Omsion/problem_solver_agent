@@ -40,7 +40,7 @@ copy .env.example .env
 
 | 变量 | 用途 | 获取地址 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | 求解模型 `deepseek-v4-pro` + 辅助模型 `deepseek-v4-flash` | platform.deepseek.com |
+| `DEEPSEEK_API_KEY` | 求解模型 `deepseek-flash` + 辅助模型 `deepseek-flash` | platform.deepseek.com |
 | `ZHIPU_API_KEY` | 视觉模型 `GLM-4.6V` 系列（分类 / OCR / 视觉推理） | open.bigmodel.cn |
 
 完整可配置项见 `.env.example`（每项都有注释说明）。
@@ -217,7 +217,7 @@ VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"   # 分类 + OCR
 VISION_REASONING_MODEL = "GLM-4.6V"         # 图形推理
 
 SOLVER_CONFIG = {
-    "deepseek": {"model": "deepseek-v4-pro", "base_url": "https://api.deepseek.com/v1"},
+    "deepseek": {"model": "deepseek-flash", "base_url": "https://api.deepseek.com/v1"},
 }
 SOLVER_ROUTING_CONFIG = {"CODING_SOLVER": "deepseek", "DEFAULT_SOLVER": "deepseek"}
 ```

@@ -91,7 +91,7 @@ class UsageRecorder:
             logger.warning("用量记账失败（不影响解题）: %s", exc)
             return None
 
-    def estimate_task_cost(self, pages: int, *, model: str = "deepseek-v4-pro") -> float:
+    def estimate_task_cost(self, pages: int, *, model: str = "deepseek-flash") -> float:
         """预估一次任务的大致费用，用于提交前的额度预检。
 
         按"1 次视觉调用 + 1 次求解"估算，偏保守（宁可高估也不能低估）。

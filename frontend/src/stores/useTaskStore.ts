@@ -4,7 +4,8 @@ import { sseUrl, globalSseUrl } from "../api/client";
 import { createTaskStream, type StreamStatus, type TaskStream } from "../features/stream/taskStream";
 import { appendBounded } from "../lib/streamBuffer";
 
-function emptyProgress(): ProgressState {
+/** 一个任务的初始进度（导出供测试与"占位"场景复用） */
+export function emptyProgress(): ProgressState {
   return {
     phase: "idle",
     message: "",
@@ -18,6 +19,7 @@ function emptyProgress(): ProgressState {
     answerCard: null,
     verification: null,
     verifying: false,
+    startedAt: null,
   };
 }
 
@@ -43,6 +45,14 @@ interface TaskState {
   disconnectGlobalSSE: () => void;
   updateProgress: (taskId: string, patch: Partial<ProgressState>) => void;
   resetProgress: (taskId: string) => void;
+  /**
+   * 确保该任务存在进度条目，**已存在时原样保留**。
+   *
+   * 返回是否新建了条目。切换历史任务时必须走这里而不是 `resetProgress`：
+   * 服务端不会重放已经发过的 reasoning/chunk 事件，一旦清空就永久丢失
+   * （表现为「已用时」「思考过程」归零）。
+   */
+  ensureProgress: (taskId: string) => boolean;
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -62,6 +72,16 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((s) => ({
       progress: { ...s.progress, [taskId]: emptyProgress() },
     })),
+
+  ensureProgress: (taskId) => {
+    let created = false;
+    set((s) => {
+      if (s.progress[taskId]) return s; // 已有进度：原样保留（切换任务不丢状态）
+      created = true;
+      return { progress: { ...s.progress, [taskId]: emptyProgress() } };
+    });
+    return created;
+  },
 
   updateProgress: (taskId, patch) => {
     set((s) => {

@@ -3,6 +3,13 @@ solver_client.py - 统一求解器客户端 (V2.6 - Dict 事件流版)
 
 本模块是实现多模型灵活切换的核心。
 
+V2.7 版本更新:
+- 【健壮性】: 思考模式下若 `reasoning_content` 占满 `max_tokens`、导致正文一个字
+  都没产出（`finish_reason=length`），自动关闭思考模式重试一次，而不是让整个任务
+  以"求解器返回空响应"失败。
+- 【可诊断】: 失败时错误事件里带上模型名、`finish_reason`、思考/正文字符数与真实的
+  API 异常文本，不再只给一句"空响应"。
+
 V2.6 版本更新:
 - 【接口变更】: `stream_solve()` 返回类型从 `Generator[str]` 改为 `Generator[dict]`，
   每个事件为 `{"type": "reasoning"/"content", "content": "..."}` 结构。
@@ -75,6 +82,73 @@ def get_client(provider: str) -> OpenAI:
     return client
 
 
+def _build_payload(
+    provider: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    enable_thinking: bool,
+) -> "StandardChatPayload | DeepSeekChatPayload":
+    """按 provider 组装一次请求体（思考模式目前只有 DeepSeek 支持）。
+
+    注意：关闭思考必须**显式**下发 `thinking.type=disabled`。实测只把 `extra_body`
+    整个省略时（旧行为）模型照样思考——思考过程把 max_tokens 吃光、正文一个字都
+    没有，所以"关闭思考模式重解"其实一直没生效。
+    """
+    if provider == 'deepseek':
+        if enable_thinking:
+            # DeepSeek 思考模式：medium 深度避免思考 token 耗尽 max_tokens 配额
+            return {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "medium", "max_tokens": config.SOLVER_MAX_TOKENS}
+        return {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "disabled"}}, "max_tokens": config.SOLVER_MAX_TOKENS, "temperature": 0.7}
+    return {"model": model, "messages": messages, "stream": True,
+            "max_tokens": 8000, "temperature": 0.7}
+
+
+def _pump(completion) -> Generator[dict[str, str], None, dict[str, Any]]:
+    """把 chunk 流翻译成事件流，并把统计信息 return 给调用方。
+
+    Yields:
+        {"type": "reasoning"/"content", "content": "..."}
+
+    Returns:
+        {"content_chars": int, "reasoning_chars": int, "finish_reason": str | None}
+        —— 这是判断"为什么没有正文"的唯一依据，必须回传给调用方。
+    """
+    content_chars = 0
+    reasoning_chars = 0
+    finish_reason: str | None = None
+
+    for chunk in completion:
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+        choice = choices[0]
+        if getattr(choice, "finish_reason", None):
+            finish_reason = choice.finish_reason
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            continue
+        # 捕获 DeepSeek 思考模式下的推理内容
+        reasoning = getattr(delta, 'reasoning_content', None)
+        if reasoning:
+            reasoning_chars += len(reasoning)
+            yield {"type": "reasoning", "content": reasoning}
+        content = getattr(delta, "content", None)
+        if content:
+            content_chars += len(content)
+            yield {"type": "content", "content": content}
+
+    return {
+        "content_chars": content_chars,
+        "reasoning_chars": reasoning_chars,
+        "finish_reason": finish_reason,
+    }
+
+
+def _error_events(message: str) -> Generator[dict[str, str], None, None]:
+    """只产出一条错误事件（求解彻底失败时的最终返回）。"""
+    yield {"type": "error", "content": message}
+
+
 def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[dict[str, str], None, None]:
     """
     流式调用指定的LLM进行问题求解，内置自动重试逻辑。
@@ -82,44 +156,29 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
     Yields dict events with structure:
         {"type": "reasoning", "content": "..."}  — DeepSeek 思考过程
         {"type": "content", "content": "..."}    — 最终解答文本
+        {"type": "error", "content": "..."}      — 失败原因（含可诊断信息）
 
     Args:
-        enable_thinking: 是否启用思考模式（仅 DeepSeek）。开启后 reasoning_content 将被捕获为 reasoning 事件。
+        enable_thinking: 是否启用思考模式（仅 DeepSeek）。开启后 reasoning_content 将被捕获为
+            reasoning 事件；若思考过程占满 max_tokens 导致正文为空，会自动关闭思考模式重试一次。
     """
     logger.info(f"Step 2.2: 使用动态选择的模型 '{model}' (提供商: {provider}) 进行流式求解...")
+
+    messages: list[dict[str, Any]] = [{"role": "user", "content": final_prompt}]
+    client: OpenAI | None = None
+    completion = None
+    failure = ""
 
     for attempt in range(config.MAX_RETRIES + 1):
         try:
             client = get_client(provider)
-            messages: list[dict[str, Any]] = [{"role": "user", "content": final_prompt}]
-            payload: StandardChatPayload | DeepSeekChatPayload
-
-            if provider == 'deepseek':
-                if enable_thinking:
-                    # DeepSeek 思考模式：medium 深度避免思考 token 耗尽 max_tokens 配额
-                    payload = {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "medium", "max_tokens": 16000}
-                else:
-                    payload = {"model": model, "messages": messages, "stream": True, "max_tokens": 16000, "temperature": 0.7}
-            else:
-                payload = {"model": model, "messages": messages, "stream": True,
-                           "max_tokens": 8000, "temperature": 0.7}
-
-            completion = client.chat.completions.create(**payload)  # type: ignore
-
-            # 返回生成器：同时捕获 reasoning_content（思考过程）和 content（最终解答）
-            def stream_generator() -> Generator[dict[str, str], None, None]:
-                for chunk in completion:
-                    delta = chunk.choices[0].delta
-                    # 捕获 DeepSeek 思考模式下的推理内容
-                    reasoning = getattr(delta, 'reasoning_content', None)
-                    if reasoning:
-                        yield {"type": "reasoning", "content": reasoning}
-                    if delta.content:
-                        yield {"type": "content", "content": delta.content}
-
-            return stream_generator()
+            completion = client.chat.completions.create(  # type: ignore[arg-type]
+                **_build_payload(provider, model, messages, enable_thinking)
+            )
+            break
 
         except (APIConnectionError, APITimeoutError) as e:
+            failure = f"{type(e).__name__}: {e}"
             log_message = f"流式调用模型 '{model}' 时发生网络错误 (尝试 {attempt + 1}/{config.MAX_RETRIES + 1}): {e}"
             if attempt < config.MAX_RETRIES:
                 logger.warning(log_message)
@@ -127,16 +186,59 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
                 time.sleep(config.RETRY_DELAY)
             else:
                 logger.error(f"达到最大重试次数，流式调用 '{model}' 最终失败。")
-                break
         except Exception as e:
+            failure = f"{type(e).__name__}: {e}"
             logger.error(f"流式调用模型 '{model}' 时发生未知的严重错误: {e}", exc_info=True)
             break
 
-    # 所有重试失败后的最终返回
-    def error_generator() -> Generator[dict[str, str], None, None]:
-        yield {"type": "error", "content": f"\n\n--- ERROR in solver_client: All retries failed for model {model}. ---\n"}
+    if completion is None or client is None:
+        return _error_events(f"求解器调用失败（模型 {model}）：{failure or '未获得响应'}")
 
-    return error_generator()
+    # 返回生成器：同时捕获 reasoning_content（思考过程）和 content（最终解答）
+    def stream_generator() -> Generator[dict[str, str], None, None]:
+        try:
+            stats: dict[str, Any] = yield from _pump(completion)
+        except Exception as e:
+            logger.error(f"读取模型 '{model}' 的流式响应时出错: {e}", exc_info=True)
+            yield {"type": "error", "content": f"求解器流式响应中断（模型 {model}）：{type(e).__name__}: {e}"}
+            return
+
+        if stats["content_chars"]:
+            return
+
+        detail = (
+            f"模型={model}, finish_reason={stats['finish_reason']}, "
+            f"思考过程={stats['reasoning_chars']} 字符, 正文=0 字符"
+        )
+        if not enable_thinking:
+            yield {"type": "error", "content": f"求解器没有返回正文（{detail}）"}
+            return
+
+        # 思考模式最常见的失败模式：思考过程吃满 max_tokens，配额没留给正文
+        # （DeepSeek 在思考未结束时直接以 finish_reason=length 收尾，正文一个字都没有）。
+        # 这里自动关掉思考模式再要一次正文，避免整个任务白跑几分钟。
+        logger.warning("模型 '%s' 只产出思考过程没有正文（%s），改用关闭思考模式重试一次。", model, detail)
+        yield {"type": "reasoning", "content": "\n\n[思考过程占满了输出配额，已自动关闭思考模式重新生成解答…]\n\n"}
+
+        try:
+            retry_completion = client.chat.completions.create(  # type: ignore[arg-type]
+                **_build_payload(provider, model, messages, False)
+            )
+            retry_stats: dict[str, Any] = yield from _pump(retry_completion)
+        except Exception as e:
+            logger.error(f"关闭思考模式重试 '{model}' 失败: {e}", exc_info=True)
+            yield {"type": "error", "content": (
+                f"求解器没有返回正文（{detail}），关闭思考模式重试亦失败：{type(e).__name__}: {e}"
+            )}
+            return
+
+        if not retry_stats["content_chars"]:
+            yield {"type": "error", "content": (
+                f"求解器没有返回正文（{detail}）；关闭思考模式重试后仍为空"
+                f"（finish_reason={retry_stats['finish_reason']}）"
+            )}
+
+    return stream_generator()
 
 
 def stream_solve_text_only(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[str, None, None]:

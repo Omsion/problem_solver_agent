@@ -245,3 +245,74 @@ def test_stats_endpoint(client: TestClient):
     body = client.get("/api/stats").json()
     assert "stages" in body
     assert "sample_size" in body
+
+
+# ---------------------------------------------------------------------------
+# 任务详情里的答案卡
+# ---------------------------------------------------------------------------
+
+
+def test_task_detail_includes_answer_card_without_metadata(client: TestClient, tmp_path):
+    """详情接口必须带上后端抽取的答案卡。
+
+    前端拿到的是**整个解答文件**（YAML frontmatter + 题目文本 + 解答），
+    没有这张卡时它只能自己猜，结果把元信息和题面当成"最终答案"显示出来。
+    """
+    task_id = _upload(client, "ok.png", _png_bytes()).json()["task_id"]
+
+    from webapp import routes
+
+    solution = tmp_path / "solutions" / "22_测试.md"
+    solution.parent.mkdir(parents=True, exist_ok=True)
+    # write_text 在 Windows 上会写成 CRLF，正好覆盖换行符归一化
+    solution.write_text(
+        "---\n"
+        "problem_type: ACM\n"
+        "solver: deepseek (deepseek-flash)\n"
+        "images:\n"
+        "  - a.jpg\n"
+        "---\n\n"
+        "# 题目文本\n\n"
+        "题面内容不该出现在答案卡里\n\n"
+        "---\n\n"
+        "# 解答\n\n"
+        "## 最终答案\n"
+        "选 C。购买概率 0.8123。\n",
+        encoding="utf-8",
+    )
+    routes.task_manager.update_task(
+        task_id, status="completed", solution_path=str(solution), filename=solution.name
+    )
+
+    body = client.get(f"/api/tasks/{task_id}").json()
+    card = body["answer_card"]
+    assert card is not None
+    assert card["section"] == "最终答案"
+    assert card["text"].startswith("选 C")
+    assert "problem_type" not in card["text"]
+    assert "题面内容" not in card["text"]
+
+
+def test_task_detail_falls_back_to_stored_card(client: TestClient, tmp_path):
+    """解答文件已被清理时，退回流水线落库的卡片文本。"""
+    task_id = _upload(client, "ok.png", _png_bytes()).json()["task_id"]
+
+    from webapp import routes
+
+    routes.task_manager.update_task(
+        task_id,
+        status="completed",
+        answer_card="**核心任务**：实现梯度下降。",
+        solution_path=str(tmp_path / "gone.md"),
+    )
+
+    card = client.get(f"/api/tasks/{task_id}").json()["answer_card"]
+    assert card is not None
+    assert card["text"] == "**核心任务**：实现梯度下降。"
+
+
+def test_task_detail_without_answer_returns_null_card(client: TestClient):
+    card = client.get(f"/api/tasks/{_upload(client, 'ok.png', _png_bytes()).json()['task_id']}").json()[
+        "answer_card"
+    ]
+    assert card is None

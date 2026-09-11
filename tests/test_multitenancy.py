@@ -271,7 +271,7 @@ def test_me_endpoint_reports_usage_and_budget(app_env):
 
     app.state.accounts.record_usage(
         user_id=user_id, stage="solve", provider="deepseek",
-        model="deepseek-v4-pro", input_tokens=1000, output_tokens=500,
+        model="deepseek-flash", input_tokens=1000, output_tokens=500,
     )
 
     body = client.get("/api/v1/auth/me", headers=_auth(token)).json()
@@ -279,7 +279,7 @@ def test_me_endpoint_reports_usage_and_budget(app_env):
     assert body["user"]["spent"] > 0
     assert body["user"]["remaining"] < body["user"]["budget"]
     assert body["usage"]["calls"] == 1
-    assert body["usage"]["by_model"][0]["model"] == "deepseek-v4-pro"
+    assert body["usage"]["by_model"][0]["model"] == "deepseek-flash"
 
 
 def test_phone_is_masked_in_api_responses(app_env):
@@ -394,7 +394,7 @@ def test_usage_event_is_recorded(app_env, monkeypatch):
         on_progress({
             "type": "usage",
             "stage": "solve",
-            "model": "deepseek-v4-pro",
+            "model": "deepseek-flash",
             "provider": "deepseek",
             "pages": 1,
             "output_chars": 2000,
@@ -414,7 +414,7 @@ def test_usage_event_is_recorded(app_env, monkeypatch):
     usage = app.state.accounts.list_usage(user_id)
     assert len(usage) == 1
     assert usage[0]["stage"] == "solve"
-    assert usage[0]["model"] == "deepseek-v4-pro"
+    assert usage[0]["model"] == "deepseek-flash"
     assert usage[0]["task_id"] == task_id
     assert usage[0]["cost"] > 0
 

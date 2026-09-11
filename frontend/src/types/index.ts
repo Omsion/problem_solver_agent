@@ -118,6 +118,13 @@ export interface ProgressState {
   verifying: boolean;
   /** 原标题文本（换路重解时展示） */
   resolved?: boolean;
+  /**
+   * 本次运行的真实开始时间（毫秒时间戳），用于「已用时」计时。
+   *
+   * 来自任务的 `created_at`（后端为秒级，前端 ×1000），换路重解/重试时重置为当前时间。
+   * 缺失时前端退化为「第一次观察到它在运行」的时刻。
+   */
+  startedAt?: number | null;
 }
 
 // ---- API payloads ----
@@ -125,6 +132,13 @@ export interface TaskDetail {
   task: Task;
   solution_content: string;
   image_urls: string[];
+  /**
+   * 后端抽取的答案卡（与 SSE `done` 事件同源）。
+   *
+   * 有它就不要在前端自己"猜答案"：任务详情返回的是整个解答文件，
+   * 直接取首段会把 YAML frontmatter / 题面当成最终答案。
+   */
+  answer_card?: AnswerCard | null;
 }
 
 export interface SystemStatus {

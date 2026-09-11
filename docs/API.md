@@ -76,7 +76,7 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 ```json
 {"tasks": [{
   "id": "...", "status": "completed", "problem_type": "MULTIPLE_CHOICE",
-  "solver_provider": "deepseek", "solver_model": "deepseek-v4-pro",
+  "solver_provider": "deepseek", "solver_model": "deepseek-flash",
   "solution_path": "...", "filename": "4-7_技术选择题综合解答.md",
   "error_message": "", "num_images": 4,
   "created_at": 1781577269.86, "updated_at": 1781577417.56,
@@ -117,13 +117,26 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 {
   "task": { "...同上..." },
   "solution_content": "# 解答\n\n...",
-  "image_urls": ["/uploads/<task_id>/1.jpg", "..."]
+  "image_urls": ["/uploads/<task_id>/1.jpg", "..."],
+  "answer_card": {"text": "选 C。", "extracted": true, "section": "最终答案", "truncated": false}
 }
 ```
 
 `solution_content` 仅在任务状态为 `completed` 且 `solution_path` 存在时非空（`cancelled`
 任务的部分内容也返回空串，需要查看 `.partial.md` 文件）；文件不存在时返回空串。
 `image_urls` 直接列出上传目录里的所有文件。
+
+`answer_card` 与 SSE `done` 事件里的答案卡**同源**（都由 `answer_card.py` 抽取），
+字段含义见上文「用量与计价」一节旁的答案卡说明：
+
+- 有解答文件时，从文件内容现场抽取（会先剥掉 YAML frontmatter 与「题目文本」小节，
+  并按 LF 归一化换行——Windows 写的文件是 CRLF，不归一化会让小节正则全部失配，
+  卡片会退化成元信息/题面）；
+- 文件已被清理、但库里有落库的卡片文本时，用它兜底；
+- 两者都没有时为 `null`。
+
+前端拿到它就不要再在整篇文件上"猜"答案，否则 `problem_type`、`solver`、题面都会被
+当成最终答案显示出来。
 
 | 状态码 | code | 场景 |
 |---|---|---|
@@ -253,8 +266,15 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 SSE 流式端点。**首次连接会启动流水线**（幂等：已在运行则只订阅）。
 
 - Query：
-  - `thinking`：`1` 启用求解器思考模式（DeepSeek reasoning），默认关闭
+  - `thinking`：`1` 启用求解器思考模式（DeepSeek reasoning），默认关闭。
+    关闭时求解器会**显式**下发 `thinking.type=disabled`——实测只把该参数省略掉
+    模型照样思考，所以"关掉思考"必须显式声明
   - `style`：编程题风格 `OPTIMAL` / `EXPLORATORY`，留空用全局配置
+
+思考模式下**思考过程与正文共享 `SOLVER_MAX_TOKENS`（默认 16000）**：思考把配额吃满时
+模型会以 `finish_reason=length` 收尾且正文为空。此时求解器会自动改为关闭思考模式重试一次
+（前端会先收到一条说明用的 `reasoning` 事件），两次都拿不到正文才报错，且错误信息会带上
+模型名、`finish_reason` 与思考/正文字符数。
 
 终态任务不会重新启动流水线，而是立即返回单个对应事件。
 
@@ -510,9 +530,9 @@ SSE 流式端点。**首次连接会启动流水线**（幂等：已在运行则
 {
   "user": { "...同 register 响应里的 user..." },
   "usage": {
-    "calls": 12, "input_tokens": 9600, "output_tokens": 24000, "cost": 0.2112,
-    "by_model": [{"model": "deepseek-v4-pro", "calls": 6, "cost": 0.1968}],
-    "by_stage": [{"stage": "solve", "calls": 6, "cost": 0.1968}]
+    "calls": 12, "input_tokens": 9600, "output_tokens": 24000, "cost": 0.0672,
+    "by_model": [{"model": "deepseek-flash", "calls": 6, "cost": 0.0528}],
+    "by_stage": [{"stage": "solve", "calls": 6, "cost": 0.0528}]
   },
   "auth_enabled": true
 }
@@ -820,8 +840,7 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
 
   | model | 输入（元 / 百万 token） | 输出（元 / 百万 token） |
   |---|---|---|
-  | `deepseek-v4-pro` | 2.0 | 8.0 |
-  | `deepseek-v4-flash` | 0.5 | 2.0 |
+  | `deepseek-flash` | 0.5 | 2.0 |
   | `GLM-4.6V-FlashX` | 0.5 | 1.5 |
   | `GLM-4.6V` | 2.0 | 6.0 |
   | `default`（未列出的模型） | 2.0 | 8.0 |
@@ -833,7 +852,7 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
   ```
   预估费用 = estimate_task_cost(页数)          # usage.py:94，偏保守：宁可高估也不低估
            = 1 次视觉调用（按 GLM-4.6V-FlashX 计价，输入侧只算图片）
-           + 1 次求解调用（默认 deepseek-v4-pro，输出按 4000 字符估算）
+           + 1 次求解调用（默认 deepseek-flash，输出按 4000 字符估算）
   required = max(预估费用, MIN_TASK_BUDGET)     # MIN_TASK_BUDGET 默认 0.05 元
   ```
 

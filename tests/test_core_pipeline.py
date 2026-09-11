@@ -212,7 +212,7 @@ def test_failure_writes_error_event_and_cleans_temp(tmp_path, images, events, mo
     monkeypatch.setattr(core_pipeline.solver_client, "stream_solve", broken_stream)
     monkeypatch.setattr(core_pipeline.solver_client, "ask_for_analysis", lambda *a, **k: "标题")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="模型挂了"):
         _pipeline(tmp_path, events).run("t8", images)
 
     assert any(e["type"] == "error" for e in events)

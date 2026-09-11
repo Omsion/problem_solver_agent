@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AnswerCard } from "./AnswerCard";
 import type { AnswerCard as AnswerCardData, VerificationResult } from "../../types";
@@ -115,5 +115,23 @@ describe("AnswerCard", () => {
   it("已有核对结果时可再次核对", () => {
     renderCard({ verification: verifyResult() });
     expect(screen.getByRole("button", { name: /重新核对/ })).toBeInTheDocument();
+  });
+
+  it("核对结论与建议修正里的公式会被渲染，而不是显示原始定界符", async () => {
+    // 线上现象：核对结果里直接显示 $\|\mathbf{w}\|_2$，公式没有被 KaTeX 渲染
+    const { container } = renderCard({
+      verification: verifyResult({
+        verdict: "disagree",
+        issues: ["题目要求 $\\|\\mathbf{w}\\|_2$，解答里用的是 $\\|\\mathbf{w}\\|_2^2$"],
+        corrections: "修正正则项为 $\\lambda \\|\\mathbf{w}\\|_2$，梯度需处理 $\\mathbf{w}=0$",
+      }),
+    });
+
+    // Markdown 渲染器是懒加载的，等它把 KaTeX 挂上来
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(1);
+    });
+    expect(container.querySelector(".katex-error")).toBeNull();
+    expect(container.textContent).not.toContain("$\\|");
   });
 });

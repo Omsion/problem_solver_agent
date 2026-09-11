@@ -51,8 +51,9 @@ VISION_REASONING_MODEL = "GLM-4.6V"
 VISION_PROVIDER_NAME = "zhipu"
 
 # --- 3. 辅助模型配置 (Auxiliary Model Configuration) ---
+# 注意：项目内 DeepSeek 模型已统一为 "deepseek-flash"（求解器与辅助模型同款）。
 AUX_PROVIDER = "deepseek"
-AUX_MODEL_NAME = "deepseek-v4-flash"
+AUX_MODEL_NAME = "deepseek-flash"
 
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 # 配置字典，用于定义问题类型到求解器的映射规则。
@@ -66,9 +67,14 @@ SOLVER_ROUTING_CONFIG = {
 
 SOLVER_CONFIG = {
     "deepseek": {
-        "model": "deepseek-v4-pro",
+        "model": "deepseek-flash",
         "base_url": "https://api.deepseek.com/v1"},
 }
+
+# 求解调用的输出上限（token）。注意：思考模式下**思考过程与正文共享这一配额**，
+# 配额被思考过程吃满时正文会是空的（solver_client 会自动关闭思考模式重试一次）。
+# 需要长思考 + 长解答时可以调大，代价是单次调用更慢、更容易撞上 API 上限。
+SOLVER_MAX_TOKENS = int(os.getenv("SOLVER_MAX_TOKENS", "16000"))
 
 # --- 5. 求解风格配置 ---
 # 支持通过 .env 覆盖（SOLVER_STYLE=OPTIMAL / EXPLORATORY）。

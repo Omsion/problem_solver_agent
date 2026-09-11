@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from PIL import Image
 
 from problem_solver_agent import config as core_config
+from problem_solver_agent.answer_card import extract_answer_card
 from problem_solver_agent.netcheck import get_lan_ip, is_remote_device
 from problem_solver_agent.utils import sanitize_filename
 
@@ -816,13 +817,35 @@ async def get_task(task_id: str, user: User = Depends(get_current_user)):
         if sp.exists():
             solution_content = sp.read_text(encoding="utf-8")
 
+    # 答案卡：与 SSE `done` 事件同源，避免前端在整篇文件上自己"猜答案"
+    # （那会把 YAML frontmatter 和「题目文本」当成最终答案显示出来）。
+    answer_card = None
+    if solution_content.strip():
+        extracted = extract_answer_card(solution_content)
+        # 抽不出正文时宁可不给卡：空卡片会把完整解答折叠起来，用户反而什么都看不到
+        if extracted.get("text", "").strip():
+            answer_card = extracted
+    if answer_card is None and (task.get("answer_card") or "").strip():
+        # 解答文件已被清理时的兜底：用流水线落库的卡片文本
+        answer_card = {
+            "text": task["answer_card"].strip(),
+            "extracted": True,
+            "section": None,
+            "truncated": False,
+        }
+
     # 列出已上传的图片 URL
     image_urls: list[str] = []
     task_dir = web_config.UPLOAD_DIR / task_id
     if task_dir.exists():
         image_urls = [f"/uploads/{task_id}/{p.name}" for p in sorted(task_dir.glob("*")) if p.is_file()]
 
-    return {"task": task, "solution_content": solution_content, "image_urls": image_urls}
+    return {
+        "task": task,
+        "solution_content": solution_content,
+        "image_urls": image_urls,
+        "answer_card": answer_card,
+    }
 
 
 @router.delete("/api/tasks/{task_id}")

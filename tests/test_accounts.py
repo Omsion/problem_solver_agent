@@ -224,7 +224,7 @@ def test_spending_reduces_remaining(manager: AccountManager):
     manager.record_usage(
         user_id=user.id,
         stage="solve",
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         input_tokens=1_000_000,
         output_tokens=0,
     )  # 0.5 元
@@ -268,17 +268,22 @@ def test_record_usage_cost_matches_estimate(manager: AccountManager):
 
 
 def test_usage_summary_aggregates_by_model_and_stage(manager: AccountManager):
+    """按模型/阶段聚合。
+
+    注意：项目内 DeepSeek 模型已统一为 `deepseek-flash`，为了仍然覆盖"多个模型
+    分别聚合"的场景，这里另造一个未登记在 COST_TABLE 的模型名（回落到 default 单价）。
+    """
     user = manager.create_user(phone="13800000024", password="pw", budget=100.0)
     manager.record_usage(
-        user_id=user.id, stage="ocr", model="deepseek-v4-flash",
+        user_id=user.id, stage="ocr", model="deepseek-flash",
         input_tokens=1_000_000, output_tokens=0,
     )  # 0.5
     manager.record_usage(
-        user_id=user.id, stage="solve", model="deepseek-v4-pro",
+        user_id=user.id, stage="solve", model="unlisted-model",
         input_tokens=0, output_tokens=1_000_000,
-    )  # 8.0
+    )  # 8.0（default 单价）
     manager.record_usage(
-        user_id=user.id, stage="solve", model="deepseek-v4-flash",
+        user_id=user.id, stage="solve", model="deepseek-flash",
         input_tokens=0, output_tokens=1_000_000,
     )  # 2.0
 
@@ -289,10 +294,10 @@ def test_usage_summary_aggregates_by_model_and_stage(manager: AccountManager):
     assert summary["output_tokens"] == 2_000_000
 
     by_model = {row["model"]: row for row in summary["by_model"]}
-    assert by_model["deepseek-v4-pro"]["calls"] == 1
-    assert by_model["deepseek-v4-pro"]["cost"] == pytest.approx(8.0)
-    assert by_model["deepseek-v4-flash"]["calls"] == 2
-    assert by_model["deepseek-v4-flash"]["cost"] == pytest.approx(2.5)
+    assert by_model["unlisted-model"]["calls"] == 1
+    assert by_model["unlisted-model"]["cost"] == pytest.approx(8.0)
+    assert by_model["deepseek-flash"]["calls"] == 2
+    assert by_model["deepseek-flash"]["cost"] == pytest.approx(2.5)
 
     by_stage = {row["stage"]: row for row in summary["by_stage"]}
     assert by_stage["solve"]["calls"] == 2
@@ -313,17 +318,17 @@ def test_global_usage_summary_top_users_sorted_by_cost(manager: AccountManager):
     silent = manager.create_user(phone="13800000032", password="pw", budget=100.0)
 
     manager.record_usage(
-        user_id=small.id, stage="ocr", model="deepseek-v4-flash",
+        user_id=small.id, stage="ocr", model="deepseek-flash",
         input_tokens=1_000_000, output_tokens=0,
     )  # 0.5
     manager.record_usage(
-        user_id=big.id, stage="solve", model="deepseek-v4-pro",
+        user_id=big.id, stage="solve", model="deepseek-flash",
         input_tokens=0, output_tokens=1_000_000,
-    )  # 8.0
+    )  # 2.0
 
     summary = manager.global_usage_summary()
     assert summary["calls"] == 2
-    assert summary["cost"] == pytest.approx(8.5)
+    assert summary["cost"] == pytest.approx(2.5)
     assert summary["output_tokens"] == 1_000_000
 
     ids = [row["id"] for row in summary["top_users"]]
@@ -349,7 +354,7 @@ def test_estimate_cost_unknown_model_uses_default_price():
 
 
 def test_estimate_cost_zero_tokens_is_free():
-    assert estimate_cost("deepseek-v4-pro", 0, 0) == 0.0
+    assert estimate_cost("deepseek-flash", 0, 0) == 0.0
     assert estimate_cost("no-such-model", 0, 0) == 0.0
 
 

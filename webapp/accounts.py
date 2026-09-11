@@ -39,8 +39,8 @@ ROLE_ADMIN = "admin"
 # 说明：这是**估算**而非精确账单，只用于限制滥用；精确账单应查对应平台后台。
 COST_TABLE: dict[str, tuple[float, float]] = {
     # model: (输入元/百万token, 输出元/百万token)
-    "deepseek-v4-pro": (2.0, 8.0),
-    "deepseek-v4-flash": (0.5, 2.0),
+    # DeepSeek 求解器与辅助模型统一为 "deepseek-flash"，因此只保留一条单价
+    "deepseek-flash": (0.5, 2.0),
     "GLM-4.6V-FlashX": (0.5, 1.5),
     "GLM-4.6V": (2.0, 6.0),
     "default": (2.0, 8.0),

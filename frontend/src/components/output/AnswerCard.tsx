@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, Copy, ShieldCheck, TriangleAlert, CircleHelp, ChevronDown } from "lucide-react";
 import type { AnswerCard as AnswerCardData, VerificationResult } from "../../types";
 import { cn } from "../../lib/utils";
+import { LazyMarkdown } from "./lazy";
 
 interface Props {
   card: AnswerCardData;
@@ -72,9 +73,11 @@ export const AnswerCard = ({
         </div>
 
         <div className="max-h-[45vh] overflow-auto">
-          <p className="whitespace-pre-wrap break-words text-base sm:text-lg font-medium leading-relaxed text-gray-900">
-            {card.text}
-          </p>
+          {/* 走 Markdown 渲染：答案里的 $公式$、粗体、代码块才会正常显示 */}
+          <LazyMarkdown
+            content={card.text}
+            className="text-base sm:text-lg font-medium leading-relaxed text-gray-900"
+          />
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -146,20 +149,25 @@ const VerificationBar = ({ verification }: { verification: VerificationResult })
       {verification.issues.length > 0 && (
         <ul className="mt-2 space-y-1 text-xs list-disc pl-5">
           {verification.issues.map((issue, index) => (
-            <li key={index}>{issue}</li>
+            <li key={index}>
+              {/* 行内渲染：问题描述里常带公式（$...$），但不能让列表变成一整段 */}
+              <LazyMarkdown content={issue} inline />
+            </li>
           ))}
         </ul>
       )}
 
       {verification.corrections && (
-        <div className="mt-2 rounded-lg bg-white/70 px-3 py-2 text-xs whitespace-pre-wrap break-words">
+        <div className="mt-2 rounded-lg bg-white/70 px-3 py-2 text-xs">
           <span className="font-medium">建议修正：</span>
-          {verification.corrections}
+          <LazyMarkdown content={verification.corrections} className="mt-1" />
         </div>
       )}
 
       {verification.reason && !verification.corrections && (
-        <p className="mt-1.5 text-xs opacity-80">{verification.reason}</p>
+        <div className="mt-1.5 text-xs opacity-80">
+          <LazyMarkdown content={verification.reason} />
+        </div>
       )}
     </div>
   );

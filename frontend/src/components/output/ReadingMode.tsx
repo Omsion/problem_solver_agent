@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface Props {
@@ -9,12 +9,19 @@ interface Props {
 const MIN_FONT_SIZE = 14;
 const MAX_FONT_SIZE = 22;
 const FONT_STEP = 2;
+/** 顶部热区高度（px）：鼠标进入这个范围内才显示工具栏 */
+const TOOLBAR_HOT_ZONE = 96;
+/** 进入阅读模式时工具栏短暂亮相的时长（之后自动收起） */
+const INITIAL_PEEK_MS = 2500;
+/** 触屏点击后工具栏停留时长 */
+const TOUCH_HOLD_MS = 3000;
 
 export const ReadingMode = ({ content, onClose }: Props) => {
   const [fontSize, setFontSize] = useState(18);
   const [isDark, setIsDark] = useState(false);
+  // 默认只短暂显示：阅读时正文区域必须干净，工具栏不能一直杵在那儿
   const [toolbarVisible, setToolbarVisible] = useState(true);
-  const [hideTimer, setHideTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Lock body scroll
   useEffect(() => {
@@ -23,17 +30,36 @@ export const ReadingMode = ({ content, onClose }: Props) => {
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  // Auto-hide toolbar after 3s of inactivity
-  const resetHideTimer = useCallback(() => {
-    setToolbarVisible(true);
-    if (hideTimer) clearTimeout(hideTimer);
-    const t = setTimeout(() => setToolbarVisible(false), 3000);
-    setHideTimer(t);
-  }, [hideTimer]);
-
+  // 进入时亮一下再收起，让用户知道这里有操作入口
   useEffect(() => {
-    return () => { if (hideTimer) clearTimeout(hideTimer); };
-  }, [hideTimer]);
+    const timer = setTimeout(() => setToolbarVisible(false), INITIAL_PEEK_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    },
+    [],
+  );
+
+  // 鼠标停在顶部热区才显示；移到正文区域立即收起
+  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    setToolbarVisible(event.clientY <= TOOLBAR_HOT_ZONE);
+  }, []);
+
+  // 触屏没有 hover：点顶部热区显示几秒后自动收回。
+  // 注意只认热区内的触摸——否则每次滚动页面都会把工具栏"抖"出来。
+  const handleTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const y = event.touches[0]?.clientY ?? Number.POSITIVE_INFINITY;
+    if (y > TOOLBAR_HOT_ZONE) {
+      setToolbarVisible(false);
+      return;
+    }
+    setToolbarVisible(true);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setToolbarVisible(false), TOUCH_HOLD_MS);
+  }, []);
 
   const zoomIn = () => setFontSize((s) => Math.min(s + FONT_STEP, MAX_FONT_SIZE));
   const zoomOut = () => setFontSize((s) => Math.max(s - FONT_STEP, MIN_FONT_SIZE));
@@ -56,11 +82,14 @@ export const ReadingMode = ({ content, onClose }: Props) => {
   return (
     <div
       className={`fixed inset-0 z-50 flex flex-col reading-mode ${isDark ? "dark" : ""}`}
-      onTouchStart={resetHideTimer}
-      onMouseMove={resetHideTimer}
+      onTouchStart={handleTouchStart}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => setToolbarVisible(false)}
     >
-      {/* Floating toolbar */}
+      {/* Floating toolbar：收起时同时移出焦点顺序，避免 Tab 键摸到看不见的按钮 */}
       <div
+        aria-hidden={!toolbarVisible}
+        inert={!toolbarVisible}
         className={`absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-2 rounded-full bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-lg border border-gray-200 dark:border-gray-700 transition-opacity duration-300 ${
           toolbarVisible ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}

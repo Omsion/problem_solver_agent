@@ -103,7 +103,7 @@ class BillingService:
                     "user_id": user_id,
                     "max_budget": budget,
                     "budget_duration": "30d",
-                    "models": ["deepseek-v4-pro", "claude-sonnet"],
+                    "models": ["deepseek-flash", "claude-sonnet"],
                     "tpm_limit": 50000,
                     "rpm_limit": 30,
                 },
@@ -135,7 +135,7 @@ class BillingService:
 python
 # backend/app/services/llm_service.py
 class LLMService:
-    async def solve(self, prompt: str, user_key: str, model: str = "deepseek-v4-pro"):
+    async def solve(self, prompt: str, user_key: str, model: str = "deepseek-flash"):
         client = AsyncOpenAI(
             base_url=settings.LITELLM_BASE_URL,
             api_key=user_key,  # 使用用户的虚拟密钥
@@ -785,9 +785,9 @@ general_settings:
   database_url: os.environ/LITELLM_DATABASE_URL
 
 model_list:
-  - model_name: "deepseek-v4-pro"
+  - model_name: "deepseek-flash"
     litellm_params:
-      model: "deepseek/deepseek-chat"
+      model: "deepseek/deepseek-flash"
       api_key: os.environ/DEEPSEEK_API_KEY
   - model_name: "claude-sonnet"
     litellm_params:
@@ -796,7 +796,7 @@ model_list:
 
 router_settings:
   routing_strategy: "latency-based-routing"
-  fallbacks: [{"deepseek-v4-pro": ["claude-sonnet"]}]
+  fallbacks: [{"deepseek-flash": ["claude-sonnet"]}]
   num_retries: 3
   timeout: 60
 部署：
@@ -813,7 +813,7 @@ from openai import AsyncOpenAI
 from app.core.config import settings
 
 class LLMService:
-    async def solve(self, prompt: str, user_key: str, model: str = "deepseek-v4-pro"):
+    async def solve(self, prompt: str, user_key: str, model: str = "deepseek-flash"):
         client = AsyncOpenAI(
             base_url=settings.LITELLM_BASE_URL,
             api_key=user_key,

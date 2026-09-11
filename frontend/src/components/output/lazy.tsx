@@ -38,9 +38,31 @@ export const LazyAnswer = ({ content }: { content: string }) => (
   </Suspense>
 );
 
-export const LazyThinking = ({ content }: { content: string }) => (
-  <Suspense fallback={<Skeleton />}>
-    <LazyMarkdownRenderer content={content} className="text-sm" />
+/**
+ * 小型 Markdown 渲染（答案卡、核对结论）。
+ *
+ * 渲染器是重包，所以先渲染纯文本、分片到位后再升级成富文本：首帧立刻可读，
+ * 公式/表格随后补齐，不会出现"卡片先空白再闪一下"。
+ */
+export const LazyMarkdown = ({
+  content,
+  className = "",
+  inline = false,
+}: {
+  content: string;
+  className?: string;
+  inline?: boolean;
+}) => (
+  <Suspense
+    fallback={
+      inline ? (
+        <span className={className}>{content}</span>
+      ) : (
+        <p className={`whitespace-pre-wrap break-words ${className}`}>{content}</p>
+      )
+    }
+  >
+    <LazyMarkdownRenderer content={content} className={className} inline={inline} />
   </Suspense>
 );
 

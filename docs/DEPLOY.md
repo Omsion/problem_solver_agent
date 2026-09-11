@@ -55,7 +55,7 @@ Copy-Item .env.example .env
 启动日志里会有明确的“能力探测”告警）：
 
 ```dotenv
-DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解器 deepseek-v4-pro / 辅助模型 deepseek-v4-flash
+DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解器与辅助模型统一使用 deepseek-flash
 ZHIPU_API_KEY=xxxxxxxx              # 视觉模型 GLM-4.6V（分类 / OCR / 视觉推理）
 ```
 
