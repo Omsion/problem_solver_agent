@@ -10,6 +10,10 @@ _TASK_COLUMNS: dict[str, str] = {
     "timings_json": "TEXT DEFAULT ''",
     "answer_card": "TEXT DEFAULT ''",
     "verified": "INTEGER NOT NULL DEFAULT 0",
+    # 多用户隔离：任务归属。旧库补列时默认给内置本地用户，
+    # 这样升级后既有任务仍然可见（归属到本地账号）。
+    "user_id": "TEXT NOT NULL DEFAULT 'local'",
+    "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
 }
 
 # 合法任务状态（用于校验与文档化）
@@ -53,6 +57,8 @@ class TaskManager:
             # 列表查询按创建时间倒序，加索引避免全表扫描
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)")
+            # 多用户隔离后，最常见的查询是"某用户的任务，按时间倒序"
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user_time ON tasks (user_id, created_at DESC)")
             # 阶段缓存：重试时复用分类/OCR 结果，避免重复付费
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS stage_cache (
@@ -76,13 +82,21 @@ class TaskManager:
 
     # ---- CRUD ----
 
-    def create_task(self, task_id: str, num_images: int) -> None:
+    def create_task(
+        self,
+        task_id: str,
+        num_images: int,
+        *,
+        user_id: str = "local",
+        tenant_id: str = "default",
+    ) -> None:
         now = time.time()
         with self._get_conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO tasks (id, status, created_at, updated_at, num_images) "
-                "VALUES (?, 'pending', ?, ?, ?)",
-                (task_id, now, now, num_images),
+                "INSERT OR REPLACE INTO tasks "
+                "(id, status, created_at, updated_at, num_images, user_id, tenant_id) "
+                "VALUES (?, 'pending', ?, ?, ?, ?, ?)",
+                (task_id, now, now, num_images, user_id, tenant_id),
             )
             conn.commit()
 
@@ -112,17 +126,51 @@ class TaskManager:
             conn.execute(f"UPDATE tasks SET {set_clause} WHERE id = ?", values)
             conn.commit()
 
-    def get_task(self, task_id: str) -> dict | None:
+    def get_task(self, task_id: str, *, user_id: str | None = None) -> dict | None:
+        """按 id 取任务。
+
+        Args:
+            user_id: 传入时校验归属，不属于该用户则返回 None
+                （不抛异常，调用方统一按"任务不存在"处理，避免泄露存在性）。
+        """
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if user_id is None:
+                row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id)
+                ).fetchone()
             return _row_to_task(row) if row else None
 
-    def get_recent_tasks(self, limit: int = 100) -> list[dict]:
+    def owns_task(self, task_id: str, user_id: str) -> bool:
+        """判断任务是否属于该用户（管理员场景可跳过）。"""
+        return self.get_task(task_id, user_id=user_id) is not None
+
+    def get_recent_tasks(
+        self, limit: int = 100, *, user_id: str | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
+        """按时间倒序列出任务。
+
+        Args:
+            user_id: 传入时只返回该用户的任务（多用户隔离）
+            tenant_id: 传入时按租户过滤
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            params.append(tenant_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
+                f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?", params
             ).fetchall()
             return [_row_to_task(r) for r in rows]
 
@@ -130,14 +178,20 @@ class TaskManager:
         with self._get_conn() as conn:
             return {row[0] for row in conn.execute("SELECT id FROM tasks").fetchall()}
 
-    def list_timings(self, limit: int = 50) -> list[dict]:
+    def list_timings(self, limit: int = 50, *, user_id: str | None = None) -> list[dict]:
         """只取状态与耗时，供 /api/stats 聚合使用。"""
+        if user_id is None:
+            query = "SELECT status, timings_json FROM tasks ORDER BY created_at DESC LIMIT ?"
+            params: list[object] = [limit]
+        else:
+            query = (
+                "SELECT status, timings_json FROM tasks WHERE user_id = ? "
+                "ORDER BY created_at DESC LIMIT ?"
+            )
+            params = [user_id, limit]
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT status, timings_json FROM tasks ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
             result = []
             for row in rows:
                 timings: dict | None = None
@@ -212,13 +266,31 @@ class TaskManager:
             conn.commit()
             return [path for _, path in to_delete if path]
 
-    def delete_task(self, task_id: str) -> str | None:
-        """删除指定任务（含其阶段缓存），返回其 solution_path（如果有）。"""
+    def delete_task(self, task_id: str, *, user_id: str | None = None) -> str | None:
+        """删除指定任务（含其阶段缓存），返回其 solution_path（如果有）。
+
+        Args:
+            user_id: 传入时只允许删除该用户自己的任务；不属于则返回 None
+                （与"不存在"同义，避免通过响应区分任务是否存在）。
+        """
         with self._get_conn() as conn:
-            row = conn.execute(
-                "SELECT solution_path FROM tasks WHERE id = ?", (task_id,)
-            ).fetchone()
-            conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            if user_id is None:
+                row = conn.execute(
+                    "SELECT solution_path FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+                if row is None:
+                    return None
+                conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            else:
+                row = conn.execute(
+                    "SELECT solution_path FROM tasks WHERE id = ? AND user_id = ?",
+                    (task_id, user_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                conn.execute(
+                    "DELETE FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id)
+                )
             conn.execute("DELETE FROM stage_cache WHERE task_id = ?", (task_id,))
             conn.commit()
             return row[0] if row and row[0] else None

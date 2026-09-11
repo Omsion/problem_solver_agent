@@ -65,6 +65,55 @@ cd frontend && npm run dev     # 浏览器访问 5173
 
 ---
 
+## 在 PyCharm 中运行
+
+项目内已经准备好了运行配置（`.idea/runConfigurations/`），用 PyCharm 打开项目后
+右上角的下拉框里可以直接选：
+
+| 配置名 | 作用 | 地址 |
+|---|---|---|
+| **一键启动（前后端）** | Compound，同时拉起下面两个 | — |
+| 后端服务 (8000) | `run_web.py`，用构建好的 `webapp/static` | http://localhost:8000 |
+| 后端服务 (热重载 8000) | `uvicorn --factory --reload`，改 Python 代码自动重启 | http://localhost:8000 |
+| 前端服务 (5173) | `npm run dev`，带 HMR 与 `/api` 代理 | http://localhost:5173 |
+| 后端测试 (pytest) | 跑 `tests/`（已设 `AUTO_IMPORT_ENABLED=false`） | — |
+| 前端测试 (vitest) | `npm test` | — |
+
+### 日常开发怎么选
+
+- **只改前端** → 起「后端服务 (8000)」+「前端服务 (5173)」，浏览器开 **5173**，
+  改代码即时热更新。
+- **改 Python 代码** → 用「后端服务 (热重载 8000)」，保存后自动重启；
+  但注意用这个配置时**不要**同时开「后端服务 (8000)」，两者都占 8000 端口。
+- **只验收成品** → 起「后端服务 (8000)」，浏览器开 **8000**
+  （用的是 `webapp/static` 里的构建产物，改前端后需要 `npm run build`）。
+
+### 前置条件
+
+1. **Python 解释器**：`File → Settings → Project → Python Interpreter`，
+   选择装了 `requirements.txt` 的那个环境（本项目配置里记录的名字是 `llm`）。
+   运行配置用的是「模块 SDK」，会自动跟随项目解释器。
+2. **Node 插件**：「前端服务」是 npm 类型配置，需要 PyCharm 装了
+   *Node.js* 插件（Professional 自带；Community 需在
+   `Settings → Plugins → Marketplace` 搜索 *Node.js* 安装）。
+3. **Node 解释器**：第一次运行「前端服务」时，PyCharm 会问 Node interpreter，
+   选 `C:\Program Files\nodejs\node.exe` 即可。
+4. **依赖已安装**：`pip install -r requirements.txt` 与
+   `cd frontend && npm install`。
+
+### 常见问题
+
+- **5173 打不开页面**：确认后端也在跑。前端只负责界面，数据来自 8000；
+  后端没起时页面能开，但接口会返回 502（代理转发失败）。
+- **手机扫码连不上**：局域网需要访问电脑；「前端服务」已开 `host: true`，
+  用 `http://<你的局域网IP>:5173` 即可。用 8000 端口则直接是构建产物。
+- **改了前端但 8000 端没变化**：8000 提供的是构建产物，需要
+  `cd frontend && npm run build`。用 5173 开发则不需要。
+- **8000 端口被占用**：换端口时记得同步改 `frontend/vite.config.ts` 里的代理
+  `target`（默认写的是 `http://localhost:8000`）。
+
+---
+
 ## 代码约定
 
 - 所有 Python 函数**必须有类型提示**（项目约定）

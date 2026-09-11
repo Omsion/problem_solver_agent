@@ -39,6 +39,35 @@ EVENT_TIMINGS = "timings"
 EVENT_DONE = "done"
 EVENT_ERROR = "error"
 EVENT_CANCELLED = "cancelled"
+EVENT_USAGE = "usage"
+
+
+@dataclass
+class UsageReport:
+    """一次调用或一个阶段的用量画像。
+
+    这里上报的是**可观测的事实**（阶段、模型、页数、输出字符数），而不是精确
+    token 数：标准 OpenAI SDK 只有流式结束后才能从 `usage` 字段取到精确值，
+    且并非所有兼容网关都会返回。字符→token 的换算属于估算，放在 Web 层做
+    （见 `webapp/usage.py`），core 只负责如实上报观测到的内容。
+    """
+
+    stage: str
+    model: str
+    provider: str = ""
+    pages: int = 0
+    output_chars: int = 0
+    calls: int = 1
+
+    def to_dict(self) -> dict:
+        return {
+            "stage": self.stage,
+            "model": self.model,
+            "provider": self.provider,
+            "pages": self.pages,
+            "output_chars": self.output_chars,
+            "calls": self.calls,
+        }
 
 
 @dataclass
@@ -99,6 +128,16 @@ class SolutionPipeline:
         except Exception as exc:  # 回调异常不能拖垮流水线
             logger.warning("事件回调异常: %s", exc)
 
+    def _emit_usage(self, report: UsageReport) -> None:
+        """上报一次用量。
+
+        记账问题绝不能让解题失败，因此这里全程吞异常只记日志。
+        """
+        try:
+            self._emit({"type": EVENT_USAGE, **report.to_dict()})
+        except Exception as exc:  # pragma: no cover - _emit 内部已兜底
+            logger.warning("用量上报异常: %s", exc)
+
     def _status(self, phase: str, message: str, **extra) -> None:
         payload = {"type": EVENT_STATUS, "phase": phase, "message": message}
         payload.update(extra)
@@ -156,11 +195,34 @@ class SolutionPipeline:
                 failed_pages: list[int] = []
                 timings.classify = int((time.time() - classify_started) * 1000)
                 timings.ocr = timings.classify
+                # 合并调用：一次请求同时完成分类与全部页面转录
+                self._emit_usage(UsageReport(
+                    stage="vision",
+                    model=config.VISION_CLASSIFY_MODEL,
+                    provider=config.VISION_PROVIDER_NAME,
+                    pages=len(image_paths),
+                    calls=1,
+                ))
             else:
                 # 回退：分类与逐页 OCR 并行，关键路径从相加变成取最大
                 problem_type, pages, failed_pages = vision_client.classify_and_transcribe_parallel(image_paths)
                 timings.classify = int((time.time() - classify_started) * 1000)
                 timings.ocr = timings.classify
+                # 回退路径：1 次分类 + 每页 1 次转录
+                self._emit_usage(UsageReport(
+                    stage="classify",
+                    model=config.VISION_CLASSIFY_MODEL,
+                    provider=config.VISION_PROVIDER_NAME,
+                    pages=len(image_paths),
+                    calls=1,
+                ))
+                self._emit_usage(UsageReport(
+                    stage="ocr",
+                    model=config.VISION_CLASSIFY_MODEL,
+                    provider=config.VISION_PROVIDER_NAME,
+                    pages=len(image_paths),
+                    calls=len(image_paths),
+                ))
 
             cancel.raise_if_cancelled()
             logger.info("题型=%s，转录成功 %d/%d 页", problem_type, len(image_paths) - len(failed_pages), len(image_paths))
@@ -174,6 +236,15 @@ class SolutionPipeline:
                     task_id, pages, failed_pages, cancel, timings
                 )
                 timings.polish = polish_ms
+                if polish_ms > 0:
+                    # 只有真正调用了润色模型才计入用量
+                    self._emit_usage(UsageReport(
+                        stage="polish",
+                        model=config.AUX_MODEL_NAME,
+                        provider=config.AUX_PROVIDER,
+                        output_chars=len(transcribed_text),
+                        calls=1,
+                    ))
 
             # ---- 步骤 4：求解 ----
             cancel.raise_if_cancelled()
@@ -210,6 +281,15 @@ class SolutionPipeline:
             answer_text = "".join(chunks)
             if not answer_text.strip() or "--- ERROR ---" in answer_text:
                 raise RuntimeError("求解器返回空响应或包含内部错误")
+
+            # 求解阶段用量（输入按题目文本长度估算，输出按实际生成字符数）
+            self._emit_usage(UsageReport(
+                stage="solve",
+                model=model,
+                provider=provider,
+                output_chars=len(answer_text),
+                calls=1,
+            ))
 
             # ---- 步骤 5：答案卡 + 命名 + 归档 ----
             cancel.raise_if_cancelled()
@@ -347,6 +427,15 @@ class SolutionPipeline:
             answer_text = "".join(chunks)
             if not answer_text.strip() or "--- ERROR ---" in answer_text:
                 raise RuntimeError("求解器返回空响应或包含内部错误")
+
+            # 换路重解也要计入用量，否则用户能靠反复重解绕过计费
+            self._emit_usage(UsageReport(
+                stage="resolve",
+                model=model,
+                provider=provider,
+                output_chars=len(answer_text),
+                calls=1,
+            ))
 
             cancel.raise_if_cancelled()
             card = extract_answer_card(answer_text)

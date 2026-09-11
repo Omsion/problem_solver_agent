@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, Suspense, lazy } from "react"
 import { HashRouter, Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
+import { RequireAdmin, RequireAuth } from "./components/auth/AuthRoutes";
 import { UploadZone } from "./components/upload/UploadZone";
 import { FilePreviewList } from "./components/upload/FilePreviewList";
 import { UploadActions } from "./components/upload/UploadActions";
@@ -20,6 +21,12 @@ import { isTerminalStatus } from "./lib/taskStatus";
 const SettingsPage = lazy(() =>
   import("./components/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
+
+// 登录页 / 用量页 / 管理看板同样按需加载，它们都在首屏路径之外；
+// 静态导入会把 react-query 之外的表单与表格代码塞进首屏分包。
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const UsagePage = lazy(() => import("./pages/UsagePage"));
+const AdminPage = lazy(() => import("./pages/AdminPage"));
 
 /**
  * 任务页面。
@@ -305,7 +312,7 @@ function MainPage() {
   const dismissNewTask = useCallback(() => setNewTaskInfo(null), []);
 
   return (
-    <div className="h-[calc(100dvh-3.5rem)] flex flex-col">
+    <div className="h-[calc(100dvh-4rem)] flex flex-col">
       {newTaskInfo && (
         <div className="bg-indigo-50 border-b border-indigo-200 px-4 py-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -354,26 +361,57 @@ function MainPage() {
   );
 }
 
+/** 懒加载页面的统一占位。高度要减去顶栏，否则会出现多余的滚动条 */
+const RouteFallback = ({ label }: { label: string }) => (
+  <div className="h-[calc(100dvh-4rem)] flex items-center justify-center text-sm text-gray-400">{label}</div>
+);
+
 function SettingsRoute() {
   return (
     <ErrorBoundary title="设置页出错">
-      <Suspense
-        fallback={
-          <div className="h-[calc(100dvh-3.5rem)] flex items-center justify-center text-sm text-gray-400">
-            加载设置…
-          </div>
-        }
-      >
+      <Suspense fallback={<RouteFallback label="加载设置…" />}>
         <SettingsPage />
       </Suspense>
     </ErrorBoundary>
   );
 }
 
+function LoginRoute() {
+  return (
+    <ErrorBoundary title="登录页出错">
+      <Suspense fallback={<RouteFallback label="加载登录页…" />}>
+        <LoginPage />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+function UsageRoute() {
+  return (
+    <ErrorBoundary title="用量页出错">
+      <Suspense fallback={<RouteFallback label="加载用量…" />}>
+        <UsagePage />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+function AdminRoute() {
+  return (
+    <RequireAdmin>
+      <ErrorBoundary title="管理看板出错">
+        <Suspense fallback={<RouteFallback label="加载看板…" />}>
+          <AdminPage />
+        </Suspense>
+      </ErrorBoundary>
+    </RequireAdmin>
+  );
+}
+
 function HistoryPage() {
   const navigate = useNavigate();
   return (
-    <div className="h-[calc(100dvh-3.5rem)] bg-white">
+    <div className="h-[calc(100dvh-4rem)] bg-white">
       <ErrorBoundary title="历史记录出错">
         <TaskHistoryPage onSelectTask={(id) => navigate(`/task/${id}`)} />
       </ErrorBoundary>
@@ -391,6 +429,24 @@ export default function App() {
           <Route path="/task/:taskId" element={<MainPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/settings" element={<SettingsRoute />} />
+          <Route path="/login" element={<LoginRoute />} />
+          {/* 受保护路由：AUTH_ENABLED=false 时守卫会直接放行，不会强制登录 */}
+          <Route
+            path="/usage"
+            element={
+              <RequireAuth>
+                <UsageRoute />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <RequireAuth>
+                <AdminRoute />
+              </RequireAuth>
+            }
+          />
           <Route path="*" element={<MainPage />} />
         </Routes>
       </div>

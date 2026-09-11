@@ -34,7 +34,7 @@ export const SettingsPage = () => {
     bytes === undefined ? "--" : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
   return (
-    <div className="h-[calc(100dvh-3.5rem)] overflow-auto bg-gray-50">
+    <div className="h-[calc(100dvh-4rem)] overflow-auto bg-gray-50">
       <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900">设置与运行状态</h2>

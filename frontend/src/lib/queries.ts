@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { getHealth, getStats, getSystemStatus, listTasks } from "../lib/api";
+import {
+  getAdminDashboard,
+  getAdminUser,
+  getAdminUsers,
+  getHealth,
+  getStats,
+  getSystemStatus,
+  listTasks,
+} from "../lib/api";
 
 /**
  * 服务端数据查询封装。
@@ -51,5 +59,48 @@ export function useTaskList(limit = 100) {
       const hasActive = tasks.some((t) => t.status === "pending" || t.status === "processing");
       return hasActive ? 3_000 : false;
     },
+  });
+}
+
+// ---- 认证与管理员 ----
+
+/**
+ * 当前用户 + 用量 + `auth_enabled`。
+ *
+ * 实现放在 `hooks/useAuth`（路由守卫与顶栏都要用它的派生状态），
+ * 这里统一从 `lib/queries` 出口，页面只需要认一个模块。
+ */
+export { ME_QUERY_KEY, useAuth, useMe } from "../hooks/useAuth";
+
+/** 管理员看板总览：用户数/调用/花费变化慢，缓存久一点 */
+export function useAdminDashboard() {
+  return useQuery({
+    queryKey: ["admin", "dashboard"],
+    queryFn: getAdminDashboard,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * 管理员用户列表。
+ *
+ * 改额度/改角色后由调用方 `invalidateQueries(["admin"])`，
+ * 因此这里不需要轮询。
+ */
+export function useAdminUsers(skip = 0, limit = 50) {
+  return useQuery({
+    queryKey: ["admin", "users", skip, limit],
+    queryFn: () => getAdminUsers(skip, limit),
+    staleTime: 30_000,
+  });
+}
+
+/** 单个用户详情 + 用量流水 */
+export function useAdminUser(userId: string | null) {
+  return useQuery({
+    queryKey: ["admin", "user", userId],
+    queryFn: () => getAdminUser(userId as string),
+    enabled: !!userId,
+    staleTime: 30_000,
   });
 }

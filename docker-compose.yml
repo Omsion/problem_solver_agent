@@ -1,0 +1,92 @@
+# ==============================================================================
+# 自动化解题 Agent —— 单服务编排
+#
+# 只有一个服务 app：FastAPI 后端 + 由它托管的 React 静态产物（构建在镜像里完成）。
+#
+# 刻意不引入的外部依赖（原因见 docs/DEPLOY.md「关于外部依赖」一节）：
+#   - PostgreSQL / MySQL：持久化就是 SQLite 单文件 webapp/data/tasks.db
+#     （webapp/models.py、webapp/accounts.py 直接使用内置 sqlite3）
+#   - Redis：任务状态、事件推送（SSE）、跨进程取消都由进程内对象承担
+#     （webapp/jobs.py、webapp/routes.py 的 TaskRegistry / TaskEventBus），
+#     单容器单进程模型下没有跨进程共享状态的需求
+#   - Celery / 消息队列：pipeline 用线程池在进程内调度（webapp/pipeline.py、
+#     problem_solver_agent/image_grouper.py）
+#   - LiteLLM 网关：代码直接调用各家 OpenAI 兼容接口
+#     （problem_solver_agent/{solver_client,vision_client}.py 用 openai SDK）
+# 如果将来要横向扩容成多副本，上面的假设才需要重新评估（那时才需要 Redis 等）。
+#
+# 用法：
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose down
+# ==============================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: online-test-agent:latest
+    container_name: online-test-agent
+
+    # 真实密钥只从宿主的 .env 读取，不写进镜像、不写进本文件
+    env_file:
+      - .env
+
+    environment:
+      # 截图工作根目录。其下会创建 Screenshots/、processed/、solutions/
+      # 注意：environment 优先级高于 env_file，因此这里会覆盖 .env 里可能存在的
+      # 历史 SOLVER_ROOT_DIR（例如 Windows 宿主路径 D:\Users\wzw\Pictures），
+      # 保证容器内始终用挂载进来的 /data。
+      SOLVER_ROOT_DIR: /data
+      # 与 ports 的容器侧端口保持一致；run_web.py 通过 webapp.config.PORT 读取
+      PORT: "8000"
+      # 需要日志用北京时间时改这里（镜像内已装 tzdata）
+      TZ: Asia/Shanghai
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      # --- 后端持久化数据（SQLite 库文件就在这里）---
+      # webapp/data 存 tasks.db，绝对不能丢，也不要放进 tmpfs
+      - ./webapp/data:/app/webapp/data
+      # 用户上传的原图（会被保留策略按数量/天数清理）
+      - ./webapp/uploads:/app/webapp/uploads
+      # 生成的解答 md 以及 /solutions 静态挂载点
+      - ./webapp/solutions:/app/webapp/solutions
+      # 图片预处理磁盘缓存，可安全删除（会自动重建），但持久化能省掉重复压缩
+      - ./webapp/cache:/app/webapp/cache
+      # --- 截图工作目录 ---
+      # 宿主路径可配置：在 .env 里设 SOLVER_DATA_DIR=D:/OnlineTestData/solver
+      # 容器内固定为 /data（对应上面的 SOLVER_ROOT_DIR），
+      # 这样 Screenshots/ 与 processed/ 在宿主上也直接可见。
+      - ${SOLVER_DATA_DIR:-./solver-data}:/data
+
+    # 与 Dockerfile 的 HEALTHCHECK 保持一致
+    # （GET /api/health 不触发任何外部 API 调用，适合探活）
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    restart: unless-stopped
+
+    # 让 PID 1 由 tini 担任：uvicorn 能正常收到 SIGTERM，也不会残留僵尸进程，
+    # 使 docker compose stop / restart 更干净（不需要额外镜像）。
+    init: true
+
+    # 日志滚动，避免长时间运行把宿主磁盘写满
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    stop_grace_period: 30s

@@ -13,10 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from problem_solver_agent import config as core_config
 
 from . import config as web_config
+from .accounts import AccountManager
 from .auto_import import start_auto_import, stop_auto_import
 from .models import TaskManager
 from .pipeline import PipelineService
 from .retention import prune_image_cache, prune_uploads, stale_uploads
+from .routers.admin import router as admin_router
+from .routers.auth import router as auth_router
 from .routes import init_router, router
 
 logger = logging.getLogger("WebappStartup")
@@ -56,6 +59,19 @@ def _startup_report() -> None:
         core_config.USE_COMBINED_VISION_CALL,
     )
     logger.info("  并发上限      : %d 个任务", core_config.MAX_CONCURRENT_TASKS)
+    if web_config.AUTH_ENABLED:
+        logger.info("  访问控制      : 已启用（需登录，额度 %.2f 元起）", web_config.DEFAULT_USER_BUDGET)
+        if not web_config.AUTH_SECRET_KEY:
+            logger.warning(
+                "AUTH_ENABLED=true 但未设置 AUTH_SECRET_KEY：已生成临时密钥，"
+                "服务重启后所有登录令牌会失效。生产环境请在 .env 中显式配置。"
+            )
+    else:
+        logger.warning(
+            "  访问控制      : 未启用（AUTH_ENABLED=false）—— "
+            "任何能访问本机 8000 端口的人都可以提交任务并消耗你的 API 额度。"
+            "如需多用户与额度控制，请在 .env 中设置 AUTH_ENABLED=true。"
+        )
     logger.info("=" * 60)
 
     caps = _check_capabilities()
@@ -143,20 +159,28 @@ def create_app() -> FastAPI:
 
     task_manager = TaskManager(web_config.DB_PATH)
     pipeline_service = PipelineService(web_config.SOLUTION_DIR, task_manager)
+    # 账户体系与任务库共用同一个 SQLite 文件：单机部署下少一个要备份的东西
+    accounts = AccountManager(web_config.DB_PATH)
 
-    init_router(task_manager, pipeline_service)
+    init_router(task_manager, pipeline_service, accounts)
 
     app = FastAPI(
         title="自动化解题 Agent",
-        version="2.0.0",
+        version="2.1.0",
         docs_url=None,
         redoc_url=None,
         lifespan=_lifespan,
     )
-    # 生命周期需要拿到这两个对象
+    # 生命周期与依赖注入都要拿到这些对象
     app.state.task_manager = task_manager
     app.state.pipeline_service = pipeline_service
+    app.state.accounts = accounts
+
     app.include_router(router)
+    # 认证与账户
+    app.include_router(auth_router)
+    # 管理员看板
+    app.include_router(admin_router)
 
     # CORS：仅开发时前端跑在 5173 端口需要，生产同源访问不需要
     app.add_middleware(

@@ -168,3 +168,123 @@ export interface StatsResponse {
   cache_hit_rate: number;
   stages: Record<string, StageStats>;
 }
+
+// ---- 认证与用量（/api/v1）----
+
+export type UserRole = "user" | "admin";
+
+/**
+ * 用户安全视图（后端 `User.to_public_dict()`）。
+ *
+ * 注意 `phone` 与 `api_key_masked` 都已经是掩码值：后端不会把真实手机号
+ * 和完整密钥下发到前端，所以这里没有"未掩码"的对应字段可用。
+ */
+export interface AuthUser {
+  id: string;
+  phone: string;
+  role: UserRole;
+  tenant_id: string;
+  budget: number;
+  spent: number;
+  remaining: number;
+  api_key_masked: string;
+  created_at: number;
+  last_login_at: number | null;
+}
+
+/** 按模型的用量聚合 */
+export interface UsageByModel {
+  model: string;
+  calls: number;
+  cost: number;
+}
+
+/** 按流水线阶段的用量聚合 */
+export interface UsageByStage {
+  stage: string;
+  calls: number;
+  cost: number;
+}
+
+/** 用量汇总（后端 `AccountManager.usage_summary()`） */
+export interface UsageSummary {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  by_model: UsageByModel[];
+  by_stage: UsageByStage[];
+}
+
+/** 一条用量流水（管理员查看单个用户时返回） */
+export interface UsageEvent {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  task_id: string | null;
+  provider: string;
+  model: string;
+  stage: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+  created_at: number;
+}
+
+/** `POST /auth/send-code` 的返回；`debug_code` 仅在开发模式（SMS_PROVIDER=console）出现 */
+export interface SendCodeResponse {
+  ok: boolean;
+  provider: string;
+  expires_in: number;
+  debug_code?: string;
+  message?: string;
+}
+
+/** 注册 / 登录成功后的令牌载荷 */
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in_minutes: number;
+  user: AuthUser;
+}
+
+/** `GET /auth/me` 的返回 */
+export interface MeResponse {
+  user: AuthUser;
+  usage: UsageSummary;
+  auth_enabled: boolean;
+}
+
+/** `GET /admin/dashboard` 的返回 */
+export interface AdminDashboard {
+  total_users: number;
+  calls: number;
+  cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** 按花费倒序的前 20 名用户，附带全局口径的 cost/calls */
+  top_users: AdminTopUser[];
+}
+
+export interface AdminTopUser {
+  id: string;
+  phone: string;
+  role: UserRole;
+  budget: number;
+  spent: number;
+  cost: number;
+  calls: number;
+}
+
+/** `GET /admin/users` 的返回（与 react-admin 的 simpleRestProvider 约定一致） */
+export interface AdminUserList {
+  data: AuthUser[];
+  total: number;
+}
+
+/** `GET /admin/users/{id}` 的返回 */
+export interface AdminUserDetail {
+  user: AuthUser;
+  usage: UsageSummary;
+  events: UsageEvent[];
+}

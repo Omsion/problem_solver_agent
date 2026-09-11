@@ -1,0 +1,75 @@
+# ==============================================================================
+# Docker 构建上下文忽略清单
+#
+# 目的：把构建上下文压到最小，并且**绝不**把密钥和运行时数据带进镜像。
+# ==============================================================================
+
+# --- 密钥（必须排除：.env 内含 DEEPSEEK_API_KEY / ZHIPU_API_KEY 等真实密钥）---
+.env
+.env.*
+!.env.example
+
+# --- 前端：依赖与历史构建产物都在镜像内重新生成 ---
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/coverage
+frontend/*.log
+
+# --- 后端静态资源：由阶段 1 的 vite 构建产出，不来自上下文 ---
+webapp/static
+
+# --- 运行时数据：宿主机上持久化，不进镜像 ---
+webapp/cache
+webapp/uploads
+webapp/data
+webapp/solutions
+
+# --- 截图工作目录（SOLVER_ROOT_DIR 的产物，历史默认在项目父目录）---
+Screenshots
+processed
+
+# --- Git / IDE ---
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+.claude
+.omo
+
+# --- Python 缓存与虚拟环境 ---
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+env
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# --- 测试（镜像里不跑测试）---
+tests
+pytest.ini
+requirements-dev.txt
+
+# --- 日志与本地临时产物 ---
+*.log
+.deps_ok
+*.tmp
+
+# --- 文档（不影响运行，减少上下文）---
+docs
+*.md
+LICENSE
+
+# --- Docker 自身文件（避免改动 compose 就导致镜像层失效）---
+Dockerfile
+Dockerfile.*
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
