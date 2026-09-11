@@ -33,13 +33,48 @@ pipeline_service = None
 
 
 class TaskEventBus:
-    """Per-task event bus — 广播进度事件给同一任务的所有 SSE 订阅者。"""
+    """Per-task event bus — 广播进度事件给同一任务的所有 SSE 订阅者。
+
+    事件带自增序号：`publish` 时分配 `event["_id"]`。响应里把它写成 SSE 的
+    `id:` 字段，客户端断线重连时浏览器会带 `Last-Event-ID` 请求头，
+    `replay_since()` 就能把漏掉的事件补发，避免"重连后中间过程丢失"。
+    """
+
+    # 每个任务保留的可回放事件条数上限（覆盖一次断线重连足够）
+    REPLAY_LIMIT = 500
 
     def __init__(self) -> None:
         self._queues: dict[str, list[asyncio.Queue]] = {}
         self._history: dict[str, list[dict]] = {}
+        self._counters: dict[str, int] = {}
         self._global_queues: list[asyncio.Queue] = []
         self._lock = threading.Lock()
+
+    # ---- 序号 ----
+
+    def _assign_id(self, event: dict) -> dict:
+        """给事件分配序号（调用方需持有锁）。"""
+        task_id = event.get("_task_id")
+        counter = self._counters.get(task_id, 0) + 1
+        self._counters[task_id] = counter
+        event["_id"] = counter
+        return event
+
+    @staticmethod
+    def event_id(event: dict) -> int:
+        return int(event.get("_id") or 0)
+
+    def last_event_id(self, task_id: str) -> int:
+        with self._lock:
+            return self._counters.get(task_id, 0)
+
+    def replay_since(self, task_id: str, last_event_id: int) -> list[dict]:
+        """返回序号大于 `last_event_id` 的事件（用于断线续传）。"""
+        if last_event_id <= 0:
+            return []
+        with self._lock:
+            history = list(self._history.get(task_id, []))
+        return [event for event in history if self.event_id(event) > last_event_id]
 
     def subscribe(self, task_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
@@ -58,7 +93,14 @@ class TaskEventBus:
 
     def publish(self, task_id: str, event: dict) -> None:
         with self._lock:
-            self._history.setdefault(task_id, []).append(event)
+            event = dict(event)  # 不修改调用方持有的对象
+            event["_task_id"] = task_id
+            self._assign_id(event)
+            history = self._history.setdefault(task_id, [])
+            history.append(event)
+            # 环形上限，防止长任务把内存撑爆
+            if len(history) > self.REPLAY_LIMIT:
+                del history[: len(history) - self.REPLAY_LIMIT]
             queues = list(self._queues.get(task_id, []))
         for q in queues:
             try:
@@ -92,6 +134,7 @@ class TaskEventBus:
         with self._lock:
             self._queues.pop(task_id, None)
             self._history.pop(task_id, None)
+            self._counters.pop(task_id, None)
 
 
 event_bus = TaskEventBus()
@@ -140,6 +183,34 @@ def _remove_tree(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
     except Exception:  # pragma: no cover - ignore_errors 已兜底
         pass
+
+
+def _sse_frame(event: dict) -> str:
+    """把事件字典序列化成一条完整的 SSE 帧（含 id 与 event 名）。
+
+    内部字段（下划线开头，如 `_id` / `_task_id`）只用于服务端排序与去重，
+    不下发给前端。
+    """
+    payload = {k: v for k, v in event.items() if not k.startswith("_")}
+    event_type = payload.get("type", "message")
+    lines = []
+    event_id = event_bus.event_id(event)
+    if event_id:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event_type}")
+    lines.append(f"data: {json.dumps(payload, ensure_ascii=False)}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _parse_last_event_id(request: Request) -> int:
+    """读取 `Last-Event-ID` 请求头（浏览器重连时自动携带）。"""
+    raw = request.headers.get("last-event-id")
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw.strip()))
+    except (ValueError, AttributeError):
+        return 0
 
 
 def _single_event_response(event_type: str, payload: dict) -> StreamingResponse:
@@ -244,13 +315,22 @@ async def create_task(files: list[UploadFile] = File(...)):
 
 
 @router.get("/api/tasks/{task_id}/stream")
-async def stream_task(task_id: str, thinking: bool = False, style: str | None = None):
+async def stream_task(
+    request: Request,
+    task_id: str,
+    thinking: bool = False,
+    style: str | None = None,
+):
     """SSE 流式端点 — 启动流水线处理并实时推送进度。
 
     Query Parameters:
         thinking: 设为 True 启用求解器思考模式（DeepSeek reasoning），
                   思考过程以 type="reasoning" 事件独立推送。
         style: 编程题求解风格（OPTIMAL / EXPLORATORY），留空用全局配置。
+
+    断线续传：响应中的每条事件都带 `id:`。浏览器重连 EventSource 时会自动带
+    `Last-Event-ID` 请求头，此时服务端只补发该序号之后的事件，避免重连后
+    丢失中间过程或重复渲染已收到的内容。
     """
     task = task_manager.get_task(task_id)
     if not task:
@@ -266,6 +346,10 @@ async def stream_task(task_id: str, thinking: bool = False, style: str | None = 
         message = "上传文件已过期，请重新提交"
         task_manager.update_task(task_id, status="failed", error_message=message)
         return _single_event_response("error", {"type": "error", "message": message})
+
+    # 断线续传：浏览器重连时会自动带上 Last-Event-ID
+    last_event_id = _parse_last_event_id(request)
+    missed = event_bus.replay_since(task_id, last_event_id) if last_event_id else []
 
     q: asyncio.Queue = event_bus.subscribe(task_id)
 
@@ -296,9 +380,16 @@ async def stream_task(task_id: str, thinking: bool = False, style: str | None = 
 
     async def _event_generator():
         try:
-            init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
-            event_bus.publish(task_id, init_event)
-            yield f"event: init\ndata: {json.dumps(init_event, ensure_ascii=False)}\n\n"
+            if last_event_id:
+                # 续传：先把客户端漏掉的事件补发，再接着推实时事件
+                for event in missed:
+                    yield _sse_frame(event)
+                    if event.get("type") in TERMINAL_EVENTS:
+                        return
+            else:
+                init_event = {"type": "init", "task_id": task_id, "num_images": len(image_paths)}
+                event_bus.publish(task_id, init_event)
+                yield _sse_frame(init_event)
 
             heartbeat_interval = 30
             last_heartbeat = time.time()
@@ -313,10 +404,13 @@ async def stream_task(task_id: str, thinking: bool = False, style: str | None = 
                         last_heartbeat = now
                     continue
 
-                ev_type = event.get("type", "message")
-                yield f"event: {ev_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                # 续传时已补发过的事件可能仍在队列里，按序号去重
+                if last_event_id and event_bus.event_id(event) <= last_event_id:
+                    continue
 
-                if ev_type in TERMINAL_EVENTS:
+                yield _sse_frame(event)
+
+                if event.get("type") in TERMINAL_EVENTS:
                     break
         except asyncio.CancelledError:
             # 客户端断开：不取消任务，只停止推送
@@ -385,6 +479,142 @@ async def retry_task(task_id: str, thinking: bool = True):
     task_manager.update_task(task_id, status="pending", error_message="")
     event_bus.cleanup(task_id)
     return {"status": "ok", "task_id": task_id, "resumed": True, "thinking": thinking}
+
+
+@router.post("/api/tasks/{task_id}/resolve")
+async def resolve_task(task_id: str, thinking: bool = True, style: str | None = None):
+    """换路重解：复用已识别的题目文本，只重跑求解。
+
+    适用场景：第一版答案不满意，想换求解风格（OPTIMAL / EXPLORATORY）、
+    开关思考模式，或换个模型再要一版。**跳过分类与 OCR**，
+    因此只有一次求解调用，比重新走完整流水线快得多。
+    """
+    task = task_manager.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+
+    if tasks_registry.is_running(task_id):
+        return JSONResponse({"error": "任务正在处理中", "code": "already_running"}, status_code=409)
+
+    if style and style.upper() not in ("OPTIMAL", "EXPLORATORY"):
+        return JSONResponse({"error": "style 只能是 OPTIMAL 或 EXPLORATORY"}, status_code=400)
+
+    # 需要已识别的题目文本：优先取解答文件里的记录，其次取阶段缓存
+    transcribed_text = ""
+    solution_path = task.get("solution_path") or ""
+    if solution_path and Path(solution_path).exists():
+        transcribed_text = pipeline_service.extract_problem_text(Path(solution_path))
+
+    if not transcribed_text:
+        cached = task_manager.get_cached_stage(task_id, "vision")
+        pages = cached.get("pages") if isinstance(cached, dict) else None
+        if pages:
+            transcribed_text = "\n---[NEXT]---\n".join(str(p).strip() for p in pages)
+
+    if not transcribed_text:
+        return JSONResponse(
+            {"error": "找不到已识别的题目文本，请先完整处理一次", "code": "no_transcript"},
+            status_code=409,
+        )
+
+    task_dir = web_config.UPLOAD_DIR / task_id
+    image_paths = _task_images(task_dir)
+    problem_type = (task.get("problem_type") or "GENERAL").strip()
+
+    # 图形推理题依赖原图；其它题型只要有文本就能重解
+    if problem_type == "VISUAL_REASONING" and not image_paths:
+        return JSONResponse(
+            {"error": "图形推理题需要原图，但原图已被清理", "code": "upload_expired"},
+            status_code=410,
+        )
+
+    task_manager.update_task(task_id, status="pending", error_message="")
+    event_bus.cleanup(task_id)
+
+    def _on_progress(event: dict) -> None:
+        event_bus.publish(task_id, event)
+
+    def _run(token) -> None:
+        try:
+            pipeline_service.resolve(
+                task_id,
+                image_paths,
+                _on_progress,
+                problem_type=problem_type,
+                transcribed_text=transcribed_text,
+                enable_thinking=thinking,
+                style=style,
+                cancel=token,
+            )
+        except Exception:
+            pass
+        finally:
+            event_bus.cleanup(task_id)
+
+    threading.Thread(
+        target=lambda: tasks_registry.run_with_slot(task_id, _run),
+        daemon=True,
+    ).start()
+
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "style": style or core_config.SOLUTION_STYLE,
+        "thinking": thinking,
+        "reused_transcript": True,
+    }
+
+
+@router.post("/api/tasks/{task_id}/verify")
+async def verify_task(task_id: str, model: str | None = None):
+    """核对已完成的解答（默认关闭的可选功能）。
+
+    用第二个视觉模型对照原图复核答案，结果追加到解答文件并返回结构化结论。
+    核对不覆盖已有解答，失败也不影响原结果。
+    """
+    task = task_manager.get_task(task_id)
+    if not task:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+
+    if task["status"] not in ("completed", "cancelled"):
+        return JSONResponse(
+            {"error": "只有已完成或已取消的任务可以核对", "code": "not_verifiable"},
+            status_code=400,
+        )
+
+    answer_text = ""
+    solution_path = task.get("solution_path") or ""
+    if solution_path and Path(solution_path).exists():
+        try:
+            answer_text = Path(solution_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            return JSONResponse({"error": f"读取解答失败: {exc}"}, status_code=500)
+
+    if not answer_text.strip():
+        return JSONResponse({"error": "解答内容为空，无法核对", "code": "empty_answer"}, status_code=409)
+
+    task_dir = web_config.UPLOAD_DIR / task_id
+    image_paths = _task_images(task_dir)
+    if not image_paths:
+        return JSONResponse(
+            {"error": "原图已被清理，无法核对", "code": "upload_expired"},
+            status_code=410,
+        )
+
+    event_bus.publish(task_id, {"type": "status", "phase": "verifying", "message": "正在核对答案…"})
+    try:
+        result = await asyncio.to_thread(pipeline_service.verify, task_id, image_paths, answer_text)
+    except Exception as exc:
+        logger.error("核对失败 task=%s: %s", task_id, exc, exc_info=True)
+        event_bus.publish(task_id, {"type": "status", "phase": "verifying", "message": "核对失败"})
+        return JSONResponse({"error": f"核对失败: {exc}"}, status_code=500)
+
+    # 标记已核对（放在这里而不是 service 内，便于统计与幂等重试）
+    task_manager.update_task(task_id, verified=1)
+
+    payload = result.to_dict()
+    event_bus.publish(task_id, {"type": "verified", "task_id": task_id, "verification": payload})
+    return {"status": "ok", "task_id": task_id, "verification": payload}
 
 
 @router.get("/api/tasks/{task_id}")

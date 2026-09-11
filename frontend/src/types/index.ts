@@ -8,9 +8,30 @@ export type SSEEventType =
   | "done"
   | "error"
   | "cancelled"
+  | "verified"
   | "auto_imported"
   | "remote_connected"
   | "remote_disconnected";
+
+/** 后端抽取出的「最终答案」 */
+export interface AnswerCard {
+  text: string;
+  /** 是否命中了明确的「最终答案」小节（否则是降级取的首段） */
+  extracted: boolean;
+  section?: string | null;
+  truncated?: boolean;
+}
+
+/** 核对模式的结论 */
+export type VerifyVerdict = "agree" | "disagree" | "unclear";
+
+export interface VerificationResult {
+  verdict: VerifyVerdict;
+  issues: string[];
+  corrections: string;
+  reason?: string;
+  model?: string;
+}
 
 export interface SSEEvent {
   type: SSEEventType;
@@ -23,6 +44,9 @@ export interface SSEEvent {
   source?: string; // for auto_imported: "monitor"
   timings?: StageTimings;
   client_ip?: string;
+  answer_card?: AnswerCard;
+  verification?: VerificationResult;
+  resolved?: boolean;
 }
 
 // ---- Task (from REST API) ----
@@ -86,6 +110,14 @@ export interface ProgressState {
   timings: StageTimings | null;
   streamStatus: StreamStatus;
   reconnectAttempt: number;
+  /** 后端抽取的最终答案，用于「答案卡」展示 */
+  answerCard: AnswerCard | null;
+  /** 核对结果（用户主动触发） */
+  verification: VerificationResult | null;
+  /** 核对进行中 */
+  verifying: boolean;
+  /** 原标题文本（换路重解时展示） */
+  resolved?: boolean;
 }
 
 // ---- API payloads ----

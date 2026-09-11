@@ -10,7 +10,11 @@ export {
   deleteTask,
   cancelTask,
   retryTask,
+  resolveTask,
+  verifyTask,
   sseUrl,
   globalSseUrl,
   getSystemStatus,
+  getHealth,
+  getStats,
 } from "../lib/api";

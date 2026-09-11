@@ -93,6 +93,32 @@ export async function retryTask(taskId: string): Promise<void> {
   if (!res.ok) throw await parseError(res, "重试失败");
 }
 
+/** 换路重解：复用已识别的题目文本，只重跑求解（可换风格 / 开关思考模式） */
+export async function resolveTask(
+  taskId: string,
+  options: { thinking?: boolean; style?: "OPTIMAL" | "EXPLORATORY" } = {},
+): Promise<{ status: string; style: string; thinking: boolean }> {
+  const params = new URLSearchParams();
+  if (options.thinking !== undefined) params.set("thinking", options.thinking ? "1" : "0");
+  if (options.style) params.set("style", options.style);
+  const qs = params.toString();
+  const res = await fetch(
+    `${BASE}/tasks/${encodeURIComponent(taskId)}/resolve${qs ? "?" + qs : ""}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw await parseError(res, "重新求解失败");
+  return res.json();
+}
+
+/** 核对答案：用第二个视觉模型对照原图复核（默认关闭的可选功能） */
+export async function verifyTask(
+  taskId: string,
+): Promise<{ status: string; verification: import("../types").VerificationResult }> {
+  const res = await fetch(`${BASE}/tasks/${encodeURIComponent(taskId)}/verify`, { method: "POST" });
+  if (!res.ok) throw await parseError(res, "核对失败");
+  return res.json();
+}
+
 /** 构造任务 SSE 地址 */
 export function sseUrl(taskId: string, thinking = false): string {
   const params = new URLSearchParams();

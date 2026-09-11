@@ -118,6 +118,74 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 
 调用成功后，前端应重新连接 `GET /api/tasks/{id}/stream`。
 
+### `POST /api/tasks/{task_id}/resolve`
+
+**换路重解**：复用已识别的题目文本，只重跑求解，跳过分类与 OCR。
+
+适用场景：第一版答案不满意，想换求解风格、开关思考模式，或换个模型再要一版。
+因为跳过视觉步骤，整个过程只有一次求解调用。
+
+- Query：
+  - `thinking`：`1` / `0`，默认 `1`
+  - `style`：`OPTIMAL` / `EXPLORATORY`，留空用全局配置
+
+```json
+{"status": "ok", "task_id": "...", "style": "EXPLORATORY", "thinking": true, "reused_transcript": true}
+```
+
+题目文本的来源顺序：解答文件里的「题目文本」小节 → `stage_cache` 中的识别结果。
+
+| 状态码 | code | 场景 |
+|---|---|---|
+| 400 | — | `style` 取值非法 |
+| 404 | — | 任务不存在 |
+| 409 | `already_running` | 任务正在处理中 |
+| 409 | `no_transcript` | 找不到已识别的题目文本，需先完整处理一次 |
+| 410 | `upload_expired` | 图形推理题依赖原图，但原图已被清理 |
+
+成功后同样需要连接 `stream` 端点接收新一版解答（`done` 事件会带 `resolved: true`）。
+
+### `POST /api/tasks/{task_id}/verify`
+
+**核对模式**（可选功能，默认不启用）：用第二个视觉模型对照原图复核答案。
+
+不覆盖已有解答，核对结果会追加到解答文件末尾的「## 核对结果」小节。
+
+- Query：`model`（可选）覆盖默认的视觉推理模型
+
+```json
+{
+  "status": "ok",
+  "task_id": "...",
+  "verification": {
+    "verdict": "disagree",
+    "issues": ["第 2 小问漏答", "选项 B 与题干要求矛盾"],
+    "corrections": "应选 A，并补上第二问的推导",
+    "reason": "",
+    "model": "GLM-4.6V"
+  }
+}
+```
+
+`verdict` 取值：
+
+| 值 | 含义 |
+|---|---|
+| `agree` | 核对通过 |
+| `disagree` | 发现明确错误（`issues` 非空） |
+| `unclear` | 无法判定（图片信息不足 / 模型输出无法解析 / 调用失败） |
+
+后端有一层**保守保护**：模型声称 `disagree` 但没有给出任何问题或修正建议时，
+会降级为 `unclear` 并说明原因，避免误报把正确答案吓成"错误"。
+
+| 状态码 | code | 场景 |
+|---|---|---|
+| 400 | `not_verifiable` | 只有 `completed` / `cancelled` 的任务可核对 |
+| 404 | — | 任务不存在 |
+| 409 | `empty_answer` | 解答内容为空 |
+| 410 | `upload_expired` | 原图已被清理，无法对照核对 |
+| 500 | — | 核对过程异常 |
+
 ### `GET /api/tasks/{task_id}/stream`
 
 SSE 流式端点。**首次连接会启动流水线**（幂等：已在运行则只订阅）。
@@ -202,12 +270,32 @@ SSE 流式端点。**首次连接会启动流水线**（幂等：已在运行则
 | `reasoning` | `content` | 思考过程分片（仅在 `thinking=1` 时） |
 | `chunk` | `content` | 解答正文分片 |
 | `timings` | `timings` | 阶段耗时汇总（结束时发送） |
-| `done` | `task_id`, `filename`, `answer_card`, `timings` | 处理成功 |
+| `done` | `task_id`, `filename`, `answer_card`, `timings`, `resolved` | 处理成功。`resolved: true` 表示这是换路重解的结果 |
 | `cancelled` | `task_id`, `message`, `partial_path` | 任务被取消，已保留部分内容 |
 | `error` | `task_id`, `message` | 处理失败 |
+| `verified` | `task_id`, `verification` | 核对完成（结构同上文的 `verification`） |
 | `auto_imported` | `task_id`, `num_images`, `source` | 监控目录发现新截图组（仅全局流） |
 | `remote_connected` | `client_ip` | 手机已连接（仅全局流） |
 | `remote_disconnected` | `client_ip` | 手机已断开（仅全局流） |
+
+### 事件序号与断线续传
+
+每帧都带 SSE 标准 `id:` 字段（每个任务内自增）：
+
+```
+id: 12
+event: chunk
+data: {"type":"chunk","content":"..."}
+```
+
+浏览器重连 `EventSource` 时会自动带上 `Last-Event-ID` 请求头，服务端据此
+**只补发该序号之后的事件**，避免重连后中间过程丢失或重复渲染。
+
+实现细节：
+
+- 每个任务保留最近 `TaskEventBus.REPLAY_LIMIT`（默认 500）条事件用于回放
+- 序号在 `cleanup(task_id)` 时一并清空，因此重试/重解会从 1 重新开始
+- 内部字段（`_id` / `_task_id`）不会下发给前端
 
 服务端每 30 秒发送一次 `: heartbeat` 注释行保活。
 
@@ -228,9 +316,11 @@ SSE 流式端点。**首次连接会启动流水线**（幂等：已在运行则
 |---|---|---|
 | 取消 | `DELETE`，只改状态不真停 | `POST`（`DELETE` 兼容），真实停止 |
 | 重试 | 无 | `POST /api/tasks/{id}/retry` |
-| 状态 | 无 | `GET /api/status` |
-| 统计 | 无 | `GET /api/stats` |
-| 健康 | 无 | `GET /api/health` |
+| 换路重解 | 无 | `POST /api/tasks/{id}/resolve`（跳过 OCR） |
+| 核对 | 无 | `POST /api/tasks/{id}/verify`（默认关闭） |
+| 状态/统计/健康 | 无 | `GET /api/status`、`/api/stats`、`/api/health` |
+| 答案卡 | 无 | `done` 事件带 `answer_card`，前端渲染成独立卡片 |
+| SSE 续传 | 无 | 每帧带 `id:`，支持 `Last-Event-ID` 补发 |
 | 终端页面 | `#/?task=<id>` | `#/task/<id>` |
 | 「取消」事件 | 复用 `error` | 独立的 `cancelled` 事件与 `cancelled` 状态 |
 | 远程判定 | 手写 IP 黑名单（会误判） | 本机地址白名单 + 移动端 UA |

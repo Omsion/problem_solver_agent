@@ -2,17 +2,7 @@ import { create } from "zustand";
 import type { ProgressState, StageTimings } from "../types";
 import { sseUrl, globalSseUrl } from "../api/client";
 import { createTaskStream, type StreamStatus, type TaskStream } from "../features/stream/taskStream";
-
-/** 流式缓冲上限：长任务的思考过程可能达到数百 KB，超出后截断避免内存膨胀 */
-const MAX_BUFFER_CHARS = 200_000;
-const TRUNCATED_SUFFIX = "\n\n…（内容过长已截断）";
-
-function appendBounded(prev: string, next: string): string {
-  if (!next) return prev;
-  if (prev.length + next.length <= MAX_BUFFER_CHARS) return prev + next;
-  if (prev.endsWith(TRUNCATED_SUFFIX)) return prev;
-  return prev.slice(0, MAX_BUFFER_CHARS) + TRUNCATED_SUFFIX;
-}
+import { appendBounded } from "../lib/streamBuffer";
 
 function emptyProgress(): ProgressState {
   return {
@@ -25,6 +15,9 @@ function emptyProgress(): ProgressState {
     timings: null,
     streamStatus: "connecting",
     reconnectAttempt: 0,
+    answerCard: null,
+    verification: null,
+    verifying: false,
   };
 }
 
@@ -129,6 +122,19 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               phase: "done",
               message: "解答完成",
               filename: data.filename ?? null,
+              answerCard: data.answer_card ?? null,
+              resolved: data.resolved ?? false,
+              // done 事件本身也带 timings（单独一条 timings 事件可能因断线丢失）
+              timings: data.timings ?? get().progress[taskId]?.timings ?? null,
+              // 处理结束，清掉可能残留的"重连中"状态
+              streamStatus: "closed",
+              verifying: false,
+            });
+            break;
+          case "verified":
+            updateProgress(taskId, {
+              verification: data.verification ?? null,
+              verifying: false,
             });
             break;
           case "cancelled":

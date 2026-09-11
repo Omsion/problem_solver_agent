@@ -136,6 +136,115 @@ class PipelineService:
 
         return result
 
+    def resolve(
+        self,
+        task_id: str,
+        image_paths: list[Path],
+        on_progress: Callable[[dict], None],
+        *,
+        problem_type: str,
+        transcribed_text: str,
+        enable_thinking: bool = True,
+        style: str | None = None,
+        cancel: CancelToken | None = None,
+    ) -> dict:
+        """换路重解：复用已识别的题目文本，只重跑求解。
+
+        典型用法：第一版答案不满意 → 换风格 / 开关思考模式 → 几秒内拿第二版。
+        """
+        self.task_manager.update_task(task_id, status="processing", error_message="")
+
+        def _forward(event: dict) -> None:
+            if event.get("type") == "done":
+                self.task_manager.update_task(
+                    task_id,
+                    timings_json=json.dumps(event.get("timings") or {}, ensure_ascii=False),
+                )
+            on_progress(event)
+
+        pipeline = SolutionPipeline(
+            solution_dir=self.solution_dir,
+            on_event=_forward,
+            stage_cache=self.stage_cache,
+        )
+
+        try:
+            result = pipeline.resolve(
+                task_id,
+                problem_type,
+                transcribed_text,
+                enable_thinking=enable_thinking,
+                style=style,
+                cancel=cancel,
+                image_paths=image_paths,
+            )
+        except Exception as exc:
+            logger.error("重新求解异常 task=%s: %s", task_id, exc, exc_info=True)
+            self.task_manager.update_task(task_id, status="failed", error_message=str(exc))
+            raise
+
+        path = result.get("path")
+        if result.get("status") == "completed" and path is not None:
+            self.task_manager.update_task(
+                task_id,
+                status="completed",
+                solution_path=str(path),
+                filename=Path(path).name,
+                timings_json=json.dumps(result.get("timings") or {}, ensure_ascii=False),
+                answer_card=result.get("answer_card", {}).get("text", ""),
+                problem_type=str(result.get("problem_type") or problem_type),
+            )
+            self._sync_to_root_solutions(Path(path))
+        else:
+            self.task_manager.update_task(task_id, status="cancelled")
+        return result
+
+    def verify(self, task_id: str, image_paths: list[Path], answer_text: str):
+        """核对已完成的解答，并把结果追加到解答文件。
+
+        注意：`verified` 标记由调用方（路由）负责写入，这里只做核对与落盘。
+
+        Returns:
+            VerificationResult
+        """
+        from problem_solver_agent.verify import append_verification_to_solution, verify_answer
+
+        task = self.task_manager.get_task(task_id)
+        if not task:
+            raise ValueError("任务不存在")
+
+        result = verify_answer(image_paths, answer_text)
+
+        solution_path = task.get("solution_path") or ""
+        if solution_path and Path(solution_path).exists():
+            append_verification_to_solution(Path(solution_path), result)
+        return result
+
+    @staticmethod
+    def extract_problem_text(solution_file: Path) -> str:
+        """从已生成的解答文件中取出「题目文本」小节。
+
+        换路重解需要原始题目文本；如果文件里没有记录（例如很旧的解答），
+        调用方应回退到重新识别。
+        """
+        try:
+            content = Path(solution_file).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+        # 解答文件结构：frontmatter → "# 题目文本" 小节 → "---" → "# 解答"
+        marker = "# 题目文本"
+        index = content.find(marker)
+        if index == -1:
+            return ""
+        body = content[index + len(marker):]
+        # 到第一个分隔线为止
+        for sep in ("\n---\n", "\n# 解答"):
+            cut = body.find(sep)
+            if cut != -1:
+                body = body[:cut]
+        return body.strip()
+
     # ------------------------------------------------------------------
     # 辅助
     # ------------------------------------------------------------------

@@ -275,6 +275,129 @@ class SolutionPipeline:
             if self.archive_dir is not None:
                 self._archive_images(image_paths)
 
+    def resolve(
+        self,
+        task_id: str,
+        problem_type: str,
+        transcribed_text: str,
+        *,
+        enable_thinking: bool = True,
+        style: str | None = None,
+        cancel: CancelToken | None = None,
+        image_paths: list[Path] | None = None,
+    ) -> dict:
+        """**换路重解**：跳过分类与识别，直接用已有题目文本重新求解。
+
+        用途：第一版答案不满意时，换个求解风格（OPTIMAL / EXPLORATORY）、
+        开关思考模式、或换模型再要一版。因为跳过了视觉步骤，
+        整个过程只有一次求解调用，通常几秒到几十秒就能出第二版答案。
+
+        Args:
+            image_paths: 仅在 `problem_type == "VISUAL_REASONING"` 时需要（原图直读）
+
+        Returns:
+            与 `run()` 相同结构的结果字典。
+        """
+        cancel = cancel or CancelToken()
+        if not transcribed_text or not transcribed_text.strip():
+            raise ValueError("缺少题目文本，无法重新求解（请先完成一次完整处理）")
+
+        timings = StageTimings(cached=["classify", "ocr", "polish"])
+        started = time.time()
+        temp_path = self.solution_dir / f"{task_id}_resolve.md"
+        final_path: Path | None = None
+
+        try:
+            self._status("solving", "正在用新的求解策略生成解答…")
+            cancel.raise_if_cancelled()
+
+            final_type, provider, model, stream = self._start_solve(
+                problem_type,
+                transcribed_text,
+                list(image_paths or []),
+                enable_thinking,
+                style,
+                ocr_fallback=False,
+            )
+
+            solve_started = time.time()
+            chunks: list[str] = []
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                self._write_header(
+                    handle, list(image_paths or []), final_type, transcribed_text,
+                    provider, model, timings, False,
+                )
+                for event in stream:
+                    if cancel.cancelled:
+                        handle.flush()
+                        raise CancelledError("任务已取消")
+                    event_type = event.get("type") if isinstance(event, dict) else "content"
+                    if event_type == "reasoning":
+                        self._emit({"type": EVENT_REASONING, "content": event["content"]})
+                    elif event_type == "error":
+                        raise RuntimeError(event.get("content", "求解器返回错误"))
+                    else:
+                        content = event.get("content", "") if isinstance(event, dict) else str(event)
+                        chunks.append(content)
+                        handle.write(content)
+                        handle.flush()
+                        self._emit({"type": EVENT_CHUNK, "content": content})
+
+            timings.solve = int((time.time() - solve_started) * 1000)
+            answer_text = "".join(chunks)
+            if not answer_text.strip() or "--- ERROR ---" in answer_text:
+                raise RuntimeError("求解器返回空响应或包含内部错误")
+
+            cancel.raise_if_cancelled()
+            card = extract_answer_card(answer_text)
+            timings.total = int((time.time() - started) * 1000)
+
+            final_path = self._generate_filename(
+                f"{transcribed_text}\n\n[重解:{style or config.SOLUTION_STYLE}/{final_type}]",
+                final_type,
+                task_id,
+            )
+            temp_path.replace(final_path)
+
+            result = {
+                "status": "completed",
+                "path": final_path,
+                "text": answer_text,
+                "problem_type": final_type,
+                "provider": provider,
+                "model": model,
+                "timings": timings.to_dict(),
+                "answer_card": card,
+                "resolved": True,
+            }
+            self._emit({"type": EVENT_TIMINGS, "timings": timings.to_dict()})
+            self._emit({
+                "type": EVENT_DONE,
+                "task_id": task_id,
+                "filename": final_path.name,
+                "answer_card": card,
+                "timings": timings.to_dict(),
+                "resolved": True,
+            })
+            return result
+
+        except CancelledError:
+            partial = self._preserve_partial(temp_path, f"{task_id}_resolve")
+            self._emit({
+                "type": EVENT_CANCELLED,
+                "task_id": task_id,
+                "message": "重新求解已取消",
+                "partial_path": str(partial) if partial else None,
+            })
+            return {"status": "cancelled", "path": partial, "text": "", "problem_type": problem_type}
+
+        except Exception as exc:
+            logger.error("重新求解失败 task=%s: %s", task_id, exc, exc_info=True)
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            self._emit({"type": EVENT_ERROR, "task_id": task_id, "message": str(exc)})
+            raise
+
     # ------------------------------------------------------------------
     # 各步骤实现
     # ------------------------------------------------------------------

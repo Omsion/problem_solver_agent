@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Dialog } from "../ui/dialog";
 import { useLayoutStore } from "../../stores/useLayoutStore";
 
 /**
  * 全屏看图。
  *
- * 缺陷修正：旧实现取的是 `files[0]`（当前上传队列的第一张），因此在"历史任务"
- * 里点开放大时永远显示错的那张图。现在由调用方传入完整的图片集合与下标。
+ * 基于 Radix Dialog：获得焦点陷阱、Esc 关闭、滚动锁正确还原。
+ * 支持左右翻页（按钮 / 方向键 / 手机左右滑动）。
  */
 export const ImageLightbox = () => {
   const images = useLayoutStore((s) => s.lightboxImages);
@@ -15,98 +17,85 @@ export const ImageLightbox = () => {
   const touchStartX = useRef<number | null>(null);
 
   const open = images.length > 0;
-  const current = open ? images[Math.min(index, images.length - 1)] : "";
+  const safeIndex = Math.min(index, Math.max(images.length - 1, 0));
+  const current = open ? images[safeIndex] : "";
 
-  // 键盘操作：Esc 关闭，左右翻页
+  // 左右方向键翻页（Esc 由 Dialog 处理）
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
-      else if (e.key === "ArrowLeft") step(-1);
-      else if (e.key === "ArrowRight") step(1);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "ArrowLeft") step(-1);
+      else if (event.key === "ArrowRight") step(1);
     };
-    document.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open, close, step]);
-
-  if (!open) return null;
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, step]);
 
   const hasMultiple = images.length > 1;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
-      onClick={close}
-      onTouchStart={(e) => {
-        touchStartX.current = e.touches[0]?.clientX ?? null;
-      }}
-      onTouchEnd={(e) => {
-        const startX = touchStartX.current;
-        touchStartX.current = null;
-        if (startX === null || !hasMultiple) return;
-        const deltaX = (e.changedTouches[0]?.clientX ?? startX) - startX;
-        if (Math.abs(deltaX) > 50) step(deltaX < 0 ? 1 : -1);
-      }}
+    <Dialog
+      open={open}
+      onClose={close}
+      title="查看题目图片"
+      closable={false}
+      className="bg-transparent p-0 max-w-none max-h-none w-screen h-screen shadow-none rounded-none overflow-hidden"
     >
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          close();
+      <div
+        className="relative w-screen h-screen flex items-center justify-center bg-black/95"
+        onTouchStart={(event) => {
+          touchStartX.current = event.touches[0]?.clientX ?? null;
         }}
-        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10 cursor-pointer"
-        title="关闭"
+        onTouchEnd={(event) => {
+          const startX = touchStartX.current;
+          touchStartX.current = null;
+          if (startX === null || !hasMultiple) return;
+          const deltaX = (event.changedTouches[0]?.clientX ?? startX) - startX;
+          if (Math.abs(deltaX) > 50) step(deltaX < 0 ? 1 : -1);
+        }}
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
+        <button
+          onClick={close}
+          className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10 cursor-pointer"
+          title="关闭"
+          aria-label="关闭"
+        >
+          <X className="w-5 h-5" />
+        </button>
 
-      {hasMultiple && (
-        <>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              step(-1);
-            }}
-            className="absolute left-2 sm:left-4 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10 cursor-pointer touch-target"
-            title="上一张"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              step(1);
-            }}
-            className="absolute right-2 sm:right-4 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10 cursor-pointer touch-target"
-            title="下一张"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        </>
-      )}
+        {hasMultiple && (
+          <>
+            <button
+              onClick={() => step(-1)}
+              className="absolute left-2 sm:left-4 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10 cursor-pointer touch-target"
+              title="上一张"
+              aria-label="上一张"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => step(1)}
+              className="absolute right-2 sm:right-4 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10 cursor-pointer touch-target"
+              title="下一张"
+              aria-label="下一张"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </>
+        )}
 
-      <img
-        src={current}
-        alt={`题目图片 ${index + 1}`}
-        className="max-w-[96vw] max-h-[92vh] object-contain"
-        onClick={(e) => e.stopPropagation()}
-      />
+        <img
+          src={current}
+          alt={`题目图片 ${safeIndex + 1}`}
+          className="max-w-[96vw] max-h-[92vh] object-contain"
+        />
 
-      {hasMultiple && (
-        <p className="absolute bottom-5 left-1/2 -translate-x-1/2 text-white/70 text-sm">
-          {index + 1} / {images.length}
-        </p>
-      )}
-    </div>
+        {hasMultiple && (
+          <p className="absolute bottom-5 left-1/2 -translate-x-1/2 text-white/70 text-sm tabular-nums">
+            {safeIndex + 1} / {images.length}
+          </p>
+        )}
+      </div>
+    </Dialog>
   );
 };

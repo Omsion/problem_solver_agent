@@ -43,6 +43,8 @@ npm install          # 首次
 npm run dev          # 开发服务器 http://localhost:5173，/api 代理到 8000
 npm run build        # 生产构建 → ../webapp/static/（同时做类型检查）
 npm run lint         # ESLint
+npm test             # vitest 单元测试（54 个用例）
+npm run test:watch   # 监听模式
 ```
 
 > **重要**：`webapp/static/` 里的产物是构建结果。改完 `frontend/src` 必须
@@ -70,14 +72,24 @@ cd frontend && npm run dev     # 浏览器访问 5173
 - 路径一律用 `pathlib.Path`，不要字符串拼接
 - Prompt 模板必须是 **raw 字符串**（`r"""..."""`），否则 LaTeX 里的 `\begin`
   等会被当成非法转义序列
-- 前端 import 顺序：外部库 → 内部模块 → 类型
+- **不要手写 `new EventSource(...)`**：所有 SSE 连接都走
+  `src/features/stream/taskStream.ts`，重连/退避/可见性恢复都在那里
+- **不要在首屏路径静态导入 `MarkdownRenderer` / `ReadingMode`**：
+  用 `components/output/lazy.tsx` 里的包装组件，否则首屏体积会回退
+- **不要用原生 `alert()` / `confirm()`**：用 `ui/toast.tsx` 的 `notify`
+  与 `ui/confirm.tsx` 的 `useConfirm()`
 - 新增接口后同步更新 `docs/API.md` 与 `frontend/src/types/index.ts`
 
 ---
 
 ## 测试
 
-用例在 `tests/`，全部使用打桩，**不会产生真实 API 调用**。
+### 后端（`tests/`，全部打桩，不产生真实 API 调用）
+
+```powershell
+pytest                      # 164 个用例，约 8 秒
+pytest tests/test_core_pipeline.py -v
+```
 
 | 文件 | 覆盖内容 |
 |---|---|
@@ -86,10 +98,27 @@ cd frontend && npm run dev     # 浏览器访问 5173
 | `test_image_prep.py` | 缩放边界、RGBA 白底、EXIF 方向、缓存命中、损坏缓存重建 |
 | `test_core_pipeline.py` | 合并调用与回退、跳过润色、OCR 兜底、取消保留部分内容、阶段缓存 |
 | `test_answer_card.py` | 从解答中抽取「最终答案」小节的各种写法 |
+| `test_verify.py` | 核对结果解析、verdict 归一化、一致性保护、异常兜底 |
 | `test_timings.py` | 阶段耗时聚合、DB 迁移、阶段缓存读写 |
 | `test_retention.py` | 上传目录清理、孤立目录、图片缓存 LRU |
 | `test_routes_upload.py` | 目录穿越防护、非法图片、体积限制、取消/重试门禁 |
 | `test_file_monitor.py` | 文件稳定性等待、回调异常隔离 |
+| `test_resolve_verify_sse.py` | SSE 序号与 `Last-Event-ID` 续传、`/resolve` 与 `/verify` 门禁 |
+
+### 前端（vitest + Testing Library）
+
+```powershell
+cd frontend
+npm test
+```
+
+| 文件 | 覆盖内容 |
+|---|---|
+| `lib/utils.test.ts` | `formatTs` 对非法输入的防御（缺陷 D 白屏回归）、状态与题型标签 |
+| `lib/streamBuffer.test.ts` | 流式缓冲上限与截断语义 |
+| `features/stream/taskStream.test.ts` | 断线自动重连与退避、终态不再重连、用户手动重试、可见性恢复 |
+| `stores/useTaskStore.test.ts` | SSE 事件 → 界面状态的映射（含答案卡、核对、取消） |
+| `components/output/AnswerCard.test.tsx` | 答案卡渲染、复制、核对结论三种状态 |
 
 新增功能时请同时补测试；修 bug 时优先写一个能复现的用例。
 

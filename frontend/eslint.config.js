@@ -37,4 +37,17 @@ export default defineConfig([
       globals: { ...globals.browser, ...globals.node },
     },
   },
+  {
+    // UI 原语与工具模块会同时导出组件与钩子/常量（例如 confirm.tsx 里的
+    // useConfirm、toast.tsx 里的 notify）。react-refresh 的"只导出组件"规则
+    // 是开发期 HMR 优化，这类模块退化为整页刷新是可以接受的。
+    files: [
+      'src/components/ui/*.{ts,tsx}',
+      'src/components/tasks/TaskCard.tsx',
+      'src/components/output/lazy.tsx',
+    ],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

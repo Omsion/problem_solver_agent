@@ -110,6 +110,7 @@ export function createTaskStream(
       "done",
       "error",
       "cancelled",
+      "verified",
       "auto_imported",
     ];
     for (const name of named) {

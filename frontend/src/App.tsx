@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, Suspense, lazy } from "react";
 import { HashRouter, Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { AppHeader } from "./components/layout/AppHeader";
 import { SplitPanelLayout } from "./components/layout/SplitPanelLayout";
@@ -9,13 +9,17 @@ import { ImageViewer } from "./components/viewer/ImageViewer";
 import { ImageLightbox } from "./components/viewer/ImageLightbox";
 import { OutputPanel } from "./components/output/OutputPanel";
 import { TaskHistoryPage } from "./components/tasks/TaskHistoryPage";
-import { SettingsPage } from "./components/settings/SettingsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useUploadStore } from "./stores/useUploadStore";
 import { useTaskStore } from "./stores/useTaskStore";
 import { useLayoutStore } from "./stores/useLayoutStore";
 import { createTask, getTask, listTasks } from "./lib/api";
 import { isTerminalStatus } from "./lib/taskStatus";
+
+// 设置页只在需要时加载：它依赖 @tanstack/react-query，把这份体积移出首屏
+const SettingsPage = lazy(() =>
+  import("./components/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
 
 /**
  * 任务页面。
@@ -353,7 +357,15 @@ function MainPage() {
 function SettingsRoute() {
   return (
     <ErrorBoundary title="设置页出错">
-      <SettingsPage />
+      <Suspense
+        fallback={
+          <div className="h-[calc(100dvh-3.5rem)] flex items-center justify-center text-sm text-gray-400">
+            加载设置…
+          </div>
+        }
+      >
+        <SettingsPage />
+      </Suspense>
     </ErrorBoundary>
   );
 }

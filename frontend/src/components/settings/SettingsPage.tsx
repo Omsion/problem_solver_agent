@@ -1,18 +1,7 @@
-import { useEffect, useState } from "react";
-import { getSystemStatus, getHealth, getStats } from "../../lib/api";
+import { useHealth, useStats, useSystemStatus } from "../../lib/queries";
 import { QrCodeButton } from "../layout/QrCodeButton";
 import { Button } from "../ui/button";
-import { formatDuration } from "../../lib/utils";
-import { formatTs } from "../../lib/utils";
-import type { StageStats, SystemStatus } from "../../types";
-
-interface HealthInfo {
-  status: string;
-  version: string;
-  vision_configured: boolean;
-  solver_providers: string[];
-  keys_configured: Record<string, boolean>;
-}
+import { formatDuration, formatTs } from "../../lib/utils";
 
 /**
  * 设置页。
@@ -22,38 +11,24 @@ interface HealthInfo {
  * `/api/stats` 三个端点集中展示出来。
  */
 export const SettingsPage = () => {
-  const [status, setStatus] = useState<SystemStatus | null>(null);
-  const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [stats, setStats] = useState<Record<string, StageStats> | null>(null);
-  const [cacheHitRate, setCacheHitRate] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const statusQuery = useSystemStatus();
+  const healthQuery = useHealth();
+  const statsQuery = useStats();
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [statusData, healthData, statsData] = await Promise.all([
-        getSystemStatus(),
-        getHealth(),
-        getStats(),
-      ]);
-      setStatus(statusData);
-      setHealth(healthData);
-      setStats(statsData.stages);
-      setCacheHitRate(statsData.cache_hit_rate);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载设置失败");
-    } finally {
-      setLoading(false);
-    }
+  const status = statusQuery.data;
+  const health = healthQuery.data;
+  const stats = statsQuery.data?.stages;
+  const cacheHitRate = statsQuery.data?.cache_hit_rate ?? 0;
+  const loading = statusQuery.isLoading || healthQuery.isLoading;
+  const error = statusQuery.error ?? healthQuery.error ?? statsQuery.error;
+
+  const refreshAll = () => {
+    void statusQuery.refetch();
+    void healthQuery.refetch();
+    void statsQuery.refetch();
   };
 
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 10000);
-    return () => clearInterval(timer);
-  }, []);
+  const errorText = error instanceof Error ? error.message : error ? "加载设置失败" : null;
 
   const mb = (bytes: number | undefined) =>
     bytes === undefined ? "--" : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -63,13 +38,13 @@ export const SettingsPage = () => {
       <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900">设置与运行状态</h2>
-          <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
+          <Button variant="secondary" size="sm" onClick={refreshAll} disabled={loading}>
             刷新
           </Button>
         </div>
 
-        {error && (
-          <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600">{error}</div>
+        {errorText && (
+          <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600">{errorText}</div>
         )}
 
         {/* 自动截图监控 */}
