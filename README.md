@@ -77,11 +77,20 @@ Windows 上也可以直接双击 `start_web.bat`（会做版本与依赖检查�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
+| **手机自动同步** | Syncthing（见 `docs/USER_GUIDE.md` 第 4 节） | 手机拍完自动落到监控目录，推荐日常使用 |
 | **热键静默截图** | `python tools/silent_screencapper.py`（需管理员权限） | 默认 `Alt+X`，用 GDI 直接抓屏，无闪烁。截图落到监控目录后自动触发 |
 | **手机上传** | 网页右上角「手机扫码」 | 手机与电脑同一局域网，扫码后可直接传图/拍照 |
 | **网页手动上传** | 解题台左侧 | 拖拽、点击选择或直接粘贴截图 |
 
-另外 `python tools/remote_trigger.py` 提供手机远程触发截图的备用方案。
+配套小工具：
+
+- `python tools/human_typer.py`（管理员）：接管 `Ctrl+V`，把剪贴板内容**模拟真人逐字输入**到当前窗口（考试客户端里"假装手打"）。
+- `python tools/remote_trigger.py`：手机扫码遥控**电脑端截图**，绕开电脑上的键盘限制（端口 `REMOTE_TRIGGER_PORT`，默认 5555）。
+- `python tools/diag.py`：一键自检（路径/密钥/Web/局域网 IP）。
+
+> 答案生成后，除了网页，「手机文件管理器通过 SMB 直接打开 `solutions/` 看 Markdown」也是推荐方式——
+> 完整步骤见 **`docs/USER_GUIDE.md`** 第 1.3 节。日常刷题建议只开命令行 Agent，
+> 网页端留给事后复盘（两者不要同时开）。
 
 ---
 

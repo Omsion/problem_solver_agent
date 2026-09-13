@@ -181,6 +181,8 @@ MONITOR_RESCAN_INTERVAL = float(os.getenv("MONITOR_RESCAN_INTERVAL", "15"))
 MONITOR_CATCHUP_MAX_AGE_MINUTES = int(os.getenv("MONITOR_CATCHUP_MAX_AGE_MINUTES", "120"))
 # 启动时是否先扫一遍（补上进程停机期间到达的文件）
 MONITOR_STARTUP_SCAN = os.getenv("MONITOR_STARTUP_SCAN", "true").lower() in ("true", "1", "yes")
+# 手机遥控截图服务（tools/remote_trigger.py）监听端口；手机扫码后点按钮即可触发电脑截图
+REMOTE_TRIGGER_PORT = int(os.getenv("REMOTE_TRIGGER_PORT", "5555"))
 
 # 后台工作线程数（ImageGrouper 消费者线程池大小）
 # 说明：控制同时处理的任务数量。每个任务占一个线程，适合 I/O 密集型场景。

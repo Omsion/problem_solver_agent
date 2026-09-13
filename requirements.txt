@@ -20,3 +20,4 @@ pywin32>=306.0.0; sys_platform == "win32"  # Windows GDI 截图
 qrcode>=7.4.0,<9.0.0         # 二维码生成（Web 端 /api/qrcode、remote_trigger）
 pyperclip>=1.8.0             # 剪贴板操作（human_typer）
 pyautogui>=0.9.0             # GUI 自动化（human_typer）
+flask>=3.0.0                 # 手机遥控截图小服务（tools/remote_trigger.py）
