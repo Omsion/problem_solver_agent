@@ -66,6 +66,10 @@ Windows 上也可以直接双击 `start_web.bat`（会做版本与依赖检查�
 
 > 用 PyCharm 开发时可直接选用项目内置的运行配置（含前后端一键启动），
 > 详见 `docs/DEVELOPMENT.md` 的「在 PyCharm 中运行」。
+>
+> **⚠️ 网页模式（`start_web.bat` / `run_web.py`）和命令行 Agent（`python -m problem_solver_agent.main`）
+> 是两个平级入口，都监听同一个截图目录，请只开一个**，否则同一张照片会被处理两次。
+> 二者区别、手机 Syncthing 配置、图片顺序规则、产物位置等，见 **`docs/USER_GUIDE.md`**。
 
 ---
 
@@ -203,6 +207,8 @@ python tools/diag.py
 
 详细架构、接口契约与排障说明见：
 
+- **`docs/USER_GUIDE.md` — 完整使用说明（先看这个）**：两种运行方式的区别、Syncthing 手机同步配置、
+  图片顺序与分组规则、产物位置、常见问题、配置速查
 - `docs/ARCHITECTURE.md` — 分层、数据流、并发与取消模型
 - `docs/API.md` — REST 与 SSE 事件契约
 - `docs/DEVELOPMENT.md` — 开发环境、常用命令、常见问题排查

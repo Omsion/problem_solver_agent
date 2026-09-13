@@ -138,13 +138,12 @@ MERGE_SKIP_THRESHOLD = int(os.getenv("MERGE_SKIP_THRESHOLD", "1200"))
 
 
 # --- 6. 核心文件路径配置 ---
-# ROOT_DIR 的解析顺序：
+# ROOT_DIR（"工作根目录"）的解析顺序：
 #   1. 环境变量 SOLVER_ROOT_DIR（显式指定，推荐）
-#   2. 项目根目录下的 workspace/（自包含，不污染用户目录）
-#   3. 项目父目录（历史默认行为，保持兼容）
-# 说明：历史默认值会把 Screenshots/processed/solutions 建在项目**父目录**，
-# 也就是用户的 Pictures 目录里。为兼容既有数据，默认行为不变，但会在启动时
-# 明确打印实际路径，便于发现"产物跑到别处去了"。
+#   2. 项目父目录（默认；例如项目在 D:\work\OnlineTest，根目录就是 D:\work）
+# 工作根目录下会放 Screenshots/（监控目录）、processed/（原图归档）、solutions/（解答）。
+# 启动时（CLI 与 Web 都会）打印这四个实际路径，便于发现"产物跑到别处去了"。
+# 注意：`workspace/` 只是历史设想，当前实现**不会**自动用它。
 _PROJECT_DIR = Path(__file__).resolve().parent.parent
 _EXPLICIT_ROOT = os.getenv("SOLVER_ROOT_DIR")
 
