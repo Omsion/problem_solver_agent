@@ -64,7 +64,11 @@ def check_paths() -> None:
         f"图片预处理  : 最长边 {config.IMAGE_MAX_EDGE} / JPEG q{config.IMAGE_JPEG_QUALITY} "
         f"/ 缓存={'开' if config.IMAGE_CACHE_ENABLED else '关'}",
     )
-    _line(OK, f"合并视觉调用: {config.USE_COMBINED_VISION_CALL}")
+    _line(
+        OK,
+        f"合并视觉调用: {config.USE_COMBINED_VISION_CALL}"
+        f"（auto 时仅 <= {config.COMBINED_VISION_MAX_IMAGES} 张图才尝试）",
+    )
     _line(OK, f"并发上限    : {config.MAX_CONCURRENT_TASKS}")
     _line(
         OK,

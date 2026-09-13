@@ -32,15 +32,15 @@
 |---|---|
 | `config.py` | 全部配置常量。路径解析、图片预处理参数、保留策略、并发上限。支持 `.env` 覆盖 |
 | `image_prep.py` | **发送前的图片预处理**：EXIF 校正 → 缩放 → JPEG 压缩 → 磁盘/内存缓存 |
-| `vision_client.py` | 视觉调用：分类、逐页 OCR、合并调用、视觉推理。重试与超时策略 |
-| `solver_client.py` | 求解器调用：流式（含 reasoning 事件）、非流式分析、健康检查 |
-| `core_pipeline.py` | **流水线编排**：阶段编排、事件发射、耗时统计、取消检查、答案卡抽取 |
+| `vision_client.py` | 视觉调用：分类、逐页 OCR、合并调用（`auto` 模式仅单图尝试）、视觉推理。重试、超时与截断诊断 |
+| `solver_client.py` | 求解器调用：流式（含 reasoning 事件与求解画像）、思考配额/effort 配置、非流式分析、健康检查 |
+| `core_pipeline.py` | **流水线编排**：阶段编排、事件发射、耗时统计、取消检查、答案卡抽取、思考档按需升级 |
 | `cancel.py` | 取消令牌与 `CancelledError` |
 | `answer_card.py` | 从解答文本中抽取「最终答案」小节 |
 | `pipeline.py` | 共享纯函数：题型重分类、类型映射、求解器路由、Prompt 构建、配置校验 |
 | `prompts.py` | 全部 Prompt 模板（模块级常量，**均为 raw 字符串**） |
 | `image_grouper.py` | 时间窗口分组 + 工作线程池；把处理委托给 `core_pipeline` |
-| `file_monitor.py` | watchdog 监控 + 文件稳定性等待；回调式，不反向依赖分组器 |
+| `file_monitor.py` | watchdog 监控（`on_created` + `on_moved`）、文件稳定性等待、去重账本、补偿扫描；回调式，不反向依赖分组器 |
 | `netcheck.py` | 本机地址判定与「是否远程手机」识别 |
 | `utils.py` | 日志单例、文件名清理、题号提取 |
 | `main.py` | CLI 入口：配置校验 → 健康检查 → 启动监控 |

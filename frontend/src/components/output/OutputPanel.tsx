@@ -321,6 +321,7 @@ export const OutputPanel = ({ taskId }: Props) => {
               items={[
                 { label: "用最优解风格重解", onSelect: () => void handleResolve("OPTIMAL") },
                 { label: "用讲解风格重解", onSelect: () => void handleResolve("EXPLORATORY") },
+                { label: "开启思考模式重解", onSelect: () => void handleResolve(undefined, true) },
                 { label: "关闭思考模式重解", onSelect: () => void handleResolve(undefined, false) },
               ]}
             />

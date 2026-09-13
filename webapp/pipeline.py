@@ -67,7 +67,7 @@ class PipelineService:
         task_id: str,
         image_paths: list[Path],
         on_progress: Callable[[dict], None],
-        enable_thinking: bool = True,
+        enable_thinking: bool | None = None,
         cancel: CancelToken | None = None,
         style: str | None = None,
     ) -> dict:
@@ -76,6 +76,8 @@ class PipelineService:
         Args:
             cancel: 取消令牌；由 TaskRegistry 在收到取消请求时置位。
             style: 编程题求解风格（OPTIMAL / EXPLORATORY），None 用全局配置。
+            enable_thinking: None = 用配置默认值（默认不首选思考，答案不合格时
+                由 core_pipeline 自动升级到思考档）。
         """
         self.task_manager.update_task(task_id, status="processing", error_message="")
 
@@ -144,13 +146,14 @@ class PipelineService:
         *,
         problem_type: str,
         transcribed_text: str,
-        enable_thinking: bool = True,
+        enable_thinking: bool | None = None,
         style: str | None = None,
         cancel: CancelToken | None = None,
     ) -> dict:
         """换路重解：复用已识别的题目文本，只重跑求解。
 
         典型用法：第一版答案不满意 → 换风格 / 开关思考模式 → 几秒内拿第二版。
+        `enable_thinking=None` 表示用配置默认值；显式的 True/False 优先。
         """
         self.task_manager.update_task(task_id, status="processing", error_message="")
 

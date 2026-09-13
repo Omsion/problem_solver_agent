@@ -610,12 +610,14 @@ async def cancel_task(task_id: str, user: User = Depends(get_current_user)):
 @router.post("/api/tasks/{task_id}/retry")
 async def retry_task(
     task_id: str,
-    thinking: bool = True,
+    thinking: bool | None = None,
     user: User = Depends(get_current_user),
 ):
     """重试失败或已取消的任务。
 
     会复用阶段缓存（分类/转录结果），因此重试不会重复消耗视觉模型额度。
+
+    `thinking` 留空（None）= 用配置默认值（默认不首选思考，答案不合格时自动升级）。
     """
     task = _get_visible_task(task_id, user)
     if not task:
@@ -646,7 +648,7 @@ async def retry_task(
 @router.post("/api/tasks/{task_id}/resolve")
 async def resolve_task(
     task_id: str,
-    thinking: bool = True,
+    thinking: bool | None = None,
     style: str | None = None,
     user: User = Depends(get_current_user),
 ):
@@ -655,6 +657,9 @@ async def resolve_task(
     适用场景：第一版答案不满意，想换求解风格（OPTIMAL / EXPLORATORY）、
     开关思考模式，或换个模型再要一版。**跳过分类与 OCR**，
     因此只有一次求解调用，比重新走完整流水线快得多。
+
+    `thinking` 留空（None）= 用配置默认值；显式 true/false 优先（网页上的
+    "开启/关闭思考模式重解"就是这么传的）。
     """
     task = _get_visible_task(task_id, user)
     if not task:

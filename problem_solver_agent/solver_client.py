@@ -87,35 +87,51 @@ def _build_payload(
     model: str,
     messages: list[dict[str, Any]],
     enable_thinking: bool,
+    *,
+    max_tokens: int | None = None,
 ) -> "StandardChatPayload | DeepSeekChatPayload":
     """按 provider 组装一次请求体（思考模式目前只有 DeepSeek 支持）。
 
     注意：关闭思考必须**显式**下发 `thinking.type=disabled`。实测只把 `extra_body`
     整个省略时（旧行为）模型照样思考——思考过程把 max_tokens 吃光、正文一个字都
     没有，所以"关闭思考模式重解"其实一直没生效。
+
+    Args:
+        max_tokens: 本次调用的输出上限；缺省用 `config.SOLVER_MAX_TOKENS`
+            （升级档由流水线显式传入 `config.SOLVER_ESCALATE_MAX_TOKENS`）。
     """
+    budget = max_tokens if max_tokens is not None else config.SOLVER_MAX_TOKENS
     if provider == 'deepseek':
         if enable_thinking:
-            # DeepSeek 思考模式：medium 深度避免思考 token 耗尽 max_tokens 配额
-            return {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": "medium", "max_tokens": config.SOLVER_MAX_TOKENS}
-        return {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "disabled"}}, "max_tokens": config.SOLVER_MAX_TOKENS, "temperature": 0.7}
+            # 思考深度可配置：low 更省 token，high 想得更久（更容易吃满配额）
+            return {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "enabled"}}, "reasoning_effort": config.SOLVER_REASONING_EFFORT, "max_tokens": budget}
+        return {"model": model, "messages": messages, "stream": True, "extra_body": {"thinking": {"type": "disabled"}}, "max_tokens": budget, "temperature": 0.7}
     return {"model": model, "messages": messages, "stream": True,
-            "max_tokens": 8000, "temperature": 0.7}
+            "max_tokens": budget, "temperature": 0.7}
 
 
-def _pump(completion) -> Generator[dict[str, str], None, dict[str, Any]]:
+def _pump(
+    completion,
+    *,
+    reasoning_char_limit: int = 0,
+) -> Generator[dict[str, str], None, dict[str, Any]]:
     """把 chunk 流翻译成事件流，并把统计信息 return 给调用方。
+
+    Args:
+        reasoning_char_limit: 思考过程超过该字符数且正文仍为 0 时提前中断本次流
+            （0 = 不限制）。用于避免"大配额下思考空转好几分钟"。
 
     Yields:
         {"type": "reasoning"/"content", "content": "..."}
 
     Returns:
-        {"content_chars": int, "reasoning_chars": int, "finish_reason": str | None}
-        —— 这是判断"为什么没有正文"的唯一依据，必须回传给调用方。
+        {"content_chars": int, "reasoning_chars": int, "finish_reason": str | None,
+         "aborted": bool} —— 这是判断"为什么没有正文"的唯一依据，必须回传给调用方。
     """
     content_chars = 0
     reasoning_chars = 0
     finish_reason: str | None = None
+    aborted = False
 
     for chunk in completion:
         choices = getattr(chunk, "choices", None)
@@ -132,6 +148,13 @@ def _pump(completion) -> Generator[dict[str, str], None, dict[str, Any]]:
         if reasoning:
             reasoning_chars += len(reasoning)
             yield {"type": "reasoning", "content": reasoning}
+            if (
+                reasoning_char_limit
+                and content_chars == 0
+                and reasoning_chars > reasoning_char_limit
+            ):
+                aborted = True
+                break
         content = getattr(delta, "content", None)
         if content:
             content_chars += len(content)
@@ -141,6 +164,34 @@ def _pump(completion) -> Generator[dict[str, str], None, dict[str, Any]]:
         "content_chars": content_chars,
         "reasoning_chars": reasoning_chars,
         "finish_reason": finish_reason,
+        "aborted": aborted,
+    }
+
+
+def _close_stream(completion) -> None:
+    """尽力关闭底层流（提前中断后不再继续计费）。失败不影响主流程。"""
+    close = getattr(completion, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # pragma: no cover - 关闭失败无所谓
+            pass
+
+
+def _meta_event(stats: dict[str, Any], *, model: str, thinking: bool) -> dict[str, Any]:
+    """给流水线用的"本次求解画像"事件（不写入解答文件）。
+
+    流水线据此判断答案是否合格（是否被截断、是否过短），决定要不要升级到思考档。
+    """
+    return {
+        "type": "meta",
+        "model": model,
+        "thinking": thinking,
+        "finish_reason": stats.get("finish_reason"),
+        "reasoning_chars": int(stats.get("reasoning_chars", 0)),
+        "content_chars": int(stats.get("content_chars", 0)),
+        "truncated": stats.get("finish_reason") == "length",
+        "aborted": bool(stats.get("aborted")),
     }
 
 
@@ -149,20 +200,38 @@ def _error_events(message: str) -> Generator[dict[str, str], None, None]:
     yield {"type": "error", "content": message}
 
 
-def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: bool = True) -> Generator[dict[str, str], None, None]:
+def stream_solve(
+    final_prompt: str,
+    provider: str,
+    model: str,
+    enable_thinking: bool = True,
+    *,
+    max_tokens: int | None = None,
+    reasoning_char_limit: int | None = None,
+) -> Generator[dict[str, Any], None, None]:
     """
     流式调用指定的LLM进行问题求解，内置自动重试逻辑。
 
     Yields dict events with structure:
         {"type": "reasoning", "content": "..."}  — DeepSeek 思考过程
         {"type": "content", "content": "..."}    — 最终解答文本
+        {"type": "meta", ...}                    — 本次求解画像（finish_reason 等），
+                                                   流水线据此判断答案是否合格
         {"type": "error", "content": "..."}      — 失败原因（含可诊断信息）
 
     Args:
         enable_thinking: 是否启用思考模式（仅 DeepSeek）。开启后 reasoning_content 将被捕获为
             reasoning 事件；若思考过程占满 max_tokens 导致正文为空，会自动关闭思考模式重试一次。
+        max_tokens: 本次调用的输出上限，缺省用 `config.SOLVER_MAX_TOKENS`
+        reasoning_char_limit: 思考提前放弃阈值，缺省用 `config.SOLVER_REASONING_CHAR_LIMIT`
     """
     logger.info(f"Step 2.2: 使用动态选择的模型 '{model}' (提供商: {provider}) 进行流式求解...")
+    budget = max_tokens if max_tokens is not None else config.SOLVER_MAX_TOKENS
+    char_limit = (
+        reasoning_char_limit
+        if reasoning_char_limit is not None
+        else config.SOLVER_REASONING_CHAR_LIMIT
+    )
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": final_prompt}]
     client: OpenAI | None = None
@@ -173,7 +242,7 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
         try:
             client = get_client(provider)
             completion = client.chat.completions.create(  # type: ignore[arg-type]
-                **_build_payload(provider, model, messages, enable_thinking)
+                **_build_payload(provider, model, messages, enable_thinking, max_tokens=budget)
             )
             break
 
@@ -194,35 +263,65 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
     if completion is None or client is None:
         return _error_events(f"求解器调用失败（模型 {model}）：{failure or '未获得响应'}")
 
+    def _log_profile(stats: dict[str, Any], *, thinking: bool) -> None:
+        """每个求解档位打一条画像日志，便于事后对比/调参。"""
+        logger.info(
+            "求解画像: 模型=%s 思考=%s effort=%s max_tokens=%d 思考=%d 字符 正文=%d 字符 finish=%s%s",
+            model,
+            "开" if thinking else "关",
+            config.SOLVER_REASONING_EFFORT if thinking else "-",
+            budget,
+            int(stats.get("reasoning_chars", 0)),
+            int(stats.get("content_chars", 0)),
+            stats.get("finish_reason"),
+            "（思考过长提前放弃）" if stats.get("aborted") else "",
+        )
+
     # 返回生成器：同时捕获 reasoning_content（思考过程）和 content（最终解答）
-    def stream_generator() -> Generator[dict[str, str], None, None]:
+    def stream_generator() -> Generator[dict[str, Any], None, None]:
         try:
-            stats: dict[str, Any] = yield from _pump(completion)
+            stats: dict[str, Any] = yield from _pump(completion, reasoning_char_limit=char_limit)
         except Exception as e:
             logger.error(f"读取模型 '{model}' 的流式响应时出错: {e}", exc_info=True)
             yield {"type": "error", "content": f"求解器流式响应中断（模型 {model}）：{type(e).__name__}: {e}"}
             return
 
+        _log_profile(stats, thinking=enable_thinking)
+
         if stats["content_chars"]:
+            yield _meta_event(stats, model=model, thinking=enable_thinking)
             return
 
         detail = (
             f"模型={model}, finish_reason={stats['finish_reason']}, "
             f"思考过程={stats['reasoning_chars']} 字符, 正文=0 字符"
         )
+        yield _meta_event(stats, model=model, thinking=enable_thinking)
+
         if not enable_thinking:
             yield {"type": "error", "content": f"求解器没有返回正文（{detail}）"}
             return
 
-        # 思考模式最常见的失败模式：思考过程吃满 max_tokens，配额没留给正文
-        # （DeepSeek 在思考未结束时直接以 finish_reason=length 收尾，正文一个字都没有）。
-        # 这里自动关掉思考模式再要一次正文，避免整个任务白跑几分钟。
-        logger.warning("模型 '%s' 只产出思考过程没有正文（%s），改用关闭思考模式重试一次。", model, detail)
-        yield {"type": "reasoning", "content": "\n\n[思考过程占满了输出配额，已自动关闭思考模式重新生成解答…]\n\n"}
+        if stats.get("aborted"):
+            # 提前放弃：思考已远超阈值仍无正文，继续等下去只是白烧配额
+            _close_stream(completion)
+            logger.warning(
+                "模型 '%s' 思考已达 %d 字符仍无正文，提前放弃思考模式（%s）。",
+                model,
+                int(stats["reasoning_chars"]),
+                detail,
+            )
+            notice = "\n\n[思考过程过长且迟迟不产出正文，已提前改用关闭思考模式重新生成解答…]\n\n"
+        else:
+            # 思考模式最常见的失败模式：思考过程吃满 max_tokens，配额没留给正文
+            # （DeepSeek 在思考未结束时直接以 finish_reason=length 收尾，正文一个字都没有）。
+            logger.warning("模型 '%s' 只产出思考过程没有正文（%s），改用关闭思考模式重试一次。", model, detail)
+            notice = "\n\n[思考过程占满了输出配额，已自动关闭思考模式重新生成解答…]\n\n"
+        yield {"type": "reasoning", "content": notice}
 
         try:
             retry_completion = client.chat.completions.create(  # type: ignore[arg-type]
-                **_build_payload(provider, model, messages, False)
+                **_build_payload(provider, model, messages, False, max_tokens=budget)
             )
             retry_stats: dict[str, Any] = yield from _pump(retry_completion)
         except Exception as e:
@@ -231,6 +330,9 @@ def stream_solve(final_prompt: str, provider: str, model: str, enable_thinking: 
                 f"求解器没有返回正文（{detail}），关闭思考模式重试亦失败：{type(e).__name__}: {e}"
             )}
             return
+
+        _log_profile(retry_stats, thinking=False)
+        yield _meta_event(retry_stats, model=model, thinking=False)
 
         if not retry_stats["content_chars"]:
             yield {"type": "error", "content": (

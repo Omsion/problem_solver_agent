@@ -53,10 +53,11 @@ def _startup_report() -> None:
     logger.info("  解答输出目录  : %s", core_config.SOLUTION_DIR)
     logger.info("  图片缓存目录  : %s (上限 %d MB)", core_config.IMAGE_CACHE_DIR, core_config.IMAGE_CACHE_MAX_MB)
     logger.info(
-        "  图片预处理    : 最长边 %d / JPEG q%d / 合并视觉调用=%s",
+        "  图片预处理    : 最长边 %d / JPEG q%d / 合并视觉调用=%s（上限 %d 张）",
         core_config.IMAGE_MAX_EDGE,
         core_config.IMAGE_JPEG_QUALITY,
         core_config.USE_COMBINED_VISION_CALL,
+        core_config.COMBINED_VISION_MAX_IMAGES,
     )
     logger.info("  并发上限      : %d 个任务", core_config.MAX_CONCURRENT_TASKS)
     if web_config.AUTH_ENABLED:

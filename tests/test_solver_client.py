@@ -140,8 +140,13 @@ def test_non_thinking_empty_response_is_reported_without_second_call(make_client
 
     events = list(solver_client.stream_solve("题干", "deepseek", "deepseek-flash", enable_thinking=False))
 
-    assert [e["type"] for e in events] == ["error"]
-    assert "finish_reason=length" in events[0]["content"]
+    # 先给流水线一份"本次求解画像"，再报错——画像里的 truncated 是升级思考档的依据
+    assert [e["type"] for e in events] == ["meta", "error"]
+    meta = events[0]
+    assert meta["finish_reason"] == "length"
+    assert meta["truncated"] is True
+    assert meta["thinking"] is False
+    assert "finish_reason=length" in events[1]["content"]
     assert len(client.payloads) == 1
 
 
@@ -207,3 +212,76 @@ def test_stream_iteration_error_becomes_error_event(make_client):
     assert len(errors) == 1
     assert "connection reset by peer" in errors[0]
     assert len(client.payloads) == 1
+
+
+# ---------------------------------------------------------------------------
+# 求解画像（meta）与"按需升级"所需的接口
+# ---------------------------------------------------------------------------
+
+
+def test_success_emits_solver_profile(make_client):
+    """成功时也要给出画像：流水线靠它判断答案是否被截断。"""
+    make_client(stream(chunk(content="## 最终答案\n选 B。", finish_reason="stop")))
+
+    events = list(
+        solver_client.stream_solve("题干", "deepseek", "deepseek-flash", enable_thinking=False)
+    )
+
+    metas = [e for e in events if e["type"] == "meta"]
+    assert len(metas) == 1
+    assert metas[0]["finish_reason"] == "stop"
+    assert metas[0]["truncated"] is False
+    assert metas[0]["content_chars"] > 0
+    assert metas[0]["thinking"] is False
+
+
+def test_explicit_max_tokens_is_used(make_client):
+    """升级档要能把预算调大（实测该 API 接受 32768）。"""
+    client = make_client(stream(chunk(content="解答", finish_reason="stop")))
+
+    list(solver_client.stream_solve("题干", "deepseek", "deepseek-flash", max_tokens=32000))
+
+    assert client.payloads[0]["max_tokens"] == 32000
+    assert client.payloads[0]["max_tokens"] != config.SOLVER_MAX_TOKENS
+
+
+def test_reasoning_effort_comes_from_config(make_client, monkeypatch):
+    monkeypatch.setattr(config, "SOLVER_REASONING_EFFORT", "low")
+    client = make_client(stream(chunk(content="解答", finish_reason="stop")))
+
+    list(solver_client.stream_solve("题干", "deepseek", "deepseek-flash", enable_thinking=True))
+
+    assert client.payloads[0]["reasoning_effort"] == "low"
+
+
+def test_reasoning_limit_aborts_before_burning_the_budget(make_client):
+    """思考远超阈值且始终没有正文时提前掐断，直接转入"关闭思考模式重试"。"""
+    consumed: list[int] = []
+
+    def endless_reasoning():
+        for index in range(50):
+            consumed.append(index)
+            yield chunk(reasoning="思" * 100, finish_reason=None)
+
+    client = make_client(
+        endless_reasoning(),
+        stream(chunk(content="兜底正文", finish_reason="stop")),
+    )
+
+    events = list(
+        solver_client.stream_solve(
+            "题干",
+            "deepseek",
+            "deepseek-flash",
+            enable_thinking=True,
+            reasoning_char_limit=250,
+        )
+    )
+
+    assert len(consumed) <= 5, "提前掐断没生效，配额会被思考烧完"
+    assert _text_of(events, "content") == "兜底正文"
+    metas = [e for e in events if e["type"] == "meta"]
+    assert metas[0]["aborted"] is True
+    assert metas[0]["content_chars"] == 0
+    # 第二次请求必须真正关掉思考
+    assert client.payloads[1]["extra_body"]["thinking"]["type"] == "disabled"

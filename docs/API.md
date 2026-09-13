@@ -276,6 +276,19 @@ SSE 流式端点。**首次连接会启动流水线**（幂等：已在运行则
 （前端会先收到一条说明用的 `reasoning` 事件），两次都拿不到正文才报错，且错误信息会带上
 模型名、`finish_reason` 与思考/正文字符数。
 
+引擎侧还有一层**按需升级**（`core_pipeline._solve_with_escalation`）：
+
+1. 先按首选档跑一次。首选档默认**不开思考**，由 `SOLVER_THINKING_DEFAULT` 决定；
+   `thinking=1` 显式指定时直接走思考档，跳过升级逻辑。
+2. 只在答案**不合格**时才升级到「开思考 + `SOLVER_ESCALATE_MAX_TOKENS`（默认 32000）」
+   重跑：正文为空、`finish_reason=length`（被截断）、或编程题（ACM/LeetCode/ML_CODING）
+   答案短于 `SOLVER_ESCALATE_MIN_CHARS`（默认 500）。选择题这类答案天然很短的题型不会触发。
+3. 升级档同样没写出正文时**沿用第一版**，不做第三次调用。
+4. 每次求解都会打一条「求解画像」日志（模型 / 是否思考 / effort / 配额 / 思考字符 /
+   正文字符 / finish_reason），用于事后判断该不该继续开思考。
+
+「不合格」只针对**答案是否完整**，不判断对错——判对错请用「核对答案」。
+
 终态任务不会重新启动流水线，而是立即返回单个对应事件。
 
 ### `GET /api/events/stream`

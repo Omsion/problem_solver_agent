@@ -141,8 +141,17 @@ def _call_vision_api(image_paths: list[Path], user_prompt: str, model_name: str,
 
                 return stream_generator()
             else:
-                return (completion.choices[0].message.content.strip()
-                        if completion.choices[0].message.content else None)
+                choice = completion.choices[0] if completion.choices else None
+                # 截断是"合并调用解析失败"最常见的真因，但旧实现把它吞掉了：
+                # 输出被 max_tokens 截断时 JSON 必然不完整，必须留下痕迹。
+                if getattr(choice, "finish_reason", None) == "length":
+                    logger.warning(
+                        "视觉调用输出被 max_tokens 截断（模型 %s）：内容可能不完整，"
+                        "长转录/合并调用会因此解析失败",
+                        model_name,
+                    )
+                content = choice.message.content if choice and choice.message else None
+                return content.strip() if content else None
 
         except Exception as e:
             retryable = _is_retryable(e)
@@ -279,6 +288,25 @@ def parse_json_response(raw: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def combined_call_enabled(image_count: int) -> bool:
+    """当前配置下，是否值得尝试"合并调用（分类 + 转录）"。
+
+    - `false`：从不尝试，直接走两步流程；
+    - `true` ：总是尝试（历史行为）；
+    - `auto` ：只在图片数不超过 `COMBINED_VISION_MAX_IMAGES` 时尝试。
+
+    为什么默认是 `auto`：合并调用要求一次 JSON 装下**所有**图片的完整转录，
+    输出上限又只有 8192 token；多图时必然被截断、解析失败，于是白等约 50 秒
+    且这次调用照样计费（实测 12 次尝试只成功 1 次）。单图输出短，收益仍在。
+    """
+    mode = str(config.USE_COMBINED_VISION_CALL).strip().lower()
+    if mode in ("false", "0", "no", "off"):
+        return False
+    if mode in ("true", "1", "yes", "on"):
+        return True
+    return image_count <= config.COMBINED_VISION_MAX_IMAGES
+
+
 def classify_and_transcribe(image_paths: list[Path]) -> dict | None:
     """一次视觉调用同时得到题型与逐页文本。
 
@@ -289,7 +317,13 @@ def classify_and_transcribe(image_paths: list[Path]) -> dict | None:
         {"problem_type": str, "pages": list[str]}；解析失败返回 None，
         调用方应回退到 classify_problem_type + transcribe_images 两步路径。
     """
-    if not config.USE_COMBINED_VISION_CALL:
+    if not combined_call_enabled(len(image_paths)):
+        logger.info(
+            "跳过合并调用，直接走「分类 + 逐页转录」两步（模式=%s，图片数=%d，上限=%d）",
+            config.USE_COMBINED_VISION_CALL,
+            len(image_paths),
+            config.COMBINED_VISION_MAX_IMAGES,
+        )
         return None
 
     logger.info("步骤 1+2: 合并调用（分类 + 转录）...")

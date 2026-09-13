@@ -59,7 +59,9 @@ DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解器与辅助模型统一使用 deeps
 ZHIPU_API_KEY=xxxxxxxx              # 视觉模型 GLM-4.6V（分类 / OCR / 视觉推理）
 ```
 
-其余可选变量（`GROUP_TIMEOUT`、`MAX_CONCURRENT_TASKS`、`IMAGE_MAX_EDGE` 等）见 `.env.example` 注释。
+其余可选变量（`GROUP_TIMEOUT`、`MAX_CONCURRENT_TASKS`、`IMAGE_MAX_EDGE`、
+`MONITOR_RESCAN_INTERVAL`（漏检补偿扫描）、`SOLVER_THINKING_DEFAULT`（思考模式首选与升级）、
+`USE_COMBINED_VISION_CALL`（合并调用模式）等）见 `.env.example` 注释。
 
 关于 `SOLVER_ROOT_DIR`：
 

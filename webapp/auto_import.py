@@ -85,7 +85,12 @@ class WebAutoImporter:
         # 确保监控目录存在
         core_config.MONITOR_DIR.mkdir(parents=True, exist_ok=True)
 
-        self._observer = start_monitoring(core_config.MONITOR_DIR, self.image_grouper.add_image)
+        # on_group：补偿扫描（漏事件 / 停机期间到达的文件）整组补投
+        self._observer = start_monitoring(
+            core_config.MONITOR_DIR,
+            self.image_grouper.add_image,
+            on_group=self.image_grouper.submit_group,
+        )
         self._running = True
         self._started_at = time.time()
         logger.info("Web 自动截图导入已启动，监控目录: %s", core_config.MONITOR_DIR)
@@ -149,11 +154,12 @@ class WebAutoImporter:
             def on_progress(event: dict):
                 event_bus.publish(task_id, event)
 
+            # 不显式传 enable_thinking：走配置默认（默认不开思考，答案不合格时
+            # 由流水线自动升级到"开思考 + 大配额"），避免每次都为思考白等几十秒
             self.pipeline_service.run(
                 task_id,
                 web_image_paths,
                 on_progress,
-                enable_thinking=True
             )
 
         except Exception as e:

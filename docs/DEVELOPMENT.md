@@ -145,13 +145,15 @@ pytest tests/test_core_pipeline.py -v
 | `test_netcheck.py` | 本机地址判定、移动端 UA 识别（远程连接误报回归） |
 | `test_remote_stream.py` | 全局 SSE 端点、`RemotePresence` 计数与断开通知 |
 | `test_image_prep.py` | 缩放边界、RGBA 白底、EXIF 方向、缓存命中、损坏缓存重建 |
-| `test_core_pipeline.py` | 合并调用与回退、跳过润色、OCR 兜底、取消保留部分内容、阶段缓存 |
+| `test_core_pipeline.py` | 合并调用与回退、思考档按需升级（空答案/短答案/显式思考）、跳过润色、OCR 兜底、取消保留部分内容、阶段缓存 |
+| `test_solver_client.py` | 思考吃满配额后的降级、思考提前放弃、求解画像、配额与 effort 配置、网络重试与错误可诊断性 |
+| `test_vision_client.py` | 合并调用闸门（auto/true/false 与图片数上限）、输出截断告警 |
 | `test_answer_card.py` | 从解答中抽取「最终答案」小节的各种写法 |
 | `test_verify.py` | 核对结果解析、verdict 归一化、一致性保护、异常兜底 |
 | `test_timings.py` | 阶段耗时聚合、DB 迁移、阶段缓存读写 |
 | `test_retention.py` | 上传目录清理、孤立目录、图片缓存 LRU |
 | `test_routes_upload.py` | 目录穿越防护、非法图片、体积限制、取消/重试门禁 |
-| `test_file_monitor.py` | 文件稳定性等待、回调异常隔离 |
+| `test_file_monitor.py` | 文件稳定性等待、回调异常隔离、改名就位投递、临时文件过滤、去重账本、补偿扫描与句柄停止 |
 | `test_resolve_verify_sse.py` | SSE 序号与 `Last-Event-ID` 续传、`/resolve` 与 `/verify` 门禁 |
 
 ### 前端（vitest + Testing Library）

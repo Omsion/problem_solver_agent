@@ -153,10 +153,14 @@ class SolutionPipeline:
         image_paths: list[Path],
         *,
         cancel: CancelToken | None = None,
-        enable_thinking: bool = True,
+        enable_thinking: bool | None = None,
         style: str | None = None,
     ) -> dict:
         """执行完整流水线。
+
+        Args:
+            enable_thinking: 是否首选思考模式；None = 用 `config.SOLVER_THINKING_DEFAULT`
+                （默认不首选，答案不合格时由 `_solve_with_escalation` 自动升级到思考档）。
 
         Returns:
             {"status": "completed"|"cancelled", "path": Path|None,
@@ -166,6 +170,8 @@ class SolutionPipeline:
             上游异常原样抛出；取消时抛 CancelledError（调用方负责保留部分文件）。
         """
         cancel = cancel or CancelToken()
+        if enable_thinking is None:
+            enable_thinking = config.SOLVER_THINKING_DEFAULT
         image_paths = [Path(p) for p in image_paths]
         timings = StageTimings()
         started = time.time()
@@ -250,35 +256,19 @@ class SolutionPipeline:
             cancel.raise_if_cancelled()
             self._status("solving", "正在调用求解器生成解答…")
             solve_started = time.time()
-            final_type, provider, model, stream = self._start_solve(
-                problem_type, transcribed_text, image_paths, enable_thinking, style, ocr_fallback
+            answer_text, provider, model, final_type = self._solve_with_escalation(
+                temp_path=temp_path,
+                problem_type=problem_type,
+                transcribed_text=transcribed_text,
+                image_paths=image_paths,
+                enable_thinking=enable_thinking,
+                style=style,
+                ocr_fallback=ocr_fallback,
+                timings=timings,
+                cancel=cancel,
             )
 
-            chunks: list[str] = []
-            with open(temp_path, "w", encoding="utf-8") as handle:
-                self._write_header(
-                    handle, image_paths, final_type, transcribed_text,
-                    provider, model, timings, ocr_fallback,
-                )
-                for event in stream:
-                    # 取消在每个分片之间生效：用户点取消后最多再等一个分片
-                    if cancel.cancelled:
-                        handle.flush()
-                        raise CancelledError("任务已取消")
-                    event_type = event.get("type") if isinstance(event, dict) else "content"
-                    if event_type == "reasoning":
-                        self._emit({"type": EVENT_REASONING, "content": event["content"]})
-                    elif event_type == "error":
-                        raise RuntimeError(event.get("content", "求解器返回错误"))
-                    else:
-                        content = event.get("content", "") if isinstance(event, dict) else str(event)
-                        chunks.append(content)
-                        handle.write(content)
-                        handle.flush()
-                        self._emit({"type": EVENT_CHUNK, "content": content})
-
             timings.solve = int((time.time() - solve_started) * 1000)
-            answer_text = "".join(chunks)
             if not answer_text.strip() or "--- ERROR ---" in answer_text:
                 raise RuntimeError(f"求解器返回空响应或包含内部错误（模型 {model}）")
 
@@ -361,7 +351,7 @@ class SolutionPipeline:
         problem_type: str,
         transcribed_text: str,
         *,
-        enable_thinking: bool = True,
+        enable_thinking: bool | None = None,
         style: str | None = None,
         cancel: CancelToken | None = None,
         image_paths: list[Path] | None = None,
@@ -379,6 +369,8 @@ class SolutionPipeline:
             与 `run()` 相同结构的结果字典。
         """
         cancel = cancel or CancelToken()
+        if enable_thinking is None:
+            enable_thinking = config.SOLVER_THINKING_DEFAULT
         if not transcribed_text or not transcribed_text.strip():
             raise ValueError("缺少题目文本，无法重新求解（请先完成一次完整处理）")
 
@@ -391,40 +383,20 @@ class SolutionPipeline:
             self._status("solving", "正在用新的求解策略生成解答…")
             cancel.raise_if_cancelled()
 
-            final_type, provider, model, stream = self._start_solve(
-                problem_type,
-                transcribed_text,
-                list(image_paths or []),
-                enable_thinking,
-                style,
+            solve_started = time.time()
+            answer_text, provider, model, final_type = self._solve_with_escalation(
+                temp_path=temp_path,
+                problem_type=problem_type,
+                transcribed_text=transcribed_text,
+                image_paths=list(image_paths or []),
+                enable_thinking=enable_thinking,
+                style=style,
                 ocr_fallback=False,
+                timings=timings,
+                cancel=cancel,
             )
 
-            solve_started = time.time()
-            chunks: list[str] = []
-            with open(temp_path, "w", encoding="utf-8") as handle:
-                self._write_header(
-                    handle, list(image_paths or []), final_type, transcribed_text,
-                    provider, model, timings, False,
-                )
-                for event in stream:
-                    if cancel.cancelled:
-                        handle.flush()
-                        raise CancelledError("任务已取消")
-                    event_type = event.get("type") if isinstance(event, dict) else "content"
-                    if event_type == "reasoning":
-                        self._emit({"type": EVENT_REASONING, "content": event["content"]})
-                    elif event_type == "error":
-                        raise RuntimeError(event.get("content", "求解器返回错误"))
-                    else:
-                        content = event.get("content", "") if isinstance(event, dict) else str(event)
-                        chunks.append(content)
-                        handle.write(content)
-                        handle.flush()
-                        self._emit({"type": EVENT_CHUNK, "content": content})
-
             timings.solve = int((time.time() - solve_started) * 1000)
-            answer_text = "".join(chunks)
             if not answer_text.strip() or "--- ERROR ---" in answer_text:
                 raise RuntimeError(f"求解器返回空响应或包含内部错误（模型 {model}）")
 
@@ -541,6 +513,184 @@ class SolutionPipeline:
             return joined, elapsed
         return polished, elapsed
 
+    def _run_solve_attempt(
+        self,
+        *,
+        path: Path,
+        stream,
+        provider: str,
+        model: str,
+        final_type: str,
+        transcribed_text: str,
+        image_paths: list[Path],
+        timings: StageTimings,
+        ocr_fallback: bool,
+        cancel: CancelToken,
+    ) -> tuple[str, dict, str | None]:
+        """消费一次求解事件流并写入文件。
+
+        Returns:
+            (正文, 画像 meta, 错误信息)。`meta` 为空表示这是**调用层面**的失败
+            （网络/鉴权等），而不是"模型没写出正文"——两者处理方式不同。
+        """
+        chunks: list[str] = []
+        meta: dict = {}
+        error: str | None = None
+        with open(path, "w", encoding="utf-8") as handle:
+            self._write_header(
+                handle, image_paths, final_type, transcribed_text,
+                provider, model, timings, ocr_fallback,
+            )
+            for event in stream:
+                # 取消在每个分片之间生效：用户点取消后最多再等一个分片
+                if cancel.cancelled:
+                    handle.flush()
+                    raise CancelledError("任务已取消")
+                event_type = event.get("type") if isinstance(event, dict) else "content"
+                if event_type == "reasoning":
+                    self._emit({"type": EVENT_REASONING, "content": event["content"]})
+                elif event_type == "meta":
+                    # 求解画像：不给前端，只用来判断这一版答案是否合格
+                    meta = event
+                elif event_type == "error":
+                    error = str(event.get("content", "求解器返回错误"))
+                    break
+                else:
+                    content = event.get("content", "") if isinstance(event, dict) else str(event)
+                    chunks.append(content)
+                    handle.write(content)
+                    handle.flush()
+                    self._emit({"type": EVENT_CHUNK, "content": content})
+        return "".join(chunks), meta, error
+
+    # 这些题型的答案"必然不短"（至少要有代码），过短本身就是异常信号。
+    # 选择题/填空题的答案天然可以很短（"选 B"），不能因为短就重跑。
+    _LONG_ANSWER_TYPES = ("LEETCODE", "ACM", "ML_CODING")
+
+    def _should_escalate(
+        self,
+        text: str,
+        meta: dict,
+        *,
+        enable_thinking: bool,
+        final_type: str,
+    ) -> bool:
+        """首选档答案不合格时，是否值得用"开思考 + 大配额"重跑一次。
+
+        注意：这里只判断"答案是否**存在且完整**"，不判断对错——判对错靠"核对"功能，
+        不在这里做（拿不准的重跑只会白花钱）。
+        """
+        if not config.SOLVER_ESCALATE_TO_THINKING or enable_thinking:
+            return False
+        if meta.get("thinking"):
+            return False
+        body = text.strip()
+        if not body or "--- ERROR ---" in text:
+            return True
+        if meta.get("truncated"):
+            return True
+        if final_type in self._LONG_ANSWER_TYPES:
+            return len(body) < config.SOLVER_ESCALATE_MIN_CHARS
+        return False
+
+    def _solve_with_escalation(
+        self,
+        *,
+        temp_path: Path,
+        problem_type: str,
+        transcribed_text: str,
+        image_paths: list[Path],
+        enable_thinking: bool,
+        style: str | None,
+        ocr_fallback: bool,
+        timings: StageTimings,
+        cancel: CancelToken,
+    ) -> tuple[str, str, str, str]:
+        """求解，必要时"按需升级"。
+
+        先按首选档跑一次（默认不开思考，简单题十几秒出答案）；只有答案不合格
+        （空 / 被截断 / 过短）时才升级到"开思考 + SOLVER_ESCALATE_MAX_TOKENS"。
+        升级档同样没写出正文时**沿用首选档结果**，不做第三次调用。
+
+        Returns:
+            (answer_text, provider, model, final_type)
+        """
+        final_type, provider, model, stream = self._start_solve(
+            problem_type, transcribed_text, image_paths, enable_thinking, style, ocr_fallback
+        )
+        text, meta, error = self._run_solve_attempt(
+            path=temp_path,
+            stream=stream,
+            provider=provider,
+            model=model,
+            final_type=final_type,
+            transcribed_text=transcribed_text,
+            image_paths=image_paths,
+            timings=timings,
+            ocr_fallback=ocr_fallback,
+            cancel=cancel,
+        )
+        if error and not meta:
+            # 连画像都没有 → 调用就失败了，重跑一次也是白搭
+            raise RuntimeError(error)
+
+        if not self._should_escalate(
+            text, meta, enable_thinking=enable_thinking, final_type=final_type
+        ):
+            return text, provider, model, final_type
+
+        logger.info(
+            "首选档答案不合格（%d 字符，finish_reason=%s），升级到思考模式 + %d token 重跑一次",
+            len(text.strip()),
+            meta.get("finish_reason"),
+            config.SOLVER_ESCALATE_MAX_TOKENS,
+        )
+        self._status("solving", "第一版答案不合格，正在开启思考模式重新求解…")
+
+        escalated_path = temp_path.with_name(f"{temp_path.stem}_escalated{temp_path.suffix}")
+        try:
+            esc_type, esc_provider, esc_model, esc_stream = self._start_solve(
+                problem_type,
+                transcribed_text,
+                image_paths,
+                True,
+                style,
+                ocr_fallback,
+                max_tokens=config.SOLVER_ESCALATE_MAX_TOKENS,
+            )
+            esc_text, esc_meta, esc_error = self._run_solve_attempt(
+                path=escalated_path,
+                stream=esc_stream,
+                provider=esc_provider,
+                model=esc_model,
+                final_type=esc_type,
+                transcribed_text=transcribed_text,
+                image_paths=image_paths,
+                timings=timings,
+                ocr_fallback=ocr_fallback,
+                cancel=cancel,
+            )
+        except CancelledError:
+            escalated_path.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            logger.warning("升级求解失败，沿用首选档答案: %s", exc)
+            escalated_path.unlink(missing_ok=True)
+            return text, provider, model, final_type
+
+        if esc_text.strip() and "--- ERROR ---" not in esc_text:
+            logger.info("升级档产出 %d 字符，采用升级结果", len(esc_text.strip()))
+            escalated_path.replace(temp_path)
+            return esc_text, esc_provider, esc_model, esc_type
+
+        logger.info(
+            "升级档同样没有正文（finish_reason=%s，error=%s），沿用首选档答案",
+            esc_meta.get("finish_reason"),
+            esc_error,
+        )
+        escalated_path.unlink(missing_ok=True)
+        return text, provider, model, final_type
+
     def _start_solve(
         self,
         problem_type: str,
@@ -549,6 +699,7 @@ class SolutionPipeline:
         enable_thinking: bool,
         style: str | None,
         ocr_fallback: bool,
+        max_tokens: int | None = None,
     ):
         """选择求解器并启动流式请求。
 
@@ -571,7 +722,13 @@ class SolutionPipeline:
         final_type = map_final_type(problem_type, transcribed_text)
         provider, model = determine_solver(final_type)
         prompt = build_prompt(final_type, transcribed_text, style=style)
-        stream = solver_client.stream_solve(prompt, provider, model, enable_thinking=enable_thinking)
+        stream = solver_client.stream_solve(
+            prompt,
+            provider,
+            model,
+            enable_thinking=enable_thinking,
+            max_tokens=max_tokens,
+        )
         return final_type, provider, model, stream
 
     @staticmethod

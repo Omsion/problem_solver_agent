@@ -71,10 +71,31 @@ SOLVER_CONFIG = {
         "base_url": "https://api.deepseek.com/v1"},
 }
 
-# 求解调用的输出上限（token）。注意：思考模式下**思考过程与正文共享这一配额**，
-# 配额被思考过程吃满时正文会是空的（solver_client 会自动关闭思考模式重试一次）。
-# 需要长思考 + 长解答时可以调大，代价是单次调用更慢、更容易撞上 API 上限。
+# 求解调用的输出上限（token）——**首选档**（不开思考时就是全部给正文）。
+# 注意：思考模式下思考过程与正文共享这一配额，被思考吃满时正文会是空的
+# （solver_client 会自动关闭思考模式重试 / 由流水线升级到思考档重跑）。
 SOLVER_MAX_TOKENS = int(os.getenv("SOLVER_MAX_TOKENS", "16000"))
+
+# --- 4.1 思考模式：首选与"按需升级" ---
+# 实测（2026-09-13）：难题上思考过程会写掉 2.6 万字符，把 16000 配额吃光后
+# finish_reason=length、正文 0 字符——等于白等约 70 秒还多花一份 token，
+# 并没有换来正确率。因此改成两段式：
+#   1) 先按"不开思考"快跑一次（简单题十几秒出答案）；
+#   2) 只有答案不合格（空 / 被截断 / 过短）时，才升级到"开思考 + 大配额"重跑。
+# 显式指定（网页上手动开思考、resolve 传参）永远优先，不受这里的默认值影响。
+SOLVER_THINKING_DEFAULT = os.getenv("SOLVER_THINKING_DEFAULT", "false").lower() in ("true", "1", "yes")
+SOLVER_ESCALATE_TO_THINKING = os.getenv("SOLVER_ESCALATE_TO_THINKING", "true").lower() in ("true", "1", "yes")
+# 升级档的输出上限。实测该 API 接受 32768 / 65536，给思考留出写完的余地。
+SOLVER_ESCALATE_MAX_TOKENS = int(os.getenv("SOLVER_ESCALATE_MAX_TOKENS", "32000"))
+# 首选档答案短于该字符数就视为"不合格"，触发升级（空答案 / 被截断同样触发）
+SOLVER_ESCALATE_MIN_CHARS = int(os.getenv("SOLVER_ESCALATE_MIN_CHARS", "500"))
+# 思考深度：low / medium / high
+SOLVER_REASONING_EFFORT = os.getenv("SOLVER_REASONING_EFFORT", "medium").strip().lower()
+if SOLVER_REASONING_EFFORT not in ("low", "medium", "high"):
+    SOLVER_REASONING_EFFORT = "medium"
+# 思考过程的字符上限：超过它且正文仍为 0 时提前放弃思考（0 = 关闭该保护）。
+# 升级档配了大配额，默认不再提前放弃，避免把可能写完的思考掐掉。
+SOLVER_REASONING_CHAR_LIMIT = int(os.getenv("SOLVER_REASONING_CHAR_LIMIT", "0"))
 
 # --- 5. 求解风格配置 ---
 # 支持通过 .env 覆盖（SOLVER_STYLE=OPTIMAL / EXPLORATORY）。
@@ -103,8 +124,15 @@ MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 # --- 5.3 视觉模型调用参数 ---
 # 分类 / OCR 等短任务用较短超时，避免网络异常时长时间挂起
 VISION_TIMEOUT = float(os.getenv("VISION_TIMEOUT", "120"))
-# 是否把"分类"与"OCR"合并成一次视觉调用（失败会自动回退到两步）
-USE_COMBINED_VISION_CALL = os.getenv("USE_COMBINED_VISION_CALL", "true").lower() in ("true", "1", "yes")
+# 合并调用（一次拿到"题型 + 全部逐页转录"）的开关模式：
+#   "auto"（默认）= 只有图片数 <= COMBINED_VISION_MAX_IMAGES 时才尝试
+#   "true"        = 总是尝试（历史行为）
+#   "false"       = 从不尝试，直接走"分类 + 逐页转录"两步
+# 为什么默认不再"总是尝试"：实测（webapp 用量流水）12 次尝试只成功 1 次。
+# 多图时一次 JSON 装不下全部转录，输出被 max_tokens=8192 截断 → 解析失败 →
+# 白等约 50 秒且这次调用照样计费。单图输出短，收益仍在。
+USE_COMBINED_VISION_CALL = os.getenv("USE_COMBINED_VISION_CALL", "auto").strip().lower()
+COMBINED_VISION_MAX_IMAGES = int(os.getenv("COMBINED_VISION_MAX_IMAGES", "1"))
 # 多图 OCR 合并文本短于该长度时跳过"润色"调用
 MERGE_SKIP_THRESHOLD = int(os.getenv("MERGE_SKIP_THRESHOLD", "1200"))
 
@@ -143,6 +171,17 @@ IMAGE_CACHE_DIR = _PROJECT_DIR / "webapp" / "cache" / "images"
 # - 8-10秒：平衡选择（大多数用户适用）
 # - 15秒：适合操作较慢的用户（可能延迟提交）
 GROUP_TIMEOUT = 8.0
+
+# --- 7.1 监控目录的"补偿扫描"（防漏事件）---
+# 背景（2026-09-13 事故）：手机照片经 Syncthing 同步进来时是"先写临时文件、
+# 再改名就位"，watchdog 对改名只发 on_moved；旧实现只监听 on_created，
+# 于是文件躺在监控目录里几个小时也没被处理，而且没有任何补救机制。
+# 现在除了补上 on_moved，还会定期扫一遍目录做兜底：
+MONITOR_RESCAN_INTERVAL = float(os.getenv("MONITOR_RESCAN_INTERVAL", "15"))
+# 只补投 mtime 在这个分钟数以内的文件（0 = 不限年龄）
+MONITOR_CATCHUP_MAX_AGE_MINUTES = int(os.getenv("MONITOR_CATCHUP_MAX_AGE_MINUTES", "120"))
+# 启动时是否先扫一遍（补上进程停机期间到达的文件）
+MONITOR_STARTUP_SCAN = os.getenv("MONITOR_STARTUP_SCAN", "true").lower() in ("true", "1", "yes")
 
 # 后台工作线程数（ImageGrouper 消费者线程池大小）
 # 说明：控制同时处理的任务数量。每个任务占一个线程，适合 I/O 密集型场景。

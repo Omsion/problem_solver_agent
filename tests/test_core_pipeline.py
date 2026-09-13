@@ -58,7 +58,7 @@ def collected_append(sink: list[dict]):
 def _stub_solver(monkeypatch, response: str = "## 最终答案\n选 B。"):
     calls = {"analysis": 0, "stream": 0}
 
-    def fake_stream_solve(prompt, provider, model, enable_thinking=True):
+    def fake_stream_solve(prompt, provider, model, enable_thinking=True, **kwargs):
         calls["stream"] += 1
         yield {"type": "reasoning", "content": "思考中"}
         yield {"type": "content", "content": response}
@@ -170,7 +170,7 @@ def test_cancellation_during_stream_preserves_partial(tmp_path, images, events, 
 
     token = CancelToken()
 
-    def fake_stream_solve(prompt, provider, model, enable_thinking=True):
+    def fake_stream_solve(prompt, provider, model, enable_thinking=True, **kwargs):
         yield {"type": "content", "content": "第一段"}
         token.cancel()  # 取消请求在流式过程中到达
         yield {"type": "content", "content": "这一段不应该被写入"}
@@ -206,7 +206,7 @@ def test_cancel_before_first_stage(tmp_path, images, events, monkeypatch):
 def test_failure_writes_error_event_and_cleans_temp(tmp_path, images, events, monkeypatch):
     _stub_vision(monkeypatch, combined={"problem_type": "GENERAL", "pages": ["a", "b"]})
 
-    def broken_stream(prompt, provider, model, enable_thinking=True):
+    def broken_stream(prompt, provider, model, enable_thinking=True, **kwargs):
         yield {"type": "error", "content": "模型挂了"}
 
     monkeypatch.setattr(core_pipeline.solver_client, "stream_solve", broken_stream)
@@ -278,3 +278,110 @@ def test_combined_prompt_is_valid_json_example():
     example = '{"problem_type": "GENERAL", "pages": ["x"]}'
     assert json.loads(example)["pages"] == ["x"]
     assert "pages" in prompts.CLASSIFY_AND_TRANSCRIBE_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# 按需升级：首选档（不开思考）不合格 → 开思考 + 大配额重跑一次
+# ---------------------------------------------------------------------------
+
+
+def _stub_escalating_solver(
+    monkeypatch,
+    *,
+    first_text: str = "",
+    escalate_text: str = "## 最终答案\n升级档写出来的完整解答" * 40,
+):
+    """首选档返回 first_text，升级档返回 escalate_text；记录每次调用的参数。"""
+    calls: list[dict] = []
+
+    def fake_stream_solve(
+        prompt, provider, model, enable_thinking=True, max_tokens=None, **kwargs
+    ):
+        calls.append({"thinking": enable_thinking, "max_tokens": max_tokens})
+        text = escalate_text if enable_thinking else first_text
+        if text:
+            yield {"type": "content", "content": text}
+            yield {
+                "type": "meta",
+                "thinking": enable_thinking,
+                "finish_reason": "stop",
+                "truncated": False,
+                "content_chars": len(text),
+                "reasoning_chars": 0,
+            }
+            return
+        # 首选档一个字都没写出来：先给画像、再报错（与 solver_client 的行为一致）
+        yield {
+            "type": "meta",
+            "thinking": enable_thinking,
+            "finish_reason": "length",
+            "truncated": True,
+            "content_chars": 0,
+            "reasoning_chars": 999,
+        }
+        yield {"type": "error", "content": "求解器没有返回正文"}
+
+    monkeypatch.setattr(core_pipeline.solver_client, "stream_solve", fake_stream_solve)
+    monkeypatch.setattr(core_pipeline.solver_client, "ask_for_analysis", lambda *a, **k: "标题")
+    return calls
+
+
+@pytest.fixture()
+def _deterministic_thinking(monkeypatch):
+    """测试不依赖用户 .env：首选档不开思考、允许升级。"""
+    monkeypatch.setattr(core_pipeline.config, "SOLVER_THINKING_DEFAULT", False)
+    monkeypatch.setattr(core_pipeline.config, "SOLVER_ESCALATE_TO_THINKING", True)
+
+
+def test_escalates_to_thinking_when_preferred_attempt_is_empty(
+    tmp_path, images, events, monkeypatch, _deterministic_thinking
+):
+    _stub_vision(monkeypatch, combined={"problem_type": "CODING", "pages": ["题目"]})
+    calls = _stub_escalating_solver(monkeypatch)
+
+    result = _pipeline(tmp_path, events).run("t11", images)
+
+    assert result["status"] == "completed"
+    assert "升级档写出来的完整解答" in result["text"]
+    assert [call["thinking"] for call in calls] == [False, True]
+    assert calls[0]["max_tokens"] is None  # 首选档用默认配额
+    assert calls[1]["max_tokens"] == core_pipeline.config.SOLVER_ESCALATE_MAX_TOKENS
+
+
+def test_keeps_first_answer_when_escalation_also_fails(
+    tmp_path, images, events, monkeypatch, _deterministic_thinking
+):
+    _stub_vision(monkeypatch, combined={"problem_type": "CODING", "pages": ["题目"]})
+    first = "首选档写出的短解答"
+    calls = _stub_escalating_solver(monkeypatch, first_text=first, escalate_text="")
+
+    result = _pipeline(tmp_path, events).run("t12", images)
+
+    assert result["text"].strip() == first
+    assert len(calls) == 2, "升级档也没写出正文时不该再跑第三次"
+
+
+def test_short_answer_is_not_escalated_for_multiple_choice(
+    tmp_path, images, events, monkeypatch, _deterministic_thinking
+):
+    """选择题答案天然很短（"选 B"），不能因为短就白跑一次思考。"""
+    _stub_vision(monkeypatch, combined={"problem_type": "MULTIPLE_CHOICE", "pages": ["题目"]})
+    calls = _stub_escalating_solver(monkeypatch, first_text="选 B")
+
+    result = _pipeline(tmp_path, events).run("t13", images)
+
+    assert result["text"].strip() == "选 B"
+    assert len(calls) == 1
+
+
+def test_explicit_thinking_request_skips_escalation(
+    tmp_path, images, events, monkeypatch, _deterministic_thinking
+):
+    """显式要求思考时直接走思考档，不再多跑一遍。"""
+    _stub_vision(monkeypatch, combined={"problem_type": "CODING", "pages": ["题目"]})
+    calls = _stub_escalating_solver(monkeypatch)
+
+    result = _pipeline(tmp_path, events).run("t14", images, enable_thinking=True)
+
+    assert result["status"] == "completed"
+    assert [call["thinking"] for call in calls] == [True]

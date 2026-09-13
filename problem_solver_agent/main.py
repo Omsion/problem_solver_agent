@@ -59,8 +59,13 @@ def main():
     logger.info("=" * 50)
 
     image_grouper = ImageGrouper()
-    # file_monitor 现在接收任意回调，不再反向依赖 ImageGrouper
-    observer = file_monitor.start_monitoring(config.MONITOR_DIR, image_grouper.add_image)
+    # file_monitor 现在接收任意回调，不再反向依赖 ImageGrouper；
+    # on_group 用于补偿扫描（漏事件/停机期间到达的文件）整组补投
+    observer = file_monitor.start_monitoring(
+        config.MONITOR_DIR,
+        image_grouper.add_image,
+        on_group=image_grouper.submit_group,
+    )
 
     try:
         while observer.is_alive():

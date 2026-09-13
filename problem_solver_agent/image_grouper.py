@@ -23,6 +23,7 @@ image_grouper.py - 图片分组与处理核心调度器 (V2.2 - 统一客户端�
 
 import shutil
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from queue import Queue
 from threading import Lock, Thread, Timer, current_thread
@@ -99,6 +100,22 @@ class ImageGrouper:
             logger.info(f"图片已添加到组: {image_path.name} (当前组共 {len(self.current_group)} 张)")
             self.timer = Timer(config.GROUP_TIMEOUT, self._submit_group_to_queue)
             self.timer.start()
+    def submit_group(self, image_paths: Sequence[Path]) -> None:
+        """把一整组图片**立即**提交到处理队列（供补偿扫描使用）。
+
+        这些文件通常已经躺在目录里很久了，不该再占用一个分组时间窗；同时要
+        把它们从"正在收集的组"里剔除，避免同一张图被处理两次。
+        """
+        group = [Path(p) for p in image_paths]
+        if not group:
+            return
+        with self.lock:
+            self.current_group = [p for p in self.current_group if p not in group]
+        self.task_queue.put(group)
+        logger.info(
+            f"补投图片组已直接进入处理队列: {', '.join(p.name for p in group)}"
+        )
+
     def _submit_group_to_queue(self):
         """
         当分组定时器超时后，此方法被调用。它会将收集好的图片组作为一个任务
