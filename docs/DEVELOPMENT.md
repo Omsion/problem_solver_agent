@@ -154,6 +154,7 @@ pytest tests/test_core_pipeline.py -v
 | `test_retention.py` | 上传目录清理、孤立目录、图片缓存 LRU |
 | `test_routes_upload.py` | 目录穿越防护、非法图片、体积限制、取消/重试门禁 |
 | `test_file_monitor.py` | 文件稳定性等待、回调异常隔离、改名就位投递、临时文件过滤、去重账本、补偿扫描与句柄停止 |
+| `test_image_order.py` | EXIF / 文件名 / mtime 三级时间来源、乱序图片重排、同时间稳定性、分组器入队顺序 |
 | `test_resolve_verify_sse.py` | SSE 序号与 `Last-Event-ID` 续传、`/resolve` 与 `/verify` 门禁 |
 
 ### 前端（vitest + Testing Library）

@@ -31,6 +31,7 @@ from threading import Lock, Thread, Timer, current_thread
 # 导入项目模块
 from . import config
 from .core_pipeline import SolutionPipeline
+from .image_order import describe_order, sort_images_by_time
 from .utils import setup_logger
 
 # 初始化全局日志记录器
@@ -106,14 +107,14 @@ class ImageGrouper:
         这些文件通常已经躺在目录里很久了，不该再占用一个分组时间窗；同时要
         把它们从"正在收集的组"里剔除，避免同一张图被处理两次。
         """
-        group = [Path(p) for p in image_paths]
+        group = sort_images_by_time([Path(p) for p in image_paths])
         if not group:
             return
         with self.lock:
             self.current_group = [p for p in self.current_group if p not in group]
         self.task_queue.put(group)
         logger.info(
-            f"补投图片组已直接进入处理队列: {', '.join(p.name for p in group)}"
+            f"补投图片组已直接进入处理队列（按拍摄时间排序）: {describe_order(group)}"
         )
 
     def _submit_group_to_queue(self):
@@ -124,10 +125,15 @@ class ImageGrouper:
         with self.lock:
             if not self.current_group:
                 return
-            group_to_submit = self.current_group.copy()
+            # 监控目录里的落盘顺序是随机的（Syncthing 按数据块同步），
+            # 这里按拍摄时间重排：最早拍的 = 题目第一页
+            group_to_submit = sort_images_by_time(self.current_group)
             self.current_group.clear()
         self.task_queue.put(group_to_submit)
-        logger.info(f"超时! 包含 {len(group_to_submit)} 张图片的组已提交到处理队列。")
+        logger.info(
+            f"超时! 包含 {len(group_to_submit)} 张图片的组已提交到处理队列。"
+            f" 顺序: {describe_order(group_to_submit)}"
+        )
 
     # _determine_solver 已替换为 config.determine_solver()
 

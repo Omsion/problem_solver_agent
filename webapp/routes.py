@@ -18,6 +18,7 @@ from PIL import Image
 
 from problem_solver_agent import config as core_config
 from problem_solver_agent.answer_card import extract_answer_card
+from problem_solver_agent.image_order import sort_images_by_time
 from problem_solver_agent.netcheck import get_lan_ip, is_remote_device
 from problem_solver_agent.utils import sanitize_filename
 
@@ -241,13 +242,18 @@ def _check_budget(user: User, pages: int) -> JSONResponse | None:
 
 
 def _task_images(task_dir: Path) -> list[Path]:
-    """列出任务的上传图片（只接受图片扩展名，避免把杂项文件当图片）。"""
+    """列出任务的上传图片，并按拍摄时间排序（只接受图片扩展名，避免把杂项文件当图片）。
+
+    多图题目的顺序决定"哪张是第一页"，而上传/同步的落盘顺序并不可靠，
+    所以这里也统一走 `sort_images_by_time`（EXIF → 文件名时间 → mtime）。
+    """
     if not task_dir.exists():
         return []
-    return sorted(
+    images = [
         p for p in task_dir.iterdir()
         if p.is_file() and p.suffix.lower() in web_config.ALLOWED_EXTENSIONS
-    )
+    ]
+    return sort_images_by_time(images)
 
 
 def _is_valid_image_bytes(payload: bytes) -> bool:

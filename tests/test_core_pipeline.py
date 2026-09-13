@@ -385,3 +385,43 @@ def test_explicit_thinking_request_skips_escalation(
 
     assert result["status"] == "completed"
     assert [call["thinking"] for call in calls] == [True]
+
+
+# ---------------------------------------------------------------------------
+# 图片顺序：落盘顺序随机，送进 OCR 前必须按拍摄时间重排
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_reorders_images_by_capture_time(tmp_path, events, monkeypatch):
+    """Syncthing 按数据块同步，落盘顺序是乱的；题干必须按拍摄顺序拼。"""
+    scrambled = [
+        _make_image(tmp_path / "IMG_20260913_164126.jpg"),
+        _make_image(tmp_path / "IMG_20260913_164128.jpg"),
+        _make_image(tmp_path / "IMG_20260913_164123.jpg"),
+        _make_image(tmp_path / "IMG_20260913_164131.jpg"),
+    ]
+    received: list[list[str]] = []
+
+    def fake_combined(image_paths):
+        received.append([p.name for p in image_paths])
+        return {"problem_type": "GENERAL", "pages": ["第1页", "第2页", "第3页", "第4页"]}
+
+    _stub_solver(monkeypatch)
+    monkeypatch.setattr(
+        core_pipeline.vision_client, "classify_and_transcribe", fake_combined
+    )
+
+    result = _pipeline(tmp_path, events).run("t15", scrambled)
+
+    assert result["status"] == "completed"
+    assert received == [
+        [
+            "IMG_20260913_164123.jpg",
+            "IMG_20260913_164126.jpg",
+            "IMG_20260913_164128.jpg",
+            "IMG_20260913_164131.jpg",
+        ]
+    ]
+    # 解答文件头里的 images: 也应当是拍摄顺序
+    solution = Path(result["path"]).read_text(encoding="utf-8")
+    assert solution.index("IMG_20260913_164123.jpg") < solution.index("IMG_20260913_164131.jpg")

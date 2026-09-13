@@ -32,6 +32,7 @@
 |---|---|
 | `config.py` | 全部配置常量。路径解析、图片预处理参数、保留策略、并发上限。支持 `.env` 覆盖 |
 | `image_prep.py` | **发送前的图片预处理**：EXIF 校正 → 缩放 → JPEG 压缩 → 磁盘/内存缓存 |
+| `image_order.py` | **题目图片排序**：EXIF `DateTimeOriginal` → 文件名时间戳 → mtime，保证"第几页"与拍摄顺序一致 |
 | `vision_client.py` | 视觉调用：分类、逐页 OCR、合并调用（`auto` 模式仅单图尝试）、视觉推理。重试、超时与截断诊断 |
 | `solver_client.py` | 求解器调用：流式（含 reasoning 事件与求解画像）、思考配额/effort 配置、非流式分析、健康检查 |
 | `core_pipeline.py` | **流水线编排**：阶段编排、事件发射、耗时统计、取消检查、答案卡抽取、思考档按需升级 |

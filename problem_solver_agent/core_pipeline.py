@@ -27,6 +27,7 @@ from pathlib import Path
 from . import config, image_prep, prompts, solver_client, vision_client
 from .answer_card import extract_answer_card
 from .cancel import CancelToken, CancelledError
+from .image_order import describe_order, sort_images_by_time
 from .utils import extract_question_numbers, format_number_prefix, sanitize_filename
 
 logger = logging.getLogger("CorePipeline")
@@ -173,6 +174,12 @@ class SolutionPipeline:
         if enable_thinking is None:
             enable_thinking = config.SOLVER_THINKING_DEFAULT
         image_paths = [Path(p) for p in image_paths]
+        # 落盘顺序 ≠ 拍摄顺序（Syncthing 按数据块同步，顺序是乱的），
+        # 而顺序决定"哪张是第一页"——错了整道题就废了，所以先按拍摄时间重排
+        ordered_paths = sort_images_by_time(image_paths)
+        if ordered_paths != image_paths:
+            logger.info("图片已按拍摄时间重排: %s", describe_order(image_paths))
+        image_paths = ordered_paths
         timings = StageTimings()
         started = time.time()
         temp_path = self.solution_dir / f"{task_id}_inprogress.md"
@@ -371,6 +378,9 @@ class SolutionPipeline:
         cancel = cancel or CancelToken()
         if enable_thinking is None:
             enable_thinking = config.SOLVER_THINKING_DEFAULT
+        if image_paths:
+            # 原图直读求解同样依赖"第几页"的顺序
+            image_paths = sort_images_by_time(image_paths)
         if not transcribed_text or not transcribed_text.strip():
             raise ValueError("缺少题目文本，无法重新求解（请先完成一次完整处理）")
 
