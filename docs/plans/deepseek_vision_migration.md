@@ -1,0 +1,1009 @@
+# 视觉层迁移：GLM-4.6V → DeepSeek V4.1 Flash（`deepseek-flash`）
+
+> **文档定位**：可执行实施方案。架构与决策见 `../ARCHITECTURE.md`；接口契约见 `../API.md`。
+> 本文的模型事实来自 2026-09-19 抓取的 DeepSeek 官方文档（`api-docs.deepseek.com`），
+> 非估计值；价格同步自官方「模型 & 价格」页。
+
+---
+
+## 0. 结论先行
+
+### 0.1 先纠正一个前提：本方案**不解决隐私问题**
+
+提出迁移的原始动机是「担心图片隐私」。必须写清楚：
+
+**Base64 是编码，不是加密。** 图片以 `data:image/jpeg;base64,...` 发送，厂商服务端
+收到后的第一步就是解码回原始像素。模型看到的就是**完整原图**，没有任何模糊、
+遮罩或保护——与屏幕上所见一致。本轮迁移只是把同一张原图从**智谱**的服务器
+搬到 **DeepSeek** 的服务器：**风险没有消除，只是换了接收方**。
+
+真正能降低隐私暴露的只有三条路（按有效性排序）：
+
+| 手段 | 有效性 | 代价 |
+|---|---|---|
+| 本地视觉模型（Qwen2.5-VL / MiniCPM-V / InternLM-XComposer 本地部署） | **根治**：图片不出本机 | 需要 GPU 显存 + 部署运维；OCR 质量需自测 |
+| 发送前在本机对敏感区域打码 / 裁剪（`image_prep.py` 里插一步） | 显著：个人信息不上传 | 需要区域检测，会伤及题目内容 |
+| 选用有明确数据保留政策、可关闭「用于训练」的厂商 | 有限：降低二次使用风险 | 不等于不泄露 |
+
+项目**已经**有一个真实有效的隐私收益，但它是既有能力、不是本次迁移带来的：
+`image_prep.py` 的 EXIF 校正会**丢弃 EXIF 元数据**（GPS 坐标、设备型号、拍摄时间）。
+这保护的是元数据，**图片内容一个像素都没少**。
+
+### 0.2 本次迁移的真实收益与代价
+
+**收益（真实存在，但和隐私无关）**
+
+1. **单一供应商 / 单一密钥 / 单一 base_url**：整个项目只依赖 DeepSeek 一家，
+   失效面减半，`.env` 少一个必填项；
+2. **调用形态完全一致**：DeepSeek 的图片块就是 OpenAI 标准的
+   `{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}` —— 与
+   `vision_client._build_user_content` **现有代码逐字相同**，迁移不需要新抽象；
+3. **可复用的请求结构**：视觉与求解走同一个模型（`deepseek-flash`），
+   prompt 风格、错误处理、重试策略可以统一；
+4. **1M 上下文 + 384K 输出**：远大于 GLM 系列的 8192 输出上限。**这是本次迁移最大的
+   技术收益** —— 它解除了 `COMBINED_VISION_MAX_IMAGES=1` 背后那个根因（见 0.4 节）；
+5. **`user_id` 隔离**：DeepSeek 支持 `extra_body={"user_id": "..."}`，官方说明该字段用于
+   **内容安全隔离 + KVCache 隔离 + 调度隔离**。项目的用户 ID（`u_xxxxxxxx`，
+   见 `webapp/accounts.py`）已满足 `[a-zA-Z0-9\-_]+` 格式，可直接透传。
+
+**理论收益（本项目场景下几乎用不上，不要当成迁移理由）**
+
+- **缓存命中价极低**：空闲时段 0.02 元/百万 token。DeepSeek 的上下文硬盘缓存确实
+  **默认开启、隐式生效**，但本项目每次提交的都是**全新图片**，图片部分无法命中；
+  全仓也**没有任何**缓存相关配置（搜 `prompt_cache|cache_control|prefix_cache`
+  零命中）。唯一有意义的做法是保证 prompt 模板在前、图片在后
+  （`vision_client._build_user_content` 已是这个顺序），收益极小。
+  另外，缓存前缀单元要求**完整匹配**才命中，而本项目的两次调用（视觉、求解）
+  prompt 结构完全不同，不存在可复用的公共前缀。
+
+**代价（必须先量化，不能拍脑袋）**
+
+| # | 代价 | 说明 |
+|---|---|---|
+| C1 | **单价上涨** | OCR 从 `GLM-4.6V-FlashX`(0.5/1.5) 换到 `deepseek-flash`(1–2 / 4–8)，输入贵 **2–4 倍**，输出贵 **2.7–5.3 倍** |
+| C2 | **图片被二次缩放** | DeepSeek 会把每图缩到「约 1300×1300 等效总像素」，每图 ≤1024 token。当前 `IMAGE_MAX_EDGE=1600` 送出去的图会**再被缩一次**，小字/公式 OCR 可能退化 |
+| C3 | **思考模式默认开启** | 官方：「思考模式默认打开，且 effort 默认为 high」。不显式关闭的话，分类/OCR 这类短任务会被思考过程吃光配额 |
+| C4 | **采样参数失效** | 「思考模式不支持 temperature / presence_penalty / frequency_penalty」「top_p 仅思考模式生效，范围 0.95–1.0，低于 0.95 按 0.95 处理；非思考模式恒为 1.0」 |
+| C5 | **单点依赖** | 迁移后 OCR / 润色 / 求解 / 核对**全部**依赖 DeepSeek 一家。现状是智谱挂了还能求解，迁移后任一环节不可用即全流程不可用。这是保留 `zhipu` 回退分支的主要理由 |
+| C6 | **成本归因变难** | 视觉与求解同为 `deepseek-flash`，账单上只能靠 `stage` 字段区分。`core_pipeline._emit_usage` 已正确标注 stage，但 `_generate_filename` 的调用**完全没进入用量统计**（见 0.4 节 T4） |
+
+> **关于并发**：DeepSeek 的并发限制是 **2500**（`deepseek-flash`）/ 500（`deepseek-v4-pro`），
+> 账号粒度、与 API Key 无关，定义为「一个请求从发出到响应完成记为一个并发」。本项目
+> `MAX_CONCURRENT_TASKS=2`、OCR 实为串行 —— **2 vs 2500，差三个数量级，并发从来不是约束**。
+> 把「视觉与求解共用同一模型」写成并发代价是**错的**，真实代价是上面的 C5 与 C6。
+
+因此本方案不是「连根拔起」，而是 **「先用 A/B 量化 C1/C2，再带闸门灰度切换，随时一键回退」**。
+
+### 0.3 一句话设计原则
+
+> **保留 `VISION_PROVIDER` 开关（`deepseek` / `zhipu`），默认切到 `deepseek`；
+> 切换前先跑 A/B 工具出数字；任何一项回归就回退，回退只需改一个环境变量。**
+
+### 0.4 多图场景的提速设计（本节是迁移的主要动力）
+
+**典型场景**：一个分组窗口（`GROUP_TIMEOUT=8s`）内会有 **5–8 张图**，可能是同一题的
+多页，也可能是 7–8 道互不相关的题。
+
+**现状的调用账（8 图任务）**：
+
+| 环节 | 调用数 | 说明 |
+|---|---|---|
+| 分类 | 1 | `classify_problem_type` |
+| **逐页 OCR** | **8** | **串行** —— `OCR_PARALLEL_WORKERS=1`（`config.py:196`） |
+| 润色 | 1 | 合并文本 ≥1200 字符必调 |
+| 文件名生成 | 1 | `_generate_filename`，**不计时、不计费、用户看不见** |
+| 求解 | 1 | 流式 |
+| **合计** | **12 次** | 其中视觉调用 9 次 |
+
+**延迟主体是那 8 次串行 OCR**：按项目自己实测的单张 3.5–16.3 s
+（见 `watermark_removal.md`），就是 **28–130 秒**的纯等待。这才是端到端延迟的大头，
+比省一次分类调用重要得多。
+
+#### 提速项清单（按收益排序）
+
+| # | 改动 | 现状 | 改后 | 8 图收益 |
+|---|---|---|---|---|
+| **T1** | 多图合并调用 | `COMBINED_VISION_MAX_IMAGES=1`，多图**连请求都不发**（`vision_client.py:320-327`） | 提到 **8**，并换协议（见下） | 视觉调用 **9 → 1** |
+| **T2** | OCR 并行度 | `OCR_PARALLEL_WORKERS=1`（串行） | **3** | 回退路径 8 次串行 → 3 轮 |
+| **T3** | 润色条件触发 | 多图且 ≥1200 字符必调 | 按 `layout` 分流 | 独立题时省 1 次调用 |
+| **T4** | 文件名生成 | 每次任务 1 次 deepseek 调用 | 本地由题号生成 | 省 1 次调用 |
+| **T5** | 辅助链路关思考 | `ask_for_analysis` **没传** `extra_body`，思考默认开着 | 显式关闭 | 省下每次润色/命名的思考时间 |
+
+#### T1 详述：为什么必须**同时换协议**
+
+`tests/test_vision_client.py:1-11` 的头注释记录了 2026-09-13 的事故复盘：
+
+> 合并调用要求把**所有图片的完整转录**塞进一个 JSON，而输出上限只有 8192 token；
+> 多图时必然被截断 → 解析失败 → 回退，白等约 50 秒且这次调用照样计费。
+> webapp 用量流水显示 **12 次尝试只成功 1 次**。
+
+**GLM 的 8192 输出上限是原因之一，但不是全部** —— 更根本的问题是
+**JSON 与 LaTeX 天然互斥**，而这个缺陷一直被「截断」的叙事掩盖着：
+
+| 转录里的 LaTeX | 模型漏转义后的解析结果 | 后果 |
+|---|---|---|
+| `\frac{a}{b}` | `\f` 是**合法**的 formfeed 转义 | **解析"成功"**，文本变成 `␌rac{a}{b}` |
+| `\begin{matrix}` | `\b` 是**合法**的 backspace 转义 | **解析"成功"**，正文里被插入退格符 |
+| `\theta` | `\t` 是**合法**的 tab 转义 | **解析"成功"**，正文里被插入制表符 |
+| `\neq` | `\n` 是**合法**的换行转义 | **解析"成功"**，公式被拆成两行 |
+| `\sqrt` | `\s` 不是合法转义 | 硬失败 → 整批回退 |
+
+**前四行是静默损坏**：它们通过了页数校验、长度校验，直接写进解答文件的
+`# 题目文本` 小节，**没有任何机制会发现**。这比「解析失败」危险得多 —— 失败至少会回退。
+
+另外三个结构性失败源：
+
+- **裸换行**：转录是多行文本，JSON 字符串里每处换行都必须写成 `\n`，漏一处即硬失败；
+- **截断**：输出撞 `max_tokens` → 字符串未闭合 → 失败；
+- **页数不匹配且无顺序校验**：模型把两张连页合并、把纯图页省略、或把一张图拆成两条
+  —— `vision_client.py:343` 只校验 `len(pages) == len(image_paths)`，
+  **不校验顺序**，模型重排页面会被静默接受，而顺序决定"哪张是第一页"，错了整道题就废了。
+
+因此 T1 必须配套换协议。**设计目标：转录正文逐字直出，不经过任何转义层；
+页边界显式标记；部分成功可救。**
+
+```
+<<<TYPE>>>MULTIPLE_CHOICE
+<<<PAGE 1|NEW>>>
+（第 1 张图的完整文本）
+<<<PAGE 2|CONT>>>
+（第 2 张图的文本；若它与第 1 页是同一道题的延续，省略与上一页重复的内容）
+<<<PAGE 3|NEW>>>
+（第 3 张图的完整文本）
+<<<END>>>
+```
+
+- 页正文 = 第 k 个标记结束位置 → 第 k+1 个标记起始位置（或 `<<<END>>>`，或 EOF）；
+- 按模型声明的 **n**（1 基）定位而非出现顺序，**顺序错乱因此可被发现**（n 跳号 → 记入 `failed_pages`）；
+- `NEW` / `CONT` 标记**顺带解决了 T3 的版面判断**，而且比单一的 `LAYOUT` 字段更强 ——
+  它支持**混合场景**（前 3 页是同一题、后 5 页是独立题），单一字段做不到；
+- 标记前的客套话、代码围栏一律丢弃，`parse_json_response` 里"找第一个 `{`"的脆弱兜底
+  （LaTeX 的 `\{` 会让它切错边界）不再需要。
+
+**回退链**（把「整批作废」降级为「按页补齐」）：
+
+```
+PAGE 协议解析 → 部分成功即采用，缺页走 refill_pages 单页补做（补 k 页 = k 次调用）
+  ↓ 完全无法解析
+JSON 协议（保留兼容）
+  ↓ 失败
+1 次分类 + N 次 OCR 并行路径（T2 的并行度在此生效）
+```
+
+`refill_pages(image_paths, result, failed_pages)` 只对失败下标重跑单页 OCR 并写回，
+**补 2 页 = 2 次调用，而不是整批 9 次重来**。只有 `<<<TYPE>>>` 也缺失时才补一次分类。
+
+**流式是必须的，不是可选项**：`stream=False` 时整段生成必须在单个超时内完成，
+而合并调用要输出 6–16K token，非流式几乎必然超时。`_call_vision_api` 已支持
+`stream=True`，需要新增一个收集器把流拼回字符串并取 `finish_reason`。
+
+> **坑**：现有重试循环（`vision_client.py:132-172`）只覆盖 `create()` 抛出的异常；
+> 流式下 `create()` 已经返回，错误发生在**迭代期间** —— 必须在收集器里补一层重试，
+> 否则一次网络抖动就会丢掉整次转录。
+
+#### T3 详述：润色在多题场景下**不仅冗余，而且有害**
+
+**关键发现**：`TEXT_MERGE_AND_POLISH_PROMPT`（`prompts.py:71-101`）的 CoT 第 2 步
+写死了「找到最长的重叠部分」，第 4 条核心原则又要求「**必须**识别并完美处理片段间的
+重叠内容」。
+
+**在「7–8 道互不相关的题」这个场景下，这两条指令是有害的**：相邻页之间必然存在
+「下列哪项正确」「（ ）」这类相同措辞，模型被明确要求「找到最长重叠并丢弃」，
+于是会**静默删掉一道题的开头**。
+
+这是一条**今天就在生效、且没人发现的质量缺陷** —— 因为润色结果直接写进
+`# 题目文本` 小节，而没人会拿它跟原图逐字比对。
+
+**做法（两件事都要做）**：
+
+1. **合并调用成功时，内联掉润色**：`<<<PAGE n|CONT>>>` 标记就是模型给出的接缝判断，
+   prompt 对 `CONT` 页明确要求「省略与上一页重复的内容」。本地用一个纯函数
+   `join_by_continuation(pages, continuations)` 拼接（`NEW` 用 `\n\n`，`CONT` 用 `\n`），
+   **跳过润色调用**，成本是 **0 个额外 token**。
+
+   省下的不只是时间：润色要**重新生成整篇合并文本**（输入输出各约 10K token），
+   是整条流水线里最贵的一次输出，且 100% 与转录内容重复。
+
+2. **并行路径下保留润色，但必须修 prompt**：在 `TEXT_MERGE_AND_POLISH_PROMPT` 前部
+   新增一段「场景判断」，要求模型**先**判断片段之间是「同一题多页连续截图」
+   还是「互不相关的多道题」，属后者时**绝不跨片段删除任何内容**，只做公式规范化。
+   这一条对 >8 图或合并失败的回退路径是刚需。
+
+`VISION_INLINE_MERGE`（默认 `true`）保留为回退开关：若发现模型在 `CONT` 页偷懒多删了
+内容，置 `false` 即可回到「合并调用 + 独立润色」。而因为**原始 OCR 已按页归档**
+（组 I），可以直接比对发现问题。
+
+#### T4 详述：一次隐形的调用
+
+`_generate_filename`（`core_pipeline.py:787-805`）每次都调一次
+`solver_client.ask_for_analysis`（deepseek），而且**游离在 `StageTimings` 与
+`UsageReport` 之外** —— 用户既看不到它的耗时，也看不到它的费用。
+
+做法：优先用已有的 `extract_question_numbers` + `format_number_prefix`
+（`utils.py:79-114`，本来就是它的 fallback 路径）本地生成文件名，仅在解析不到题号时
+才调模型；同时把耗时与用量补进 `StageTimings` / `UsageReport`，让它在界面上可见。
+
+#### T5 详述：辅助链路的思考一直是开着的
+
+这条与「迁移」正交，但它是**当前最大的单点延迟浪费**，改动极小。
+
+`config.AUX_PROVIDER = "deepseek"` + `AUX_MODEL_NAME = "deepseek-flash"`
+（`config.py:55-56`）—— **润色与文件名生成本来就跑在 DeepSeek V4.1 Flash 上**。
+而 `solver_client.ask_for_analysis`（`solver_client.py:359-389`）这样发请求：
+
+```python
+client.chat.completions.create(
+    model=model, messages=messages, stream=False, temperature=0.7, timeout=120.0
+)
+```
+
+**没有 `extra_body`。** 按官方「思考模式默认打开，且 effort 默认为 high」，
+这两次调用**一直在跑 high effort 思考**：模型在输出润色结果/文件名之前，
+先做一遍高强度思考，纯延迟浪费；`temperature=0.7` **静默失效**；思考消耗的 token
+照样计费，而结果被直接丢弃（只取 `message.content`）。
+
+修法与 `solver_client._build_payload` 里已有的做法完全一致
+（`solver_client.py:104-108`，其注释记录了"关闭思考必须**显式**下发"的踩坑经验）。
+
+**同一处还有第二个问题**：`ask_for_analysis` 内部**硬编码 `timeout=120.0`**
+（`solver_client.py:371`）。而润色要把整篇合并文本重写一遍（输出 6–10K token），
+**在思考模式下很可能撞上 120 s 超时**，然后按 `MAX_RETRIES=3` 指数退避重试
+（10s → 20s → 40s）—— **一次润色最坏可能耗掉几分钟**。
+
+这是当前延迟长尾的最大来源，比 OCR 本身严重。关掉思考能大幅降低命中概率，
+但根治要给 `ask_for_analysis` 一个可配的超时（如 `AUX_TIMEOUT`，默认提到 300 s）。
+
+#### 8 图场景的调用账（诚实版）
+
+| | 现状 | 优化后 |
+|---|---|---|
+| 视觉调用次数 | **9 次**（1 分类 + 8 串行 OCR） | **1 次**（合并调用） |
+| 视觉关键路径 | 8 次串行 = **8 次 TTFT + 生成** | 1 次 TTFT + 生成 |
+| 润色 | 1 次（思考开着，**最坏撞 120 s 超时并重试 4 次**） | **0**（已内联） |
+| 文件名生成 | 1 次（思考开着） | **0**（并进求解首行） |
+| 求解 | 1 次流式 | 1 次流式（不变） |
+| **API 调用总数** | **12 次** | **2 次** |
+
+**必须讲清楚的一点：不能断言合并调用一定比并行路径快。**
+
+合并调用是**单序列串行生成**，耗时 ≈ `N × T / R`；而修好并行度后的回退路径是
+`ceil(N / W) × T / R`。当 `W ≥ N` 时，并行路径在生成时间上反而快 `N / W` 倍。
+把合并调用当成"必定更快"是错的。
+
+合并调用真正**确定**的收益是三条：
+
+1. **图片 token 只计费一次** —— 分类那一趟的 8×1024 输入 token 从"白付"变成合并进同一次请求；
+2. **少 8 次 TTFT / prefill 往返** —— 这是今天 `workers=1` 下最贵的部分；
+3. **跨页去重成为可能** —— 并行路径下模型看不到相邻页，只能靠第二个模型去猜，
+   而它猜错的方式是**删掉一道题**（见 T3）。
+
+**与 N 无关的净删除**只有两笔：润色调用（重写整篇输出）与文件名调用。
+
+**因此 `COMBINED_VISION_MAX_IMAGES` 应由实测决定，而不是拍脑袋。** 阶段 0 之后先跑一次
+对照：同一组 8 张真实题图，分别设 `=8` 和 `=4`，看 `StageTimings` 里 classify+ocr
+那一段的实际秒数。若合并路径慢过并行路径 30% 以上，把默认值降到 4 即可 —— 一行配置的事。
+
+> 上表是**调用次数**的确定结论；**耗时**是估算，须由第 8 节的实测数据回填替换。
+
+### 0.5 明确不做的事
+
+- **不做「分类 + 转录 + 求解」三合一**：`SOLVER_ROUTING_CONFIG` 的两个分支
+  （`config.py:60-66`）**都是 `deepseek`**，迁移后题型分类对求解器路由的影响归零。
+  但求解**必须先知道分类结果**才能选 prompt（`core_pipeline.py:719-741` 分
+  视觉推理 / 文本两条分支）。把分类塞进求解的同一次调用，等于让模型自己决定用哪套
+  prompt —— 逻辑上不成立，且会牺牲 `VISUAL_REASONING` 的专用 prompt
+  （`prompts.py:200-217`）。
+  **正确做法是 T1（分类与转录合并），而不是三合一。**
+- **不动 `IMAGE_MAX_EDGE`**：DeepSeek 会把图缩到约 1300×1300 等效，本地调大收益有限，
+  且会让「OCR 质量变化」无法归因（见 C2）。
+- **不删 `zhipu` 分支**：回退成本极低，而 C5 的单点依赖风险是真实的。
+
+---
+
+## 1. 目标与验收标准
+
+**目标**
+把项目的全部视觉调用（分类 / 逐页 OCR / 合并调用 / 视觉推理 / 核对）从
+智谱 GLM-4.6V 系列切换到 DeepSeek `deepseek-flash`，且**识别质量不倒退**。
+
+**验收标准**
+
+| # | 标准 | 判定方式 |
+|---|---|---|
+| S1 | **OCR 不倒退**：同一组题图，新旧两版转录文本在「题目要素」（题干、选项、数字、公式）上无遗漏 | `python -m tools.vision_ab check -i <图或目录>` 人工比对 + 关键要素断言 |
+| S2 | **分类不倒退**：题型分类结果与旧版一致率 ≥ 90% | A/B 工具输出混淆矩阵 |
+| S3 | **思考模式确实关闭**：视觉调用的响应中 `reasoning_content` 恒为空，且 `usage` 无思考 token | 单测断言 payload 含 `thinking.type=disabled`；实测日志无 reasoning |
+| S4 | **不回归**：现有 pytest 全绿 | `pytest` |
+| S5 | **一键回退**：`VISION_PROVIDER=zhipu` 后全部行为与当前完全一致 | 单测 + 手工跑一次完整任务 |
+| S6 | **成本可见**：`accounts.COST_TABLE` 反映真实单价，额度扣减不再低估 | 单测校验单价 |
+| S7 | **配置自检**：缺少对应 provider 的密钥时，启动即报明确错误 | `tools/diag.py` 输出 + 单测 |
+| S8 | **多图合并生效**：8 图任务的视觉调用次数 = **1**（合并成功时） | `_emit_usage` 的 `calls` 字段 / 日志计数 |
+| S9 | **润色按需触发**：合并路径下（转录时已在 `CONT` 页去重）不发起润色调用 | `timings.polish == 0` 且无 polish 用量事件 |
+| S10 | **辅助链路思考已关**：`ask_for_analysis` 的响应中 `reasoning_content` 恒为空 | 单测断言 payload 含 `thinking.type=disabled` |
+| S11 | **转录已归档**：每个任务落盘 `<OCR_DIR>/<日期>/<task_id>.md`，页数与图片数一致 | 文件存在性 + 分页数断言 |
+| S12 | **无 LaTeX 静默损坏**：抽查 `\frac` / `\begin` / `\theta` 未被转义成控制字符 | 人工比对归档文本与原图 |
+
+---
+
+## 2. 事实基线（本方案的事实依据）
+
+### 2.1 模型事实（官方文档，2026-09-19）
+
+| 项 | 值 |
+|---|---|
+| **视觉模型名** | **`deepseek-flash`**（版本 = DeepSeek-V4.1-Flash） |
+| 不支持视觉的模型 | `deepseek-v4-pro` —— 官方价格表「图像理解」列明确标注**不支持** |
+| 已下线别名 | `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`（仍可调用，请求由 V4.1-Flash 承接） |
+| BASE URL (OpenAI 格式) | `https://api.deepseek.com` |
+| 上下文 / 输出上限 | 1M / 384K |
+| 并发限制 | 2500 |
+
+### 2.2 图片接口契约
+
+- 格式：`{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,<B64>"}}`
+  —— **与 `vision_client._build_user_content` 现有实现逐字相同**；
+- 支持格式：JPEG / PNG / GIF / WebP（按**文件实际内容**判断，不看 MIME）；
+- 限制：请求体 48 MiB；单图 base64 ≤32 MiB；单请求最多 **600** 张图；
+  单图单边最长 8192 px（**单请求 ≥15 张图时降为 4096 px**）；
+- **`detail` 字段**：`low` = 缩到 512×512；`high`/`original`/`auto` = 保留原图
+  （`auto` 当前等价于 `original`）。默认不传 = `auto`；
+- 图片**只能出现在 user 消息**中，system / assistant 携带图片返回 **400**。
+
+### 2.3 图片 token 换算（C2 的来源）
+
+> 每张图进模型前会被自动缩放：总像素 <约 544×544 的会被放大；
+> 更大的会被缩小到「约相当于 1300×1300 的图片」。
+> 因此每张图消耗的 token 数存在上限（**1024 个**）。
+
+对照现状：`IMAGE_MAX_EDGE=1600`，一张 1600×1233 的截图 ≈ 1.97 M 像素，
+会被 DeepSeek 再缩到 ≈1.69 M 像素（约 0.86 倍，长边约 1478 px）。
+**即：本地预处理做了 16 倍压缩之后，服务端还会再缩一刀。** 这是 C2。
+
+### 2.4 价格（元 / 百万 token，官方页）
+
+| 模型 | 输入(缓存命中) | 输入(未命中) | 输出 |
+|---|---|---|---|
+| `deepseek-flash` 空闲时段 | 0.02 | **1** | **4** |
+| `deepseek-flash` 高峰时段 | 0.04 | **2** | **8** |
+| `deepseek-v4-pro` 空闲 | 0.15 | 4.5 | 13.5 |
+
+> 高峰时段 = 北京时间周一至周五（不含法定节假日）9:00–12:00、14:00–18:00；
+> 其余时段（含周末与节假日全天）为空闲时段，价格为高峰的一半。
+
+**对照项目现状**（`webapp/accounts.py` 的 `COST_TABLE`）：
+
+```python
+"deepseek-flash": (0.5, 2.0),      # ← 错：实际 1–2 / 4–8，长期低估 2–4 倍
+"GLM-4.6V-FlashX": (0.5, 1.5),     # ← 与官方 GLM 定价一致
+"GLM-4.6V": (2.0, 6.0),
+```
+
+### 2.5 思考模式（C3 / C4 的来源）
+
+- 开关（OpenAI 格式）：`{"thinking": {"type": "enabled" | "disabled"}}`，
+  **必须放进 `extra_body`**（OpenAI SDK 不认这个顶层字段）；
+- **默认开启，且 effort 默认 high**；
+- 思考强度：`reasoning_effort="low"|"high"|"max"`（项目 `SOLVER_REASONING_EFFORT` 已在用）；
+- 思考内容经 `reasoning_content` 返回，与 `content` 同级；
+- **思考模式不支持 `temperature` / `presence_penalty` / `frequency_penalty`**
+  （传了不报错，但静默不生效）；
+- **`top_p` 仅在思考模式下生效，有效范围 0.95–1.0**（低于 0.95 按 0.95 处理）；
+  **非思考模式下 `top_p` 恒为 1.0，传入被忽略**。
+
+`solver_client._build_payload` 已经踩过并解决了这个坑（见其注释：
+「关闭思考必须**显式**下发 `thinking.type=disabled`。实测只把 `extra_body`
+整个省略时（旧行为）模型照样思考」）。**`vision_client` 当前完全没有这段逻辑 —— 这是迁移最大的坑。**
+
+### 2.6 现有耦合点清单（2026-09-19 全仓 grep 结果）
+
+| 位置 | 内容 | 迁移动作 |
+|---|---|---|
+| `problem_solver_agent/config.py:45-51` | `VISION_BASE_URL` / `VISION_CLASSIFY_MODEL` / `VISION_REASONING_MODEL` / `VISION_PROVIDER_NAME` | **改写**为 provider 表 |
+| `problem_solver_agent/vision_client.py:41-62` | `_get_vision_client()` 读死 `ZHIPU_API_KEY` + `VISION_BASE_URL` | **改写**为按 provider 选 |
+| `problem_solver_agent/vision_client.py:125-127` | payload 无 `thinking` 参数 | **新增** `extra_body` |
+| `problem_solver_agent/vision_client.py:399-405` | `top_p=0.8, temperature=0.7` | 改 provider 分支 |
+| `problem_solver_agent/verify.py:146` | `model or config.VISION_REASONING_MODEL` | 自动跟随，**无需改** |
+| `problem_solver_agent/pipeline.py:134` | 校验 `ZHIPU_API_KEY` | 改为校验 `VISION_API_KEY` |
+| `problem_solver_agent/main.py:27` | 校验 `ZHIPU_API_KEY` | 同上 |
+| `webapp/app.py:36` | 启动自检 `ZHIPU_API_KEY` | 同上 |
+| `webapp/routes.py:1058` | `vision_configured = bool(ZHIPU_API_KEY)` | 同上 |
+| `tools/diag.py:82` | 诊断输出 | 同上 |
+| `webapp/accounts.py:40-47` | `COST_TABLE` 单价错误 | **修正** |
+| `webapp/usage.py:27,102` | `TOKENS_PER_IMAGE=700`；写死 `GLM-4.6V-FlashX` | **修正** |
+| `.env.example` / `README.md` / `docs/*` | 文案 | 更新 |
+| `start_web.bat:32,40` | 依赖检查与提示 | 更新 |
+| `tests/test_accounts.py:250` / `test_verify.py:94` / `test_vision_client.py:118` | 硬编码 GLM 模型名 | 更新 |
+
+**本轮（多图提速复核）新发现的耦合点**：
+
+| 位置 | 内容 | 迁移动作 |
+|---|---|---|
+| `problem_solver_agent/config.py:196` | `OCR_PARALLEL_WORKERS=1`，逐页 OCR **串行** | 提到 3（T2） |
+| `problem_solver_agent/config.py:134-135` | `USE_COMBINED_VISION_CALL="auto"` + `COMBINED_VISION_MAX_IMAGES=1`，多图**连请求都不发** | 上限提到 8（T1） |
+| `problem_solver_agent/prompts.py:44-64` | 合并调用用 JSON 协议，LaTeX 反斜杠需转义 | 改为分隔符协议 + 新增 `LAYOUT`（T1/T3） |
+| `problem_solver_agent/vision_client.py:291-327, 333-366` | 合并调用闸门与 JSON 解析 | 新增分隔符解析 + 三级回退链 |
+| `problem_solver_agent/solver_client.py:359-389` | `ask_for_analysis` **未关思考**，`temperature=0.7` 静默失效 | 补 `extra_body`（T5） |
+| `problem_solver_agent/core_pipeline.py:787-805` | `_generate_filename` 每次任务一次 deepseek 调用，**不计时不计费** | 本地生成 + 补进 `StageTimings`/`UsageReport`（T4） |
+| `problem_solver_agent/core_pipeline.py:476-487` | `_cached_or_compute` **只包装合并路径**，并行路径不缓存 | 并行路径也缓存 |
+| `problem_solver_agent/pipeline.py:23-42` | `reclassify_problem_type` 是**死代码**（全仓无调用点、无测试覆盖） | 删除函数，但**先把 `ML_CODING` 标签上移**到分类 prompt（见下） |
+| `webapp/models.py:9-17` | `_TASK_COLUMNS` 幂等迁移字典 | 加 `problem_text` / `ocr_raw_text` / `vision_mode` 三列 |
+| `webapp/models.py:108-118` | `update_task` 的 `allowed` 字段白名单 | **必须同步**加上述三键，否则抛「未知的任务字段」 |
+
+**`ML_CODING` 已经是一条不可达的路径**（这条比删死代码本身更重要）：
+
+`reclassify_problem_type` 是 `ML_CODING` 的**唯一产生者**，而它从未被调用。
+同时 `CLASSIFICATION_PROMPT`（`prompts.py:19-22`）与 `classify_and_transcribe` 的
+`valid_types`（`vision_client.py:357-360`）**都不含这个标签**。于是以下全成了摆设：
+`map_final_type` 的 `ML_CODING` 分支、`determine_solver` / `build_prompt` 的分支、
+`prompts.PROMPT_TEMPLATES["ML_CODING"]`（`prompts.py:261-293`，一份很认真的
+面试讲解模板）、`core_pipeline._LONG_ANSWER_TYPES` 里的 `"ML_CODING"`、
+前端 `frontend/src/lib/problems.ts:10` 的展示映射。
+
+**做法**：把 `ML_CODING` 加进分类 prompt 的标签表和两处 `valid_types`，让视觉模型直接判
+—— 它读得到题面全文，比关键词匹配（`"numpy"` `"torch"` `"cnn"`…）准得多。然后才删除
+`reclassify_problem_type` 与 `ML_KEYWORDS` / `CODING_KEYWORDS`。
+**只删不复原是不划算的** —— 删掉一个已经写好的能力，比多一个标签的误判风险更亏。
+
+**前端无需改动**：`frontend/src` 只有 `output/AnswerCard.test.tsx` 里出现 `GLM-4.6V`
+（测试夹具），生产代码全部从 API 取模型名。
+
+**注意（迁移陷阱）**：`webapp/models.py` 的 `stage_cache` 按 `(task_id, stage)` 缓存，
+**不含模型名**。切换 provider 后，**已存在的任务**若走「重试」，会直接命中旧
+provider 写下的转录缓存。
+
+**解法见组 H**：把模型名写进缓存 payload 并在读取时比对（读取方 `_cached_or_compute`
+本来就要解 payload，加一次字符串比较即可），provider 切换后旧缓存**自动失效**，
+不需要改表结构、也不需要人工清理存量任务。若想更彻底，也可以在迁移时跑一次
+存量任务的 `clear_stage_cache`（`models.py:231-233`）。
+
+---
+
+## 3. 代码改动（按子系统分组）
+
+### 组 A：配置 provider 化 —— `problem_solver_agent/config.py`
+
+把「一组写死的视觉常量」升级为「一张 provider 表 + 派生常量」，**保持现有一切
+调用点不变**（`VISION_CLASSIFY_MODEL` 等名字继续存在）。
+
+```python
+# --- 2. 视觉模型配置（provider 化）---
+# 视觉层用哪家：deepseek（默认）/ zhipu。
+# 想一键回退到智谱，只需在 .env 里设 VISION_PROVIDER=zhipu，代码不用动。
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "deepseek").strip().lower()
+
+VISION_PROVIDER_CONFIG: dict[str, dict[str, str]] = {
+    "deepseek": {
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url":    "https://api.deepseek.com",   # 官方 OpenAI 兼容端点
+        "classify_model":  "deepseek-flash",         # 分类 + OCR
+        "reasoning_model": "deepseek-flash",         # 视觉推理 + 核对
+        "supports_thinking_control": "1",            # 特殊能力开关，见组 B
+    },
+    "zhipu": {
+        "api_key_env": "ZHIPU_API_KEY",
+        "base_url":    "https://open.bigmodel.cn/api/paas/v4/",
+        "classify_model":  "GLM-4.6V-FlashX",
+        "reasoning_model": "GLM-4.6V",
+        "supports_thinking_control": "0",
+    },
+}
+
+if VISION_PROVIDER not in VISION_PROVIDER_CONFIG:
+    VISION_PROVIDER = "deepseek"          # 未知值一律回落默认，不抛异常
+
+_VISION_CFG = VISION_PROVIDER_CONFIG[VISION_PROVIDER]
+
+VISION_BASE_URL         = _VISION_CFG["base_url"]
+VISION_CLASSIFY_MODEL   = _VISION_CFG["classify_model"]
+VISION_REASONING_MODEL  = _VISION_CFG["reasoning_model"]
+VISION_PROVIDER_NAME    = VISION_PROVIDER
+
+# 视觉层密钥统一出口：所有校验点（main/pipeline/app/routes/diag）改用它，
+# 这样切换 provider 时校验逻辑不用跟着改。
+def _vision_api_key() -> str | None:
+    return os.getenv(_VISION_CFG["api_key_env"])
+
+VISION_API_KEY = _vision_api_key()
+```
+
+同时新增两个可调项（**默认值保持当前行为**）：
+
+```python
+# 是否关闭视觉调用（分类/OCR/推理/核对）的思考模式。
+# DeepSeek 思考模式默认开启且 effort=high；不关掉会吃光 max_tokens 导致正文为空。
+# 详见 docs/plans/deepseek_vision_migration.md 的 C3。
+VISION_DISABLE_THINKING = os.getenv("VISION_DISABLE_THINKING", "true").lower() in ("true", "1", "yes")
+# 视觉调用的输出上限。DeepSeek 上限 384K；从 8192 提高可容纳更长转录，
+# 但仍建议先用 8192 跑 A/B，避免把成本一次性抬高。
+VISION_MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "8192"))
+```
+
+> **为什么不直接复用 `solver_client.get_client("deepseek")`**：两者超时策略不同
+> （求解 `API_TIMEOUT=600s` vs 视觉 `VISION_TIMEOUT=120s`），共用会改变视觉的
+> 超时行为。共用 **key / base_url 常量**即可，client 实例各建各的。
+
+### 组 B：视觉客户端 —— `problem_solver_agent/vision_client.py`
+
+**B1. 客户端按 provider 初始化**（替换 `_get_vision_client`）：
+
+```python
+_vision_clients: dict[str, OpenAI] = {}   # provider -> client
+
+def _get_vision_client(provider: str | None = None) -> OpenAI | None:
+```
+- 密钥从 `config.VISION_PROVIDER_CONFIG[provider]["api_key_env"]` 对应环境变量取；
+- 缺失时日志指明**具体是哪个环境变量**（现有文案写死 `ZHIPU_API_KEY`，必须改）；
+- `timeout=config.VISION_TIMEOUT`、`max_retries=0` 保持不变。
+
+**B2. payload 增加思考控制（最关键的一处）**：
+
+```python
+payload: VisionCompletionPayload = {
+    "model": model_name, "messages": messages,
+    "max_tokens": config.VISION_MAX_TOKENS, "stream": stream,
+}
+# DeepSeek 思考模式默认开启，且 effort 默认 high。分类/OCR 这类短任务
+# 一旦开思考，思考过程会把 max_tokens 吃光、正文为空 —— 与 solver 踩过的
+# 是同一个坑（见 config.py 的「思考模式：首选与按需升级」）。
+if config.VISION_PROVIDER_NAME == "deepseek" and config.VISION_DISABLE_THINKING:
+    payload["extra_body"] = {"thinking": {"type": "disabled"}}
+```
+
+**B3. 视觉推理参数按 provider 分支**（`solve_visual_reasoning_problem`）：
+
+```python
+extra = (
+    # DeepSeek：非思考模式下 temperature/top_p 均不生效，直接不传，
+    # 避免"以为设了 0.7 其实没用"的错觉。
+    {"extra_body": {"thinking": {"type": "disabled"}}}
+    if config.VISION_PROVIDER_NAME == "deepseek"
+    else {"top_p": 0.8, "temperature": 0.7}   # 智谱保持原样
+)
+```
+
+**B4. 保持 `max_tokens: 8192` 的截断告警**（现有 `finish_reason == "length"` 日志）
+—— 迁移后这是判断「转录被截断」的唯一信号，务必保留。
+
+### 组 C：修正计费 —— `webapp/accounts.py` + `webapp/usage.py`
+
+```python
+COST_TABLE: dict[str, tuple[float, float]] = {
+    # DeepSeek：按**高峰时段**价格计（宁可高估，额度系统的目的是限制滥用）。
+    # 官方单价：空闲 1/4，高峰 2/8；缓存命中仅 0.02–0.04。
+    "deepseek-flash": (2.0, 8.0),
+    "deepseek-v4-pro": (9.0, 27.0),
+    "GLM-4.6V-FlashX": (0.5, 1.5),   # 仅 VISION_PROVIDER=zhipu 时用到，保留
+    "GLM-4.6V": (2.0, 6.0),
+    "default": (2.0, 8.0),
+}
+```
+
+`webapp/usage.py`：
+- `TOKENS_PER_IMAGE: 700 → 1024`（DeepSeek 官方给出的每图 token **上限**，保守取值）；
+- `estimate_task_cost` 里写死的 `"GLM-4.6V-FlashX"` 改为读取视觉层当前模型：
+  ```python
+  from problem_solver_agent import config as core_config
+  estimate_cost(core_config.VISION_CLASSIFY_MODEL, vision_input, 0)
+  ```
+
+### 组 D：密钥校验链统一
+
+把以下各处从「检查 `ZHIPU_API_KEY`」改为「检查 `config.VISION_API_KEY`」，
+并让错误信息带上当前 provider 与所需环境变量名：
+
+| 文件:行 | 改法 |
+|---|---|
+| `problem_solver_agent/pipeline.py:134` | 校验 `config.VISION_API_KEY`；文案含 `VISION_PROVIDER` 与 `api_key_env` |
+| `problem_solver_agent/main.py:27` | 同上（日志文案同步改） |
+| `webapp/app.py:36` | 同上（`problems.append` 文案） |
+| `webapp/routes.py:1058` | `"vision_configured": bool(core_config.VISION_API_KEY)` |
+| `tools/diag.py:82` | 输出当前 `VISION_PROVIDER` + 对应密钥是否已配置 |
+
+### 组 E：配置自检与 CLI
+
+- `tools/diag.py`：新增一行输出「视觉层：provider=deepseek，模型=deepseek-flash，
+  思考=关闭，密钥=已配置」；
+- **新增 `tools/vision_ab.py`**（见组 F），作为 S1/S2 的判定工具；
+- `.env.example`：
+  ```env
+  # 视觉层供应商：deepseek（默认）/ zhipu
+  # 设为 zhipu 可一键回退到 GLM-4.6V 系列
+  VISION_PROVIDER=deepseek
+  # DeepSeek 密钥：视觉 + 求解共用（VISION_PROVIDER=deepseek 时必填）
+  DEEPSEEK_API_KEY=
+  # 智谱密钥：仅在 VISION_PROVIDER=zhipu 时需要
+  # ZHIPU_API_KEY=
+  ```
+- `start_web.bat`：依赖检查从「必须有 ZHIPU_API_KEY」改为按 provider 判定。
+
+### 组 F：新增 A/B 评测工具 `tools/vision_ab.py`
+
+**这是本方案的核心闸门**——没有它，C1/C2 的代价无法量化，「换不换」只能靠信仰。
+设计复用 `watermark_removal.md` 里 `eval` 子命令的思路：
+
+```powershell
+# 用同一组题图，分别走两个 provider 的 OCR，输出差异报告
+python -m tools.vision_ab check -i <图或目录>
+
+# 只跑某一个 provider
+python -m tools.vision_ab check -i <目录> --provider deepseek
+```
+
+输出（写入 `_probe/vision_ab/<时间戳>/report.md`）：
+
+| 指标 | 说明 |
+|---|---|
+| 逐页转录全文（两版并排） | 人工比对用 |
+| 字符数差 / 数字与公式要素差 | 自动断言：题干数字、选项、公式片段不应丢失 |
+| 题型分类一致率 | 混淆矩阵 |
+| 耗时 / 估算费用 | 直接对应 C1 |
+| 被 `max_tokens` 截断的页数 | `finish_reason == "length"` 计数 |
+
+实现要点：
+- **不改动生产代码路径**：通过 `VISION_PROVIDER` 环境变量在子进程里跑两遍，
+  或直接把 `provider` 参数透传进 `vision_client`（组 B 已让 `_get_vision_client(provider=...)` 支持）；
+- 结果 JSON 落盘，便于回归对比。
+
+### 组 G：测试与文档
+
+**新增 `tests/test_vision_provider.py`**
+
+1. `VISION_PROVIDER=deepseek` 时，构造的 payload 含
+   `extra_body == {"thinking": {"type": "disabled"}}`（S3，**回归保护**）；
+2. `VISION_PROVIDER=zhipu` 时 payload **不含** `extra_body`，且
+   `top_p`/`temperature` 仍在（S5）；
+3. `VISION_PROVIDER=zhipu` + `VISION_CLASSIFY_MODEL` == `"GLM-4.6V-FlashX"`
+   （证明回退后与现状逐字节一致）；
+4. 未知 `VISION_PROVIDER` 值 → 回落 `deepseek`，不抛异常；
+5. 密钥缺失时 `_get_vision_client()` 返回 `None` 且日志含**正确的环境变量名**。
+
+**更新既有用例**
+
+| 文件 | 改法 |
+|---|---|
+| `tests/test_vision_client.py:118` | 模型名参数化（不必硬编码 GLM） |
+| `tests/test_verify.py:94` | 同上；或显式传 `model=` 保持用例独立于 provider |
+| `tests/test_accounts.py:250` | COST_TABLE 修正后更新断言；新增 `deepseek-flash` 单价断言（S6） |
+| `tests/test_core_pipeline.py` | 补一条「provider=zhipu 时全流程与基线一致」的回退用例 |
+
+**文档**：`README.md`（第 44 行密钥表、第 234-235 行模型示例）、
+`docs/USER_GUIDE.md`（第 45/48/243/262/352/422/593 行）、
+`docs/DEPLOY.md`（第 59/351 行）、`docs/API.md`（第 240/857-867 行的价目表）、
+`.claude/CLAUDE.md`（「Provider 系统」章节）。
+
+### 组 H：多图提速（设计详见 0.4 节）
+
+| 文件:行 | 改动 |
+|---|---|
+| `config.py:134-135` | `COMBINED_VISION_MAX_IMAGES` 1 → **8**；`USE_COMBINED_VISION_CALL` 保持 `auto`（语义变为「≤8 张就合并」） |
+| `config.py:196` | `OCR_PARALLEL_WORKERS` 1 → **4**（只影响回退路径）。顺带补上 `os.getenv` 覆盖 —— 它现在是裸常量 |
+| `config.py:45-51` | 新增 `VISION_MAX_TOKENS`(32768) / `VISION_COMBINED_TIMEOUT`(300) / `VISION_INLINE_MERGE` / `FILENAME_MODE` / `AUX_TIMEOUT`(300) |
+| `prompts.py:44-64` | 重写 `CLASSIFY_AND_TRANSCRIBE_PROMPT` 为 `<<<PAGE n\|NEW/CONT>>>` 协议；**保留**原 JSON 版作为第二顺位回退 |
+| `prompts.py:71-101` | `TEXT_MERGE_AND_POLISH_PROMPT` 增加「场景判断」段（多题时禁止跨片段删除，见 T3） |
+| `vision_client.py:126` | `max_tokens` 从**写死的 8192** 改为 `config.VISION_MAX_TOKENS` —— 不改这里，384K 输出上限根本用不上 |
+| `vision_client.py:259-288` | 新增 `parse_page_protocol()` / `refill_pages()` / `_collect_stream()` |
+| `vision_client.py:310-366` | `classify_and_transcribe()` 改为三级回退链，**部分成功即采用**（不再整批返回 `None`） |
+| `vision_client.py:132-172` | 流式下需在收集器里**补一层重试**（现有循环只覆盖 `create()` 抛出的异常） |
+| `solver_client.py:359-389` | `ask_for_analysis` 补 `extra_body={"thinking": {"type": "disabled"}}`（T5） |
+| `solver_client.py:371` | 硬编码 `timeout=120.0` 改为 `config.AUX_TIMEOUT`（T5） |
+| `core_pipeline.py:787-805` | `_generate_filename` 双模式：优先用求解正文首行的 `FILE:` 建议，其次 `utils.extract_question_numbers` 本地生成，最后才调模型；耗时与用量补进 `StageTimings`/`UsageReport`（T4） |
+| `core_pipeline.py:526-574` | `_run_solve_attempt` 的流式循环剥掉首行 `FILE:` 建议（取消检查、`_should_escalate`、答案卡抽取都不受影响） |
+| `core_pipeline.py:196-241` | 抽出 `_transcribe()`：合并/并行两条路径**统一包进一次 `_cached_or_compute`** |
+| `core_pipeline.py:489-524` | `_textualize` 增加内联分支：`vision_mode == "combined"` 且无失败页 → `join_by_continuation()` 本地拼接、跳过模型调用 |
+| `problem_solver_agent/pipeline.py:23-42` | 删除死代码 `reclassify_problem_type`（连带 `ML_KEYWORDS` / `CODING_KEYWORDS`） |
+
+> **`_cached_or_compute` 现状比想象中糟**：它只包了 `classify_and_transcribe` 一个调用，
+> 而这个调用在 `auto` + 上限 1 的配置下对多图**直接返回 `None`**。结果就是
+> **缓存几乎永远写不进东西，而实际走的并行路径 100% 不缓存** —— 一次 8 图任务在求解阶段
+> 失败后点「重试」，会重新付 9 次视觉调用的钱。这是投入产出比最高的一处修复。
+>
+> 同时把 **模型名存进缓存 payload 并在读取时比对** —— provider 切换后旧缓存自动失效，
+> 一举解决本文档 2.6 节末尾提到的「迁移后命中旧 provider 转录缓存」的坑，
+> 且不需要改 `stage_cache` 的表结构。
+
+> **测试影响**：`tests/test_vision_client.py:28-67` 的合并调用用例都**显式
+> monkeypatch** 了 `USE_COMBINED_VISION_CALL` / `COMBINED_VISION_MAX_IMAGES`，
+> 因此改默认值**不会**破坏它们。但用例 `test_multi_image_group_skips_the_combined_request`
+> 的语义是「多图应当跳过合并」，需按新默认值改写为「多图应当合并」，
+> 并新增分隔符协议的解析用例（含 LaTeX 反斜杠、页数不匹配、缺 `LAYOUT` 字段）。
+
+### 组 I：转录双层落盘
+
+现状覆盖度：
+
+| 用途 | 现状 | 缺口 |
+|---|---|---|
+| 解答文件里带上题目 | **已有**：`# 题目文本` 小节（`_write_header`，`core_pipeline.py:779-782`） | `VISUAL_REASONING` 任务（`transcribed_text == "N/A"`）不写 |
+| 归档 OCR 原始结果 | **没有**：`pages` 列表仅在内存，并行路径用完即丢 | 需新增 |
+| 历史可搜索可复读 | 部分：`stage_cache` 存了 `{"problem_type","pages"}`，但**仅合并路径**写入 | 需补并行路径 |
+
+**设计**（两层都是**零模型成本** —— 文本已经在内存里）：
+
+```
+<OCR_DIR>/<YYYY-MM-DD>/<task_id>.md   # 第 1 层：原始逐页 OCR（新增）
+{解答文件}.md                          # 第 2 层：求解用的最终文本（维持现状）
+```
+
+`config.py` 新增 `OCR_DIR = ROOT_DIR / "ocr"`，与 `SOLUTION_DIR` / `PROCESSED_DIR`
+同级。**用独立目录而不是塞进 `webapp/solutions`** 有三个理由：
+
+1. Web 与 CLI 自动共用同一份，不需要像解答文件那样再 `_sync_to_root_solutions()` 复制一遍；
+2. 能直接被手机端 Samba 看到；
+3. **关键**：**绝不能把原始 OCR 塞进解答文件的 `# 题目文本` 小节** ——
+   `webapp/pipeline.extract_problem_text`（`:227-249`）和前端
+   `solutionText.ts` 的 `stripPreamble` 都是「从 `# 题目文本` 切到下一个 `---`」，
+   塞进去会被当成题目文本喂给换路重解，还会让答案卡抽取错位。
+
+**用 `task_id` 而不是最终文件名做 stem**：转录在第 1 阶段就产生了，而文件名在第 5 阶段
+才由求解器给出；用 `task_id` 保证**中途取消/求解失败也留下了归档**，且与
+`webapp/uploads/<task_id>/` 天然可配对。
+
+归档格式：
+
+```markdown
+---
+task_id: 20260919-a1b2c3
+created: 2026-09-19 22:10:03
+vision_provider: deepseek
+vision_model: deepseek-flash
+vision_mode: combined          # combined | parallel
+images: [IMG_220101.jpg, IMG_220104.jpg]
+pages: 8
+failed_pages: []
+---
+
+## 第 1 页 — IMG_220101.jpg — NEW
+
+（原始转录逐字）
+
+## 第 2 页 — IMG_220104.jpg — CONT
+
+（原始转录逐字；CONT 页已按模型判断省略与上一页重复的内容）
+
+## 第 3 页 — IMG_220106.jpg — 识别失败
+
+> 该页 OCR 返回空内容；该页已由 refill_pages 补做 / 或求解阶段回退为原图直读。
+```
+
+**写入时机是视觉阶段结束后立刻写**（`run()` 的 `:240` 附近），而不是成功收尾时写 ——
+这样取消与求解失败也保住了 OCR 归档。
+
+**顺带补一个真实缺口**：`_write_header`（`core_pipeline.py:753-785`）的 frontmatter 里
+加两行 `task_id:` 与 `ocr_archive:`。目前解答文件名不含 `task_id`，导致
+「解答文件 ↔ tasks 表 ↔ uploads 目录」三者无法互相对照。前端
+`solutionText.ts` 的 `FRONTMATTER_KEYS` 白名单只要块内出现 `problem_type:` 就会匹配，
+加新键不影响剥离逻辑。
+
+**历史搜索**：光有文件不够 —— 搜索需要按用户/时间过滤，文件 grep 做不到。
+给 `tasks` 表加三列，走既有幂等迁移（`webapp/models.py:9-17` 的 `_TASK_COLUMNS`
+加行，`_migrate_tasks:74-83` 自动补列）：
+
+```python
+"problem_text": "TEXT DEFAULT ''",   # 送入求解的题目文本（润色后）
+"ocr_raw_text": "TEXT DEFAULT ''",   # 逐页原始 OCR 拼接（便于命中被润色改写的关键词）
+"vision_mode":  "TEXT DEFAULT ''",   # combined | parallel，用于统计两条路径的耗时
+```
+
+> **两个容易漏的点**：
+> ① `update_task` 的 `allowed` 集合（`models.py:108-118`）**必须同步加这三个键**，
+> 否则会抛「未知的任务字段」；
+> ② **不要一上来就上 FTS5** —— `TASK_RETENTION_COUNT=100`，`LIKE '%kw%'`
+> 在百行表上是微秒级；而 FTS5 默认分词器对中文无效，必须 `tokenize='trigram'`，
+> 还多一张虚表和一套同步逻辑，收益为零。留一句注释说明「表涨到万级时再换」即可。
+
+---
+
+## 4. 数据流（迁移后）
+
+```
+截图文件 ──> vision_client._build_user_content
+              └─> image_prep.prepare_for_api         (EXIF 校正 → 缩放 1600 → JPEG q80)
+                    └─> data_uri "data:image/jpeg;base64,..."
+                          └─> [组 B] extra_body={"thinking":{"type":"disabled"}}
+                                └─> POST https://api.deepseek.com/chat/completions
+                                      model="deepseek-flash"
+                                      └─> 服务端二次缩放（≈1300×1300 等效，≤1024 tok/图）
+                                            └─> 转录文本 / 题型
+                                                  └─> solver_client (同一个模型 deepseek-flash)
+                                                        └─> 流式求解（thinking 按现有两段式策略）
+```
+
+**关键观察**：迁移后**视觉与求解是同一个模型**。这带来 prompt 风格与错误处理的统一，
+但真实代价是 **C5 单点依赖**（一个 provider 挂了全流程挂）与 **C6 成本归因**，
+**不是并发** —— 项目 `MAX_CONCURRENT_TASKS=2`、OCR 串行，对比 DeepSeek 的 2500
+并发上限差三个数量级，并发从来不是约束。
+
+**8 图任务的完整数据流（T1/T5 生效后）**：
+
+```
+截图 ×8 ──> vision_client._build_user_content
+              └─> image_prep.prepare_for_api      (EXIF 校正 → 缩放 1600 → JPEG q80)
+                    └─> 8 个 data_uri
+                          └─> [组 B] extra_body={"thinking":{"type":"disabled"}}
+                                └─> POST https://api.deepseek.com/chat/completions
+                                      model="deepseek-flash"  ← 一次请求带 8 张图
+                                      └─> 服务端二次缩放（每图 ≈1300×1300 等效，≤1024 tok）
+                                            └─> 分隔符协议：PROBLEM_TYPE / LAYOUT / 8 页转录
+                                                  ├─> [组 I] {task_id}_pages.json 落盘
+                                                  ├─> LAYOUT=independent → 本地拼接，跳过润色
+                                                  │   LAYOUT=paged       → 保留润色调用
+                                                  └─> solver_client.stream_solve
+                                                        （thinking 按现有两段式策略）
+                                                        └─> 答案卡 + 命名归档
+```
+
+---
+
+## 5. 边界情况与失败模式
+
+| 情况 | 处理 |
+|---|---|
+| **思考模式没关掉** | 视觉 payload 强制带 `thinking.type=disabled`；单测断言（S3） |
+| **转录被 `max_tokens` 截断** | 保留 `finish_reason == "length"` 告警；A/B 报告统计截断页数；必要时上调 `VISION_MAX_TOKENS` |
+| **小字/公式 OCR 退化（C2）** | A/B 必须先跑；若退化，把 `IMAGE_MAX_EDGE` 提到 2048 重测 —— 注意这**不是**万能解，服务端仍会缩到 1300 等效，实际增益有限 |
+| **`top_p`/`temperature` 静默失效** | 组 B3：DeepSeek 分支不传这俩参数，避免「设了但没用」的错觉 |
+| **单请求图片数超限** | DeepSeek 上限 600 张；项目分组窗口通常个位数，无风险。仍建议在 `_call_vision_api` 加一句断言级别的日志 |
+| **单图超 32 MiB** | 预处理已压到 ~187 KB，无风险 |
+| **system/assistant 消息带图 → 400** | `_build_user_content` 只产出 user 消息，无风险 |
+| **切换后旧任务命中旧 provider 的 stage_cache** | 迁移时清理存量任务的 `stage_cache`（`webapp/models.py:clear_stage_cache`），或在缓存键里加 provider |
+| **`ZHIPU_API_KEY` 残留但已不用** | 保留 `.env` 里的项不报错；`.env.example` 里注释掉 |
+| **某个 provider 返回 4xx 且不可重试** | `_is_retryable` 现有逻辑已覆盖（429/5xx 可重试），不变 |
+| **成本估算偏差** | COST_TABLE 按高峰价计（保守）；`estimate_task_cost` 跟随 `VISION_CLASSIFY_MODEL` |
+| **PAGE 协议解析失败** | 三级回退：PAGE 协议 → JSON → 并行路径；每次回退都在日志里记明原因，便于统计各协议的实际成功率 |
+| **8 页转录中某一页失败** | **不再整批作废**：按页定位失败下标，走 `refill_pages` 单页补做（补 k 页 = k 次调用）。只有 `<<<TYPE>>>` 也缺失时才补一次分类 |
+| **模型声明的页码跳号 / 重排** | 按声明的 `n` 定位而非出现顺序 —— 跳号能被直接发现并记入 `failed_pages`，不会静默错位 |
+| **`NEW`/`CONT` 标记缺失或非法** | 保守当作 `NEW`（不做去重、不做跨页合并），**保留**润色 —— 宁可多花一次调用，不可丢掉一道题的开头 |
+| **模型在 CONT 页多删了内容** | `VISION_INLINE_MERGE=false` 一键回退到「合并调用 + 独立润色」；因为原始 OCR 已按页归档，可直接比对定位 |
+| **LaTeX 静默损坏**（`\frac`→`␌rac`） | PAGE 协议下不再经过 JSON 转义层，此类损坏从根上消除；验收时**必须抽查 `\frac` / `\begin` / `\theta`** |
+| **流式迭代中途断网** | 现有重试循环不覆盖迭代期异常，须在 `_collect_stream()` 内补一层重试；仍失败则回退并行路径 |
+| **合并调用撞超时** | `VISION_COMBINED_TIMEOUT`（默认 300 s）须独立于逐页 OCR 的 `VISION_TIMEOUT`（120 s）—— 两者输出量差一个数量级，不能共用一个值 |
+| **并行度提高抢占本机 CPU** | `OCR_PARALLEL_WORKERS=4` 的约束不是 API 并发（2500 远够），而是 `image_prep` 的 JPEG 解码/缩放。好在分类调用已预热内存缓存，OCR 阶段基本不再重编码 |
+| **并行度提高触发 429** | `_is_retryable` 已覆盖 429 并指数退避（`vision_client.py:65-72`）；DeepSeek 并发上限 2500，本项目远未触及 |
+| **迁移后 stage_cache 命中旧 provider 的转录** | 缓存键是 `(task_id, stage)`，不含 provider。迁移时清理存量任务的 `stage_cache`，或把 provider 并入缓存键 |
+
+---
+
+## 6. 实施顺序
+
+> 顺序刻意设计为「**先能测，再能切，最后才清理**」。任何一步失败都能停在这。
+
+1. **组 F（A/B 工具）先做** —— 它只是读取，不改生产路径；
+2. **T5（`ask_for_analysis` 关思考 + 超时可配）** —— 独立于迁移、改动小、立刻见效，
+   同时为第 3 步的"关闭思考"提供一次实证；
+3. **底座（组 A/B）** —— provider 化 + 关思考 + `VISION_MAX_TOKENS` + 流式收集器。
+   此时 `VISION_PROVIDER=zhipu` 应仍与现状**逐字节一致**，用一条单测锁住；
+4. **跑 A/B**：`python -m tools.vision_ab check -i <真实题图目录>`，
+   把结果写进本文档第 8 节；**若 S1/S2 不达标，到此为止，不继续**；
+5. **切默认值**：`VISION_PROVIDER` 默认值由 `zhipu` 改为 `deepseek`；
+6. **协议（PAGE 标记）** —— `parse_page_protocol` + `refill_pages` + 单测。这一步
+   **不改任何调用时序**，纯粹把解析器换成可救的。**先单测覆盖再动别的**：
+   LaTeX 反斜杠、截断、缺页、跳号、无 `<<<END>>>`、有客套话前缀。
+   **顺序不能与第 7 步对调** —— 先开闸门后换协议，会重演 2026-09-13 那次「12 次成功 1 次」；
+7. **打开闸门** —— `COMBINED_VISION_MAX_IMAGES=8`；同时把 `_transcribe()` 的两条路径
+   统一进缓存、`OCR_PARALLEL_WORKERS=4`。**跑一次真实 8 图对照**，据此定
+   `=8` 还是 `=4`（见 0.4 节末的判据）；
+8. **内联润色** —— `VISION_INLINE_MERGE` + 润色 prompt 的「场景判断」段；
+9. **OCR 归档** —— `OCR_DIR` + `_write_ocr_archive` + frontmatter 的
+   `task_id`/`ocr_archive`；
+10. **文件名内联** —— `FILENAME_MODE` + `_run_solve_attempt` 剥首行；
+11. **落库与搜索** —— `tasks` 三列 + `update_task` 白名单 + `search_tasks`；
+12. **组 C/D/E**：计费修正、校验链统一、`diag`/`bat`/`.env.example`；
+13. **组 G**：测试与文档；
+14. **清理**：`ML_CODING` 标签上移 → 删 `reclassify_problem_type` 与两个 KEYWORDS；
+    评估是否把 `zhipu` 分支保留为长期回退选项（**建议保留** —— 成本极低，
+    而 C5 的单点依赖风险是真实的）。
+
+---
+
+## 7. 验证方式（可复现）
+
+```powershell
+# 0) 准备：确认密钥
+#    .env 里 DEEPSEEK_API_KEY 已配置（VISION_PROVIDER=deepseek 时）
+
+# 1) 配置自检
+python -m tools.diag
+#    期望看到：视觉层 provider=deepseek 模型=deepseek-flash 思考=关闭 密钥=已配置
+
+# 2) ★ A/B：同一组图，两个 provider 各跑一遍 OCR
+python -m tools.vision_ab check -i "D:\Users\WZW\Pictures\Screenshots\test_images"
+#    产出 _probe/vision_ab/<ts>/report.md —— 这是 S1/S2 的唯一判据
+
+# 3) 回退验证：切成智谱，确认行为与迁移前一致
+$env:VISION_PROVIDER="zhipu"; pytest tests/test_vision_provider.py -v
+
+# 4) 回归
+pytest
+cd frontend; npm test
+```
+
+**手工端到端（必须做一次）**
+
+1. 启动 Web（`python run_web.py`），上传一组多页题图；
+2. 在「设置 → 运行状态」确认模型名显示为 `deepseek-flash`；
+3. 日志中确认**没有** `reasoning_content`（思考确实关了）；
+4. 打开答案卡，人工比对转录文本与原图；
+5. 走一次「核对」功能，确认 `verify` 也走的是新模型；
+6. **8 图场景（本轮新增的核心验收）**：一个分组窗口内放 8 张互不相关的题图，断言：
+   - 日志里**视觉调用只有 1 次**（S8），且无 `finish_reason=length` 告警
+   - `timings_json` 的 `polish` 为 **0**（S9）
+   - `<OCR_DIR>/<日期>/<task_id>.md` 落盘，且分页数 = 8（S11）
+   - 历史页能看到该任务的题目文本（`tasks.problem_text` 已写入）
+   - **抽查 LaTeX：`\frac` / `\begin` / `\theta` 没有被转义成控制字符**（S12）——
+     这是 JSON 协议下最难发现的一类损坏，换协议后应彻底消失
+7. **同一题多页场景（反向用例，不能被跳过）**：放 3 张连续翻页的同一道题，
+   确认标记为 `CONT`、**润色未被跳过**（或 `CONT` 页确实做了去重）——
+   这是 T3 分流里不能被误跳的分支。
+
+---
+
+## 8. 迁移前必须回填的实测数据
+
+> **本节在实施第 3 步后回填。在数据为空之前，本方案不构成"可以切换"的结论。**
+
+| 指标 | GLM-4.6V-FlashX | deepseek-flash | 判定 |
+|---|---|---|---|
+| test 图组转录字符数 | 待测 | 待测 | — |
+| 题干/选项/公式要素缺失数 | 待测 | 待测 | **必须为 0** |
+| 题型分类一致率 | 基线 | 待测 | ≥ 90% |
+| 单图 OCR 耗时 | 待测（基线 3.5–16.3 s，见 `watermark_removal.md`） | 待测 | 不显著变慢 |
+| 单图估算费用（元） | 待测 | 待测 | 记录即可 |
+| `finish_reason=length` 页数 | 待测 | 待测 | **必须为 0** |
+| **8 图任务：视觉调用次数** | 9 | 待测 | **1**（S8） |
+| **8 图任务：API 调用总数** | 12 | 待测 | **2** |
+| **8 图任务：端到端延迟** | 待测 | 待测 | 显著下降（0.4 节估算 90–280 s → 40–90 s） |
+| **8 图任务：润色是否触发** | 必触发 | 待测 | 合并路径下为 **0**（S9） |
+| **8 图任务：视觉调用次数** | 9 | 待测 | **1**（S8） |
+| **8 图任务：API 调用总数** | 12 | 待测 | **2** |
+| **8 图任务：端到端延迟** | 待测 | 待测 | 显著下降（见 0.4 节末的诚实版说明） |
+| **PAGE 协议成功率** | — | 待测 | 记录即可（回退到 JSON / 并行路径的比例） |
+| **`refill_pages` 触发次数** | — | 待测 | 记录即可（每任务平均补做几页） |
+| **LaTeX 静默损坏** | 待测 | 待测 | **必须为 0**（S12） |
+
+---
+
+## 9. 假设与未决问题
+
+**假设**
+
+- **A1**：`deepseek-flash` 的视觉能力在本题库（中文数学题截图）上**可用但不保证优于**
+  `GLM-4.6V-FlashX` —— 故以 A/B 结果为准，本文档不预设结论；
+- **A2**：DeepSeek 已下线 `deepseek-v4-flash-vision-exp`，`deepseek-flash` 是其正式承接者，
+  接口契约长期稳定；
+- **A3**：`IMAGE_MAX_EDGE=1600` 与 `IMAGE_JPEG_QUALITY=80` 保持不变（避免一次改两个变量，
+  无法归因）；
+- **A4**：迁移不涉及 GPU / 本地模型，仍然是纯 API 方案；
+- **A5**：`VISION_PROVIDER=zhipu` 的回退分支长期保留；
+- **A6**：视觉模型在合并调用里能可靠区分「同一题的多页」与「多道独立的题」
+  （`LAYOUT` 字段）—— 这一条**必须由 A/B 验证**，判错的代价是丢掉本该做的去重；
+- **A7**：多图合并调用的输出在 384K 之内（8 页转录约 3–10K token，余量充足）；
+- **A8**：`OCR_PARALLEL_WORKERS` 只影响回退路径（合并调用成功时是单请求，不走线程池）。
+
+**未决问题（实施前需要用户拍板）**
+
+| # | 问题 | 影响 |
+|---|---|---|
+| Q1 | 如果 A/B 显示 OCR 退化，接受吗？ | 决定是「切换」还是「终止迁移」 |
+| Q2 | 成本上涨是否可接受？（OCR 输入贵 2–4 倍） | 决定是否需要保留混合方案：**OCR 用智谱 FlashX，推理/核对用 DeepSeek** |
+| Q3 | 既然隐私是真实诉求，要不要**另起**一个「本地视觉模型」方案？ | 本迁移不解决隐私；这是唯一能解决的路径 |
+| Q4 | 是否接受 C5 的**单点依赖**（DeepSeek 挂了全流程挂）？ | 决定 `zhipu` 回退分支是「长期保留」还是「临时过渡」 |
+| Q5 | 多图合并调用是「全有或全无」，失败即整体回退到 9 次串行调用。这个失败率可接受吗？ | 若偏高，需要把 `COMBINED_VISION_MAX_IMAGES` 调低（如 4），或改成「分批合并」 |
+
+---
+
+## 10. 隐私事实（独立章节，供决策参考）
+
+> 本节与迁移技术方案无关，但它是本次需求的**起点**，必须留在文档里。
+
+1. **Base64 不是加密。** 它是把二进制转成 ASCII 的编码方案，无密钥、可逆、
+   任何中间方一秒可解。发送 `data:image/jpeg;base64,...` 等价于发送原图本身。
+2. **厂商能看到完整原图。** 解码发生在服务端，发生在模型推理之前。
+   模型看到的是像素，不是编码字符串。
+3. **换供应商 ≠ 保护隐私。** 本次迁移把接收方从智谱换成 DeepSeek，
+   暴露面**不变**。若隐私是硬需求，唯一解是本地推理（见 0.1 表格）。
+4. **已做到的（既有能力）**：`image_prep.py` 的 EXIF 校正丢弃元数据
+   （GPS / 设备 / 时间）—— 保护元数据，不保护图像内容。
+5. **建议的补充手段**（若隐私是硬需求）：在 `image_prep.prepare_image_bytes`
+   的 EXIF 校正之后、缩放之前，插入一步**本机敏感区域打码**
+   （姓名 / 手机号 / 学号 / 身份证区域），复用 `watermark.py` 已验证的
+   「掩膜 + 闸门 + 失败即回退原图」模式。这是一个**独立的、与本迁移正交**的方案。
