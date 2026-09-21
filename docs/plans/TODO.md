@@ -145,7 +145,11 @@ cd frontend; npx tsc -b; npx eslint . --max-warnings=0; npx vitest run   # 117 p
 
 ### 任务 B：用量口径从"估算"升级为"精确"（约一天）
 
-- **现状**：`webapp/usage.py` 按"页数 × 700 + 输出字符 × 0.6"估算 token；视觉/分类/OCR 阶段 `output_chars` 记 0
+- **现状**：`webapp/usage.py` 按"页数 × 1024 + 输出字符 × 0.6"估算 token
+  （2026-09-20 视觉层迁移把每图折算从 700 提到 1024 —— DeepSeek 官方给出的每图 token
+  上限，保守取值）；视觉 / 分类 / OCR 阶段 `output_chars` 记 0。迁移后新增了两个阶段名
+  `vision_refill`（单页补做）与 `filename`（仅当本地生成失败才调模型），用量流水里按
+  `stage` 可区分
 - **目标**：非流式调用读取 `response.usage` 的精确值；流式调用开启 `stream_options={"include_usage": True}`（需确认所接网关是否支持，不支持则回退估算并在流水里标记 `estimated: true`）
 - **落点**：`problem_solver_agent/solver_client.py`（`stream_solve` 目前丢弃 usage 字段）、`problem_solver_agent/vision_client.py`、`webapp/usage.py`、`webapp/accounts.py`（`usage_events` 加 `estimated` 列）
 - **验收**：新增用例断言"网关返回 usage 时记账取精确值且 `estimated=false`；未返回时 `estimated=true` 且不崩"

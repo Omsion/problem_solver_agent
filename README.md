@@ -36,12 +36,18 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-编辑 `.env`，至少填入两个密钥：
+编辑 `.env`，默认只需填**一个**密钥：
 
 | 变量 | 用途 | 获取地址 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | 求解模型 `deepseek-flash` + 辅助模型 `deepseek-flash` | platform.deepseek.com |
-| `ZHIPU_API_KEY` | 视觉模型 `GLM-4.6V` 系列（分类 / OCR / 视觉推理） | open.bigmodel.cn |
+| `DEEPSEEK_API_KEY` | 求解 + 辅助（润色 / 文件名）+ 视觉层（分类 / OCR / 视觉推理 / 核对），统一走 `deepseek-flash` | platform.deepseek.com |
+| `ZHIPU_API_KEY` | **可选**：仅当 `VISION_PROVIDER=zhipu` 回退到智谱视觉模型时才需要 | open.bigmodel.cn |
+
+视觉层用哪一家由 `VISION_PROVIDER` 决定。**未配置时代码默认 `zhipu`（安全基线：
+双 provider 的 A/B 出数字之前，不把未验证的 provider 变成默认）**；本仓库的
+`.env` 与 `.env.example` 都显式写着 `VISION_PROVIDER=deepseek`，所以照上面这份
+配置走的就是新 provider —— 与求解共用同一个密钥、同一个 base_url，`.env` 里
+少一个必填项。想换回智谱视觉模型见下方「一键回退到智谱」。
 
 完整可配置项见 `.env.example`（每项都有注释说明）。
 
@@ -86,7 +92,8 @@ Windows 上也可以直接双击 `start_web.bat`（会做版本与依赖检查�
 
 - `python tools/human_typer.py`（管理员）：接管 `Ctrl+V`，把剪贴板内容**模拟真人逐字输入**到当前窗口（考试客户端里"假装手打"）。
 - `python tools/remote_trigger.py`：手机扫码遥控**电脑端截图**，绕开电脑上的键盘限制（端口 `REMOTE_TRIGGER_PORT`，默认 5555）。
-- `python tools/diag.py`：一键自检（路径/密钥/Web/局域网 IP）。
+- `python tools/diag.py`：一键自检（路径/密钥/Web/局域网 IP；会打印视觉层 provider、模型与思考开关）。
+- `python tools/vision_ab.py`：视觉层 A/B 评测（同一组图分别跑两个 provider 的 OCR，出差异报告），换 provider 前用它拿数据。
 
 > 答案生成后，除了网页，「手机文件管理器通过 SMB 直接打开 `solutions/` 看 Markdown」也是推荐方式——
 > 完整步骤见 **`docs/USER_GUIDE.md`** 第 1.3 节。日常刷题建议只开命令行 Agent，
@@ -102,6 +109,7 @@ Windows 上也可以直接双击 `start_web.bat`（会做版本与依赖检查�
 <工作根目录>/                 # 默认 = OnlineTest 的上一级，可用 SOLVER_ROOT_DIR 覆盖
 ├── Screenshots/              # 截图监控目录（工具往里写，Agent 从这里读）
 ├── processed/                # 处理完的截图归档
+├── ocr/                      # 逐页原始 OCR 归档（<日期>/<task_id>.md，零额外模型成本）
 └── solutions/                # Markdown 解答（方便文件管理器/Samba 查看）
 
 OnlineTest/
@@ -140,7 +148,7 @@ SOLVER_ROOT_DIR=D:\Users\wzw\Pictures\OnlineTest\workspace
 
 - **复制答案**：只复制结论，不带 markdown 符号
 - **完整解答**：默认折叠，需要时展开
-- **核对答案**（可选）：让第二个视觉模型对照原图复核，发现疑点时在卡片上方
+- **核对答案**（可选）：用视觉推理模型（默认 `deepseek-flash`）对照原图复核，发现疑点时在卡片上方
   用醒目色列出问题与建议修正
 
 ### 重新求解
@@ -161,7 +169,10 @@ SOLVER_ROOT_DIR=D:\Users\wzw\Pictures\OnlineTest\workspace
 | 机制 | 效果 |
 |---|---|
 | **发送前图片预处理** | EXIF 校正 → 最长边 1600 → JPEG q80，实测单张 2.96 MB → 187 KB（缩小约 16 倍），4 图请求从约 15 MB 降到约 1 MB |
-| **分类 + 识别合并调用** | 一次视觉调用同时得到题型与逐页文本，省一轮往返与一次重复图片计费；`auto` 模式仅在单图时尝试（多图必然超长被截断，回退反而白等约 50 秒），解析失败自动回退 |
+| **分类 + 识别合并调用（分批并发）** | 最多 **8 张图**走合并调用（`<<<PAGE n\|NEW/CONT>>>` 分隔符协议），并按 `VISION_BATCH_SIZE`（默认 4 张）**分批并发**：8 图 = **2 次请求**（旧行为 9 次），实测 ≈6.4 s，比一次带完 8 张（≈8.4 s）更快。图片 token 仍只按一次计费。任一页缺失走单页补做，完全解析不了才回退 JSON 协议 → 分类 + 并行 OCR |
+| **合并成功即内联拼接** | 分隔符的 NEW/CONT 就是模型给出的接缝判断，本地拼接即可，直接跳过「整篇重写」的润色调用（`VISION_INLINE_MERGE`）—— 那本是整条流水线最贵的一次输出，且 100% 与转录内容重复 |
+| **视觉层关闭思考模式** | DeepSeek 思考默认开启且 effort=high，分类/OCR 这类短任务会被思考吃光 `max_tokens` 导致正文为空；视觉与辅助链路显式下发 `thinking.type=disabled`（`VISION_DISABLE_THINKING`） |
+| **OCR 原始文本归档** | 每页转录逐字落到 `<工作根目录>/ocr/<日期>/<task_id>.md`（含 provider / 模型 / 页数 / 失败页），取消或求解失败也保得住；解答文件 frontmatter 的 `task_id` / `ocr_archive` 让「解答 ↔ 归档 ↔ uploads」三者可互相对照 |
 | **思考模式按需升级** | 先不开思考快跑一次（简单题十几秒出答案）；只有答案不合格（空 / 被截断 / 编程题答案过短）时才用「开思考 + 32000 token」重跑一次，第二次仍无正文就沿用第一版 |
 | **漏检补偿扫描** | 监控目录每 15 秒（可配）扫一遍，兜住同步工具「改名就位」、watchdog 缓冲区溢出、进程停机期间到达的照片；去重账本保证只投递一次 |
 | **按拍摄时间排序** | Syncthing 按数据块同步，落盘顺序是随机的；送进 OCR 前统一按 EXIF → 文件名时间 → mtime 重排，保证"第几张 = 第几页" |
@@ -228,20 +239,51 @@ python tools/diag.py
 ## 切换模型
 
 `vision_client.py` 与 `solver_client.py` 都是 provider-agnostic 的，改模型只需动
-`problem_solver_agent/config.py`：
+`problem_solver_agent/config.py`。**视觉层与求解层是两张独立的 provider 表**：
 
 ```python
-VISION_CLASSIFY_MODEL = "GLM-4.6V-FlashX"   # 分类 + OCR
-VISION_REASONING_MODEL = "GLM-4.6V"         # 图形推理
+# 视觉层：provider 表（迁移目标 deepseek，回退分支 zhipu）
+# 未显式配置 VISION_PROVIDER 时代码用 DEFAULT_VISION_PROVIDER = "zhipu"（安全基线），
+# 只有 A/B（tools/vision_ab）判定 S1/S2 通过后才把默认值切到 "deepseek"。
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", DEFAULT_VISION_PROVIDER)
+VISION_PROVIDER_CONFIG = {
+    "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "base_url": "https://api.deepseek.com",
+                 "classify_model": "deepseek-flash",   # 分类 + OCR
+                 "reasoning_model": "deepseek-flash"}, # 视觉推理 + 核对
+    "zhipu":    {"api_key_env": "ZHIPU_API_KEY", "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+                 "classify_model": "GLM-4.6V-FlashX",
+                 "reasoning_model": "GLM-4.6V"},
+}
 
+# 求解层：另一张表，与视觉层互不影响
 SOLVER_CONFIG = {
     "deepseek": {"model": "deepseek-flash", "base_url": "https://api.deepseek.com/v1"},
 }
 SOLVER_ROUTING_CONFIG = {"CODING_SOLVER": "deepseek", "DEFAULT_SOLVER": "deepseek"}
 ```
 
-新增 provider 后需在 `.env` 配置 `{PROVIDER}_API_KEY`（全大写），例如添加
+`VISION_CLASSIFY_MODEL` / `VISION_REASONING_MODEL` / `VISION_BASE_URL` 由 provider 表**派生**，
+调用点名字不变。新增 provider 后需在 `.env` 配置 `{PROVIDER}_API_KEY`（全大写），例如添加
 `new_provider` 就要配 `NEW_PROVIDER_API_KEY`。
+
+### 一键回退到智谱（视觉层）
+
+DeepSeek 挂掉、或 A/B 发现 OCR 质量退化时，视觉层可以**只改一个环境变量**切回智谱
+（求解层不动，仍是 `deepseek-flash`）：
+
+```dotenv
+VISION_PROVIDER=zhipu
+ZHIPU_API_KEY=xxxxxxxx        # 只有这一行需要新填；DEEPSEEK_API_KEY 保留不动
+```
+
+- 回退后视觉层用 `GLM-4.6V-FlashX`（分类 / OCR）+ `GLM-4.6V`（视觉推理 / 核对），
+  思考模式开关对该 provider 不生效（智谱不支持这个开关），其余行为与迁移前一致；
+- 未知的 `VISION_PROVIDER` 取值会**静默回落**到代码默认 provider
+  （`config.DEFAULT_VISION_PROVIDER`，当前 `zhipu` —— 配置写错不该让服务起不来）；
+- 重试已存在的任务时，阶段缓存里记了模型名，provider 切换后旧缓存**自动失效**，
+  不会把 DeepSeek 写下的转录当成智谱的结果复用；
+- 切换前建议先跑 A/B：`python -m tools.vision_ab check -i <图或目录>`，
+  同一组图跑两个 provider 的 OCR 并出差异报告（**未实测前不要断言谁更快**）。
 
 ---
 

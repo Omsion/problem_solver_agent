@@ -2,11 +2,16 @@
 pipeline.py — 共享流水线逻辑（CLI Agent 和 Web App 共用）
 
 本模块包含：
-1. 问题重分类（reclassify_problem_type）
-2. 最终类型映射（map_final_type）
-3. 求解器路由（determine_solver）
-4. Prompt 模板选择（build_prompt）
-5. 启动初始化与配置验证（initialize_directories / validate_config）
+1. 最终类型映射（map_final_type）
+2. 求解器路由（determine_solver）
+3. Prompt 模板选择（build_prompt）
+4. 启动初始化与配置验证（initialize_directories / validate_config）
+
+历史说明：这里曾有一个 `reclassify_problem_type`，靠 `ML_KEYWORDS` / `CODING_KEYWORDS`
+做关键词匹配来产生 `ML_CODING` 标签。它全仓无调用点、无测试覆盖，等于一条不可达的
+死路径（`ML_CODING` 的求解模板、`map_final_type` 分支、前端展示映射全成了摆设）。
+现已把 `ML_CODING` 上移到视觉分类 prompt 的标签表 —— 视觉模型读得到题面全文，
+比关键词匹配准得多 —— 然后删掉这个函数与两个关键词表。
 """
 
 import sys
@@ -19,28 +24,6 @@ from . import prompts
 # ---------------------------------------------------------------------------
 # 流水线核心函数
 # ---------------------------------------------------------------------------
-
-def reclassify_problem_type(problem_type: str, transcribed_text: str) -> str:
-    """基于 OCR 文本检测 ML/编程关键词，修正视觉模型的初步分类。
-
-    Args:
-        problem_type: 视觉分类结果（GENERAL / CODING / FILL_IN_THE_BLANKS 等）
-        transcribed_text: OCR + 润色后的文本
-
-    Returns:
-        修正后的问题类型（ML_CODING / CODING / 原类型）
-    """
-    reclassifiable = {"GENERAL", "FILL_IN_THE_BLANKS", "QUESTION_ANSWERING", "CODING"}
-    if problem_type not in reclassifiable or transcribed_text == "N/A":
-        return problem_type
-
-    text_lower = transcribed_text.lower()
-    if any(kw in text_lower for kw in config.ML_KEYWORDS):
-        return "ML_CODING"
-    if any(kw in text_lower for kw in config.CODING_KEYWORDS) and problem_type != "CODING":
-        return "CODING"
-    return problem_type
-
 
 def map_final_type(problem_type: str, text: str) -> str:
     """映射最终问题类型：CODING → LEETCODE/ACM，ML_CODING 保持不变。
@@ -95,7 +78,10 @@ def build_prompt(final_type: str, transcribed_text: str, style: str | None = Non
             chosen = config.SOLUTION_STYLE
         template = template[chosen]
     # 用 replace 而不是 format：题目正文里的花括号不应被当作占位符
-    return template.replace("{transcribed_text}", transcribed_text)
+    prompt = template.replace("{transcribed_text}", transcribed_text)
+    # T4：把"文件名建议"并进求解首行，省掉一次隐形的辅助模型调用。
+    # 由 `core_pipeline._run_solve_attempt` 负责剥掉首行，不进解答正文。
+    return prompt + prompts.FILENAME_SUGGESTION_INSTRUCTION
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +91,7 @@ def build_prompt(final_type: str, transcribed_text: str, style: str | None = Non
 def initialize_directories() -> None:
     """初始化项目所需的目录结构。"""
     print("正在初始化目录结构...")
-    for dir_path in [config.PROCESSED_DIR, config.SOLUTION_DIR]:
+    for dir_path in [config.PROCESSED_DIR, config.SOLUTION_DIR, config.OCR_DIR]:
         try:
             dir_path.mkdir(parents=True, exist_ok=True)
             print(f"  - 目录 '{dir_path}' 已确认存在。")
@@ -131,8 +117,14 @@ def validate_config() -> None:
     # API 密钥
     if not config.DEEPSEEK_API_KEY:
         errors.append("DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置")
-    if not config.ZHIPU_API_KEY:
-        errors.append("ZHIPU_API_KEY 未设置，请在 .env 文件中配置")
+    # 视觉层密钥按 provider 判定：默认 deepseek 时与求解密钥同一个，
+    # 切成 zhipu 后要求的是 ZHIPU_API_KEY —— 校验逻辑不跟着 provider 改。
+    if not config.VISION_API_KEY:
+        errors.append(
+            f"视觉层密钥未设置（VISION_PROVIDER={config.VISION_PROVIDER}，"
+            f"需要 {config.VISION_PROVIDER_CONFIG[config.VISION_PROVIDER]['api_key_env']}），"
+            f"请在 .env 文件中配置"
+        )
 
     # 超时设置
     if config.API_TIMEOUT < 10:

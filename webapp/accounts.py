@@ -39,8 +39,14 @@ ROLE_ADMIN = "admin"
 # 说明：这是**估算**而非精确账单，只用于限制滥用；精确账单应查对应平台后台。
 COST_TABLE: dict[str, tuple[float, float]] = {
     # model: (输入元/百万token, 输出元/百万token)
-    # DeepSeek 求解器与辅助模型统一为 "deepseek-flash"，因此只保留一条单价
-    "deepseek-flash": (0.5, 2.0),
+    # DeepSeek 求解器、辅助模型与视觉层统一为 "deepseek-flash"，因此只保留一条单价。
+    # 为什么按**高峰时段**价而不是空闲价：额度系统的目的是限制滥用，
+    # 空闲价（1/4）只有在北京时间 00:30-08:30 才生效，按它计费会让白天
+    # 的消费被低估 4 倍；宁可高估也不能低估（缓存命中价 0.02-0.04 同理不计）。
+    "deepseek-flash": (2.0, 8.0),
+    # deepseek 的更强档模型，求解器显式指定时才会用到
+    "deepseek-v4-pro": (9.0, 27.0),
+    # 以下两条仅在 VISION_PROVIDER=zhipu（一键回退）时用到，保留以免回退后计费失真
     "GLM-4.6V-FlashX": (0.5, 1.5),
     "GLM-4.6V": (2.0, 6.0),
     "default": (2.0, 8.0),

@@ -136,7 +136,7 @@ cd frontend && npm run dev     # 浏览器访问 5173
 ### 后端（`tests/`，全部打桩，不产生真实 API 调用）
 
 ```powershell
-pytest                      # 164 个用例，约 8 秒
+pytest                      # 406 个用例，约 60 秒
 pytest tests/test_core_pipeline.py -v
 ```
 
@@ -145,17 +145,23 @@ pytest tests/test_core_pipeline.py -v
 | `test_netcheck.py` | 本机地址判定、移动端 UA 识别（远程连接误报回归） |
 | `test_remote_stream.py` | 全局 SSE 端点、`RemotePresence` 计数与断开通知 |
 | `test_image_prep.py` | 缩放边界、RGBA 白底、EXIF 方向、缓存命中、损坏缓存重建 |
-| `test_core_pipeline.py` | 合并调用与回退、思考档按需升级（空答案/短答案/显式思考）、跳过润色、OCR 兜底、取消保留部分内容、阶段缓存 |
-| `test_solver_client.py` | 思考吃满配额后的降级、思考提前放弃、求解画像、配额与 effort 配置、网络重试与错误可诊断性 |
-| `test_vision_client.py` | 合并调用闸门（auto/true/false 与图片数上限）、输出截断告警 |
+| `test_core_pipeline.py` | 合并调用与回退、思考档按需升级（空答案/短答案/显式思考）、内联拼接跳过润色、OCR 兜底、OCR 归档（含求解失败仍留档）、`FILE:` 首行剥离与本地文件名、缓存按模型名失效、取消保留部分内容 |
+| `test_solver_client.py` | 思考吃满配额后的降级、思考提前放弃、求解画像、配额与 effort 配置、网络重试与错误可诊断性、辅助链路关思考与 `AUX_TIMEOUT` |
+| `test_vision_client.py` | 合并调用闸门（auto/true/false 与图片数上限）、**PAGE 分隔符协议**（NEW/CONT、跳号、重复页码、缺 `<<<END>>>`、LaTeX 反斜杠原样保留）、`refill_pages` 按页补做、三级回退链、流式收集器迭代期重试、输出截断告警 |
+| `test_vision_provider.py` | 视觉层 provider 化：关思考下发的 payload、zhipu 回退逐字节一致、未知 provider 回落、缺密钥时报对环境变量名 |
 | `test_answer_card.py` | 从解答中抽取「最终答案」小节的各种写法 |
-| `test_verify.py` | 核对结果解析、verdict 归一化、一致性保护、异常兜底 |
-| `test_timings.py` | 阶段耗时聚合、DB 迁移、阶段缓存读写 |
-| `test_retention.py` | 上传目录清理、孤立目录、图片缓存 LRU |
+| `test_verify.py` | 核对结果解析、verdict 归一化、一致性保护、异常兜底、模型名跟随 provider |
+| `test_timings.py` | 阶段耗时聚合（含 `filename` 阶段）、DB 迁移、阶段缓存读写、转录三列与关键词检索、`/api/tasks?q=` |
+| `test_retention.py` | 上传目录清理、孤立目录、图片缓存 LRU、**空保留集合拒绝删除**（数据丢失护栏回归） |
 | `test_routes_upload.py` | 目录穿越防护、非法图片、体积限制、取消/重试门禁 |
 | `test_file_monitor.py` | 文件稳定性等待、回调异常隔离、改名就位投递、临时文件过滤、去重账本、补偿扫描与句柄停止 |
 | `test_image_order.py` | EXIF / 文件名 / mtime 三级时间来源、乱序图片重排、同时间稳定性、分组器入队顺序 |
 | `test_resolve_verify_sse.py` | SSE 序号与 `Last-Event-ID` 续传、`/resolve` 与 `/verify` 门禁 |
+
+> **新增用例时的注意**：`tests/conftest.py` 有一个 autouse 夹具，会把
+> `UPLOAD_DIR` / `SOLUTION_DIR` / `DATA_DIR` / `DB_PATH` / `IMAGE_CACHE_DIR` / `OCR_DIR`
+> 默认重定向到 `tmp_path`。这样"忘了 monkeypatch"也不会动到真实数据（2026-09-20 曾有
+> 一次整批上传目录被清理的事故）。需要真实路径的用例请显式覆盖并说明理由。
 
 ### 前端（vitest + Testing Library）
 

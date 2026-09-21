@@ -24,11 +24,21 @@ def main():
         sys.exit(1)
 
     all_apis_ok = True
-    if not config.ZHIPU_API_KEY:
-        logger.critical("❌ 错误: ZHIPU_API_KEY (视觉模型 GLM-4.6V) 缺失!")
+    # 视觉层密钥按 provider 判定（默认 deepseek，与求解共用 DEEPSEEK_API_KEY；
+    # 设 VISION_PROVIDER=zhipu 才需要 ZHIPU_API_KEY）
+    vision_key_env = config.VISION_PROVIDER_CONFIG[config.VISION_PROVIDER]["api_key_env"]
+    if not config.VISION_API_KEY:
+        logger.critical(
+            "❌ 错误: 视觉层密钥 %s 缺失（VISION_PROVIDER=%s，模型=%s）!",
+            vision_key_env, config.VISION_PROVIDER, config.VISION_CLASSIFY_MODEL,
+        )
         all_apis_ok = False
     else:
-        logger.info("✓ GLM-4.6V API密钥配置正常")
+        logger.info(
+            "✓ 视觉层密钥配置正常（provider=%s，模型=%s，思考=%s）",
+            config.VISION_PROVIDER, config.VISION_CLASSIFY_MODEL,
+            "关闭" if config.VISION_DISABLE_THINKING else "开启",
+        )
 
     logger.info("----- 检查所有已配置的核心求解器 -----")
     for provider, details in config.SOLVER_CONFIG.items():
@@ -49,6 +59,11 @@ def main():
 
     logger.info("=" * 50)
     logger.info(f"监控目录: {config.MONITOR_DIR}")
+    logger.info(f"OCR 归档目录: {config.OCR_DIR}")
+    logger.info(
+        f"视觉层: provider={config.VISION_PROVIDER} 模型={config.VISION_CLASSIFY_MODEL}"
+        f"（回退：zhipu=GLM-4.6V-FlashX）"
+    )
     logger.info(f"题目视觉分类模型: {config.VISION_CLASSIFY_MODEL}")
     logger.info(f"题目OCR模型: {config.VISION_CLASSIFY_MODEL}")
     logger.info(f"视觉推理模型: {config.VISION_REASONING_MODEL}")

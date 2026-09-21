@@ -23,8 +23,11 @@ logger = logging.getLogger("Usage")
 
 # 每个字符折算的 token 数（CJK 偏 1.0，英文偏 0.25，取 0.6 作为折中）
 CHARS_PER_TOKEN_FACTOR = 0.6
-# 一张图片在视觉模型中的固定折算（按各厂商"1 图 ≈ 1000 token"的常见量级保守取 700）
-TOKENS_PER_IMAGE = 700
+# 一张图片在视觉模型中的固定折算。
+# 取 1024 是因为 DeepSeek 官方给出的**每图 token 上限**就是 1024（服务端会把图
+# 二次缩放到约 1300×1300 等效）；沿用旧的 700 会在换到 deepseek 后低估近 1/3 的
+# 输入成本 —— 额度系统宁可高估也不能低估。
+TOKENS_PER_IMAGE = 1024
 # 题面文本本身的输入开销（prompt 模板 + 上下文）
 BASE_INPUT_TOKENS = 600
 
@@ -96,10 +99,14 @@ class UsageRecorder:
 
         按"1 次视觉调用 + 1 次求解"估算，偏保守（宁可高估也不能低估）。
         """
+        # 视觉层的模型名必须跟随当前 provider 走（deepseek-flash / GLM-4.6V-FlashX），
+        # 写死会在切换 provider 后按错的单价预检额度。
+        from problem_solver_agent import config as core_config
+
         vision_input, _ = estimate_tokens(pages, 0)
         solve_input, solve_output = estimate_tokens(pages, 4000)
         return round(
-            estimate_cost("GLM-4.6V-FlashX", vision_input, 0)
+            estimate_cost(core_config.VISION_CLASSIFY_MODEL, vision_input, 0)
             + estimate_cost(model, solve_input, solve_output),
             6,
         )

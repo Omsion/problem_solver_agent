@@ -33,8 +33,14 @@ def _check_capabilities() -> dict:
     但不阻断启动（缺少可选 provider 时仍可只用已配置的那个）。
     """
     problems: list[str] = []
-    if not core_config.ZHIPU_API_KEY:
-        problems.append("缺少 ZHIPU_API_KEY：视觉分类/OCR 将不可用")
+    # 视觉层密钥按**当前 provider** 判定：迁移到 deepseek 后再检查 ZHIPU_API_KEY
+    # 会永远报"缺少密钥"，而实际配置是对的（回退到 zhipu 时反过来同理）。
+    if not core_config.VISION_API_KEY:
+        vision_cfg = core_config.VISION_PROVIDER_CONFIG[core_config.VISION_PROVIDER]
+        problems.append(
+            f"缺少 {vision_cfg['api_key_env']}：VISION_PROVIDER={core_config.VISION_PROVIDER} "
+            "的视觉分类/OCR 将不可用"
+        )
     for provider in core_config.SOLVER_CONFIG:
         key = getattr(core_config, f"{provider.upper()}_API_KEY", None)
         if not key:
@@ -50,6 +56,7 @@ def _startup_report() -> None:
     logger.info("  工作根目录    : %s", core_config.ROOT_DIR)
     logger.info("  截图监控目录  : %s", core_config.MONITOR_DIR)
     logger.info("  归档目录      : %s", core_config.PROCESSED_DIR)
+    logger.info("  OCR 归档目录  : %s", core_config.OCR_DIR)
     logger.info("  解答输出目录  : %s", core_config.SOLUTION_DIR)
     logger.info("  图片缓存目录  : %s (上限 %d MB)", core_config.IMAGE_CACHE_DIR, core_config.IMAGE_CACHE_MAX_MB)
     logger.info(
@@ -60,6 +67,19 @@ def _startup_report() -> None:
         core_config.COMBINED_VISION_MAX_IMAGES,
     )
     logger.info("  并发上限      : %d 个任务", core_config.MAX_CONCURRENT_TASKS)
+    # 视觉层是迁移后最容易"跑在别的 provider 上而不自知"的地方：
+    # 把 provider/模型/思考开关显式打出来，日志里一眼能确认走的是哪条路。
+    vision_config = core_config.VISION_PROVIDER_CONFIG[core_config.VISION_PROVIDER]
+    if vision_config.get("supports_thinking_control") == "1":
+        vision_thinking = "关闭" if core_config.VISION_DISABLE_THINKING else "开启"
+    else:
+        vision_thinking = "不适用（该 provider 无思考开关）"
+    logger.info(
+        "  视觉层        : provider=%s / 模型=%s / 思考=%s",
+        core_config.VISION_PROVIDER,
+        core_config.VISION_CLASSIFY_MODEL,
+        vision_thinking,
+    )
     if web_config.AUTH_ENABLED:
         logger.info("  访问控制      : 已启用（需登录，额度 %.2f 元起）", web_config.DEFAULT_USER_BUDGET)
         if not web_config.AUTH_SECRET_KEY:
@@ -106,17 +126,40 @@ def _warmup_clients() -> None:
         logger.warning("预热视觉客户端失败: %s", exc)
 
 
-def _startup_cleanup(task_manager: TaskManager) -> None:
+def _startup_cleanup(task_manager: TaskManager, *, upload_dir: Path | None = None) -> None:
     """启动时清理：残留上传目录、超量图片缓存。
 
     缺陷 N2：旧实现只删解答文件，`uploads/<task_id>/` 从未被清理，
     实测已累积 45.6 MB。
+
+    **安全护栏（2026-09-20 事故后新增）**：真实事故中 `webapp/uploads/*/` 下 8 个
+    上传目录被整批删除，而这 8 个目录**都对应真实 DB 里的任务** —— 也就是说删除
+    发生在一个"任务库为空/不是这一份"的调用上下文里。根因是签名本身：`task_manager`
+    由调用方传入，而上传目录取自全局 `web_config.UPLOAD_DIR`，两者可以来自**不同的
+    配置**（测试用 tmp 库、探针脚本自造库、`SOLVER_ROOT_DIR`/`DB_PATH` 被覆盖的第二个
+    实例）。此时每个真实上传目录都会被视为"无主残留"而被删除，且不可逆。
+
+    因此这里加两条护栏：
+    1. 显式接受 `upload_dir` 参数（默认仍是全局值），调用方想清理别处必须显式传；
+    2. **任务库为空而上传目录非空时，只告警不删除** —— "空库 + 有上传目录"正是
+       配置配错的特征，而真正的"删库后残留"场景下用户多半想要那些目录。
+    代价是这种组合下残留不会被自动回收（可用 `tools` 手工清理或补齐 DB）。
     """
+    target_dir = upload_dir if upload_dir is not None else web_config.UPLOAD_DIR
     try:
-        orphans = stale_uploads(web_config.UPLOAD_DIR, task_manager.all_task_ids())
+        task_ids = task_manager.all_task_ids()
+        orphans = stale_uploads(target_dir, task_ids)
         if orphans:
-            prune_uploads(web_config.UPLOAD_DIR, task_manager.all_task_ids())
-            logger.info("启动清理：移除 %d 个无主上传目录", len(orphans))
+            if not task_ids:
+                logger.warning(
+                    "启动清理已跳过：任务库为空而上传目录 %s 下有 %d 个目录。"
+                    "这通常意味着 DB_PATH 与 UPLOAD_DIR 不是同一套配置，"
+                    "继续清理会不可逆地删掉真实上传原图。",
+                    target_dir, len(orphans),
+                )
+            else:
+                prune_uploads(target_dir, task_ids)
+                logger.info("启动清理：移除 %d 个无主上传目录", len(orphans))
     except Exception as exc:
         logger.warning("启动清理上传目录失败: %s", exc)
 

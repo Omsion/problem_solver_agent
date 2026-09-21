@@ -70,7 +70,14 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 
 任务列表，按创建时间倒序。
 
-- Query：`limit`（默认 100，源码未设上限）
+- Query：
+  - `limit`（默认 100，源码未设上限）
+  - `q`（可选）：关键词搜索。传入且非空时改走 `TaskManager.search_tasks`，对
+    `problem_text` / `ocr_raw_text` / `filename` 三列做 `LIKE '%q%'`（`%` `_` 会被转义，
+    不会退化成通配符）；过滤与排序语义与不带 `q` 时完全一致（仍是创建时间倒序 + `limit`）。
+    **未上 FTS5** —— 任务表按 `TASK_RETENTION_COUNT`（默认 100）截断，百行表上 LIKE 是
+    微秒级；FTS5 默认分词器对中文无效，必须 `tokenize='trigram'`，还要多维护一张虚表与
+    同步逻辑，收益为零。等表涨到万级再换。
 - 身份：普通用户只返回自己的任务；管理员（含 `AUTH_ENABLED=false` 的内置本地用户）返回全部
 
 ```json
@@ -78,6 +85,8 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
   "id": "...", "status": "completed", "problem_type": "MULTIPLE_CHOICE",
   "solver_provider": "deepseek", "solver_model": "deepseek-flash",
   "solution_path": "...", "filename": "4-7_技术选择题综合解答.md",
+  "problem_text": "（送入求解的题目文本）", "ocr_raw_text": "（逐页原始 OCR 拼接）",
+  "vision_mode": "batched",
   "error_message": "", "num_images": 4,
   "created_at": 1781577269.86, "updated_at": 1781577417.56,
   "timings": {"classify": 1800, "ocr": 2400, "polish": 0, "solve": 38200, "total": 42400, "cached": []}
@@ -98,6 +107,9 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 | `solver_provider` / `solver_model` | string | 实际使用的求解器 |
 | `solution_path` | string | 解答 Markdown 的绝对路径 |
 | `filename` | string | 归档文件名 |
+| `problem_text` | string | 送入求解的题目文本（润色后 / 合并内联拼接后）；历史任务未落库时为空串 |
+| `ocr_raw_text` | string | 逐页原始 OCR 拼接（**未被润色改写**，便于命中被改写掉的关键词）；为空串表示未落库 |
+| `vision_mode` | string | 视觉路径：`combined`（PAGE 分隔符合并调用）/ `json`（JSON 回退协议）/ `parallel`（分类 + 并行 OCR 回退）；空串按 `parallel` 理解 |
 | `error_message` | string | 失败原因，成功时为空串 |
 | `answer_card` | string | 答案卡**正文**（`result["answer_card"]["text"]`，纯文本，非 JSON），无则为空串 |
 | `verified` | int | `1` 表示已执行过核对 |
@@ -222,11 +234,12 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
 
 ### `POST /api/tasks/{task_id}/verify`
 
-**核对模式**（可选功能，默认不启用）：用第二个视觉模型对照原图复核答案。
+**核对模式**（可选功能，默认不启用）：用视觉推理模型对照原图复核答案。
 
 不覆盖已有解答，核对结果会追加到解答文件末尾的「## 核对结果」小节。
 
-- Query：`model`（可选）覆盖默认的视觉推理模型
+- Query：`model`（可选）覆盖默认的视觉推理模型；默认取自当前视觉 provider 的
+  `VISION_REASONING_MODEL`（`deepseek` → `deepseek-flash`，`zhipu` → `GLM-4.6V`）
 
 ```json
 {
@@ -237,7 +250,7 @@ Base URL：`http://<host>:8000`，所有接口以 `/api` 开头。
     "issues": ["第 2 小问漏答", "选项 B 与题干要求矛盾"],
     "corrections": "应选 A，并补上第二问的推导",
     "reason": "",
-    "model": "GLM-4.6V"
+    "model": "deepseek-flash"
   }
 }
 ```
@@ -826,13 +839,13 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
   | 常量 | 值 | 含义 |
   |---|---|---|
   | `BASE_INPUT_TOKENS` | 600 | 题面文本本身的输入开销（prompt 模板 + 上下文） |
-  | `TOKENS_PER_IMAGE` | 700 | 一张图片在视觉模型中的固定折算（按各厂商"1 图 ≈ 1000 token"常见量级保守取 700） |
+  | `TOKENS_PER_IMAGE` | 1024 | 一张图片在视觉模型中的固定折算。取 1024 是因为 DeepSeek 官方给出的**每图 token 上限**就是 1024（服务端会把图二次缩放到约 1300×1300 等效）；沿用旧值 700 会在换到 `deepseek-flash` 后低估近 1/3 的输入成本 |
   | `CHARS_PER_TOKEN_FACTOR` | 0.6 | 每字符折算的 token 数（CJK 偏 1.0、英文偏 0.25，取 0.6 作折中） |
 
   于是（`estimate_tokens`）：
 
   ```
-  输入 token = 600 + 页数 × 700     # 输入侧只计图片与固定开销，题目文本真实长度未回传
+  输入 token = 600 + 页数 × 1024    # 输入侧只计图片与固定开销，题目文本真实长度未回传
   输出 token = int(输出字符数 × 0.6)
   多次调用（如逐页 OCR）再按 calls 次数整体放大
   ```
@@ -849,25 +862,35 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
 
 - **计价公式**：`estimate_cost(model, in, out)`（`accounts.py:48`）=
   `round(in / 1e6 × 输入单价 + out / 1e6 × 输出单价, 6)`，单位元；未列出的模型走
-  `default` 单价。单价表在 `webapp/accounts.py:38` 的 `COST_TABLE`，**可自行调整**：
+  `default` 单价。单价表在 `webapp/accounts.py:40` 的 `COST_TABLE`，**可自行调整**：
 
   | model | 输入（元 / 百万 token） | 输出（元 / 百万 token） |
   |---|---|---|
-  | `deepseek-flash` | 0.5 | 2.0 |
+  | `deepseek-flash` | 2.0 | 8.0 |
+  | `deepseek-v4-pro` | 9.0 | 27.0 |
   | `GLM-4.6V-FlashX` | 0.5 | 1.5 |
   | `GLM-4.6V` | 2.0 | 6.0 |
   | `default`（未列出的模型） | 2.0 | 8.0 |
+
+  DeepSeek 的价格**按高峰时段统计口径取值**（宁可高估也不低估，额度系统的目的是限制滥用）：
+  官方 `deepseek-flash` 高峰为 2 / 8，空闲时段是高峰的一半（1 / 4），缓存命中输入仅
+  0.02–0.04。`deepseek-v4-pro` 高峰 9 / 27。`GLM-*` 两条只有在
+  `VISION_PROVIDER=zhipu` 时才会用到，保留是为了回退后仍能算对账。
 
 - **额度用尽后提交任务会被拒绝（HTTP 402）。** `_check_budget()`
   （`webapp/routes.py:195`）在 `POST /api/tasks`（落盘之前）与
   `POST /api/tasks/{id}/resolve`（启动流水线之前）做预检：
 
   ```
-  预估费用 = estimate_task_cost(页数)          # usage.py:94，偏保守：宁可高估也不低估
-           = 1 次视觉调用（按 GLM-4.6V-FlashX 计价，输入侧只算图片）
+  预估费用 = estimate_task_cost(页数)          # usage.py:97，偏保守：宁可高估也不低估
+           = 1 次视觉调用（按当前 provider 的 VISION_CLASSIFY_MODEL 计价，
+             默认 deepseek-flash；输入侧只算图片）
            + 1 次求解调用（默认 deepseek-flash，输出按 4000 字符估算）
   required = max(预估费用, MIN_TASK_BUDGET)     # MIN_TASK_BUDGET 默认 0.05 元
   ```
+
+  > 视觉那一条**跟随 provider** 取模型名（`core_config.VISION_CLASSIFY_MODEL`），不再是
+  > 写死的 `GLM-4.6V-FlashX` —— 否则 `VISION_PROVIDER=zhipu` 时会按 DeepSeek 的单价预检。
 
   余额不足时返回 `402`，且响应体是**对象形态**的 `error`：
 
@@ -891,6 +914,11 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
   warning，**绝不影响解题**（`webapp/usage.py:90`）。
 - 单价表是唯一计价来源，调价只需改 `COST_TABLE`；已写入 `usage_events` 的历史记录
   **不会追溯重算**。
+
+> **隐私提示（不要误解）**：图片以 `data:image/jpeg;base64,...` 发送。**Base64 是编码不是加密**，
+> 服务端解码后的第一步就是原始像素，模型看到的就是完整原图。换 provider（智谱 ↔ DeepSeek）
+> 只是换了接收方，**暴露面不变**；唯一根治手段是本机跑视觉模型。EXIF 元数据（GPS/设备/时间）
+> 在预处理阶段被丢弃，但那是元数据保护，图片内容一个像素都没少。
 
 > ⚠️ **`AUTH_ENABLED=false` 时任何能访问该端口的人都能消耗你的 API 额度。**
 > 需要额度控制与多用户隔离时，请在 `.env` 里设置 `AUTH_ENABLED=true`。
@@ -968,5 +996,7 @@ data: {"type":"chunk","content":"..."}
 | 任务归属 | 无隔离，所有人可见全部任务 | 任务带 `user_id` / `tenant_id`；普通用户只见自己的，他人任务一律 `404` |
 | 额度 | 无 | 注册赠 `DEFAULT_USER_BUDGET`；提交 / 换路重解前预检，不足返回 `402 insufficient_budget` |
 | 用量 | 无 | `usage_events` 流水累计；`GET /api/v1/auth/me` 返回汇总，`usage` 事件不下发 |
+| 视觉层 provider | 写死智谱 GLM-4.6V 系列 | `VISION_PROVIDER`（`deepseek` 为迁移目标、`.env.example` 的推荐值；代码默认 `zhipu` 安全基线 / 一键回退），密钥与模型名由 provider 表派生 |
+| 任务表搜索字段 | 无 | `tasks` 新增 `problem_text` / `ocr_raw_text` / `vision_mode` 三列（幂等迁移自动补列），`GET /api/tasks` 支持 `q` 关键词搜索（LIKE，未上 FTS5） |
 | 管理员 | 无 | `ADMIN_PHONES` 命中即 admin；`GET /api/v1/admin/dashboard` / `users` / `users/{id}`、`PATCH .../budget` / `role`、`GET /api/v1/admin/usage` |
 | 计费口径 | 无 | 按「页数 + 输出字符数」估算 token × `COST_TABLE` 单价，**属于估算而非精确账单** |

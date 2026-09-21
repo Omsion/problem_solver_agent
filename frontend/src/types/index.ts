@@ -66,6 +66,14 @@ export interface Task {
   updated_at: number;
   /** 阶段耗时（毫秒），后端迁移后提供 */
   timings?: StageTimings | null;
+  /** 送入求解器的题目文本（润色/内联拼接后）。当前仅用于后端 LIKE 检索，
+   *  界面没有消费它，因此是可选字段 —— 加它只是让 REST 契约与 docs/API.md 对齐。
+   *  纯类型改动，不影响任何运行时行为，也不触发前端重新构建。 */
+  problem_text?: string | null;
+  /** 逐页原始 OCR 拼接（未被润色改写），用于命中原图里的关键词 */
+  ocr_raw_text?: string | null;
+  /** 视觉阶段实际走的路径：combined（PAGE 协议合并）/ json（回退协议）/ parallel */
+  vision_mode?: "combined" | "batched" | "json" | "parallel" | "" | null;
 }
 
 // ---- Upload File ----
@@ -92,6 +100,8 @@ export interface StageTimings {
   classify?: number;
   ocr?: number;
   polish?: number;
+  /** 文件名生成耗时：默认走本地生成时为 0，只有真调了模型才有非零值（T4） */
+  filename?: number;
   solve?: number;
   total?: number;
   /** 哪些阶段命中了缓存（重试时复用） */

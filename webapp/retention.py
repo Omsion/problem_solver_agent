@@ -90,17 +90,38 @@ def prune_image_cache(cache_dir: Path, max_bytes: int) -> int:
     return removed
 
 
-def prune_uploads(upload_dir: Path, keep_task_dirs: set[str]) -> list[str]:
+def prune_uploads(
+    upload_dir: Path, keep_task_dirs: set[str], *, allow_empty_keep: bool = False
+) -> list[str]:
     """删除不在保留集合中的上传目录。
 
     Args:
         upload_dir: 上传根目录（其下每个子目录对应一个任务）
         keep_task_dirs: 需要保留的任务 id 集合
+        allow_empty_keep: `keep_task_dirs` 为空时是否仍然执行删除。
+
+    为什么默认**不**允许空集合：2026-09-20 事故中 `uploads/*/` 下 8 个真实上传目录
+    被整批删除，而这 8 个目录都对应真实 DB 里的任务 —— 删除发生在"任务库为空/不是
+    这一份"的调用上下文里。该函数把「保留集合」与「上传目录」当成两个独立入参，
+    调用方很容易配错（测试用 tmp 库 + 全局上传目录、`DB_PATH` 被覆盖的第二实例等），
+    而这种配错的表现恰好就是 **空集合**。删除不可逆，因此默认拒绝并告警；
+    确实要清空的调用方显式传 `allow_empty_keep=True` 承担后果。
 
     Returns:
         实际删除的目录名列表。
     """
     if not upload_dir.exists():
+        return []
+    if not keep_task_dirs and not allow_empty_keep:
+        candidates = [child.name for child in upload_dir.iterdir() if child.is_dir()]
+        if candidates:
+            logger.warning(
+                "拒绝清理上传目录 %s：保留集合为空但有 %d 个子目录。"
+                "这通常意味着 DB_PATH 与 UPLOAD_DIR 不是同一套配置"
+                "（继续删除会不可逆地丢掉真实上传原图）。"
+                "确实要清空请显式传 allow_empty_keep=True。",
+                upload_dir, len(candidates),
+            )
         return []
     removed: list[str] = []
     for child in upload_dir.iterdir():

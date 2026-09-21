@@ -16,10 +16,11 @@ Analyze the content of the image(s). Your response MUST be ONLY ONE of the follo
 
 1.  **'MULTIPLE_CHOICE'**: If the problem consists of one or more questions, each followed by options (e.g., A, B, C, D). This classification takes the HIGHEST priority.
 2.  **'FILL_IN_THE_BLANKS'**: If the problem is a fill-in-the-blanks question, often containing numbered placeholders, underscores, or text like "请输入答案". This takes second priority.
-3.  'CODING': If the problem is a programming challenge (like ACM/LeetCode) AND it is NOT a multiple-choice or fill-in-the-blanks question.
-4.  'VISUAL_REASONING': If the problem requires finding a pattern in shapes or figures, AND it is NOT a multiple-choice question.
-5.  'QUESTION_ANSWERING': For tasks that ask a question about a given context, but are NOT fill-in-the-blanks or multiple-choice.
-6.  'GENERAL': For any other text-based problem.
+3.  **'ML_CODING'**: If the problem asks to implement / train / evaluate a machine-learning or deep-learning model (e.g. logistic regression, gradient descent, neural networks, and code using numpy / torch / tensorflow) AND it is NOT a multiple-choice or fill-in-the-blanks question. Judge by the problem statement itself, not by keyword matching.
+4.  'CODING': If the problem is a programming challenge (like ACM/LeetCode) AND it is NOT any of the above.
+5.  'VISUAL_REASONING': If the problem requires finding a pattern in shapes or figures, AND it is NOT a multiple-choice question.
+6.  'QUESTION_ANSWERING': For tasks that ask a question about a given context, but are NOT fill-in-the-blanks or multiple-choice.
+7.  'GENERAL': For any other text-based problem.
 Respond with only the single, most appropriate keyword and nothing else.
 """
 
@@ -39,18 +40,71 @@ TRANSCRIPTION_PROMPT = r"""
 # ------------------------------------------------------------------------------
 # 合并调用：一次请求同时完成"题型分类"与"逐页转录"
 # 相比先分类、再逐页 OCR 的两轮调用，可省一轮网络往返与一次重复的图片计费。
-# 解析失败时调用方会自动回退到上面两个独立 Prompt。
+#
+# **协议为什么是分隔符而不是 JSON（2026-09-13 事故复盘）**：
+# 旧协议把全部转录塞进一个 JSON 字符串，而 JSON 与 LaTeX 天然互斥——模型漏转义时
+# `\frac`→`\f`(formfeed)、`\begin`→`\b`(backspace)、`\theta`→`\t`(tab)、`\neq`→`\n`
+# 都是**合法转义**，解析"成功"但正文被静默破坏（`\frac{a}{b}` 变成 `␌rac{a}{b}`），
+# 而且会通过页数与长度校验、直接写进解答文件，没有任何机制能发现。`\sqrt` 则会硬失败。
+# 现在改成 `<<<PAGE n|NEW/CONT>>>` 分隔符：**正文逐字直出，不经过任何转义层**。
+#
+# 页边界用模型声明的序号（1 基）而不是出现顺序，因此跳号/重排能被发现并记为失败页；
+# `CONT` 表示"与上一页是同一道题的延续，省略重复内容"，它顺带给出了版面判断
+# （比单一 LAYOUT 字段更强：支持"前 3 页同一题、后 5 页独立题"的混合场景）。
+# 解析失败时调用方按 `<<<PAGE>>>` → JSON 协议 → 并行路径 三级回退。
 # ------------------------------------------------------------------------------
 CLASSIFY_AND_TRANSCRIBE_PROMPT = r"""
+你是一个多模态文档解析引擎。请同时完成两件事：题型分类 + 逐页转录。
+
+**任务 A —— 题型分类**：从下列标签中选出唯一最合适的一个：
+1. `MULTIPLE_CHOICE`：题目由一个或多个小题组成，每个小题后面跟着选项（A/B/C/D）。**优先级最高**。
+2. `FILL_IN_THE_BLANKS`：填空题，通常含有编号占位符、下划线，或"请输入答案"之类的提示。**第二优先**。
+3. `ML_CODING`：要求实现/训练/评估机器学习或深度学习模型（如逻辑回归、梯度下降、神经网络，代码涉及 numpy / torch / tensorflow 等），且不属于上面两类。按题面判断，不要只匹配关键词。
+4. `CODING`：编程题（ACM / LeetCode 风格），且不属于上面三类。
+5. `VISUAL_REASONING`：需要在图形、图案、规律中找规律的题，且不是选择题。
+6. `QUESTION_ANSWERING`：针对给定上下文提问，且不属于填空或选择。
+7. `GENERAL`：其他所有文字类题目。
+
+**任务 B —— 逐页转录**：按**图片顺序**逐张转录，每张图一个页块。规则：
+- 表格用 Markdown 表格语法输出。
+- 数学公式用 LaTeX，行内用 `$...$`，块级用 `$$...$$`，`\begin{}`/`\end{}` 环境必须用 `$$...$$` 包裹。
+- **LaTeX 反斜杠必须原样输出**（`\frac`、`\begin`、`\theta`、`\neq`、`\sqrt` 等），不要转成任何其他字符。
+- 保持原文的换行与缩进；不要添加任何解释、评论或额外文字。
+- 单张图片若无文字内容（例如纯图形题），页块正文留空即可。
+
+**每张图必须且只能出现一个页块，顺序与图片顺序一致。** 判断相邻两页的关系并如实标注：
+- 该页是一道新题的开头 → 标 `NEW`，完整转录该页全部内容。
+- 该页是上一页那道题的延续（同一题翻页、内容接续）→ 标 `CONT`，**只输出与上一页不重复的部分**（重复的题干、选项不必再抄一遍）。
+- **千万不要把两道不同的题当成同一个题的延续**：只要这一页出现了新的题号/新的题干开头，就是 `NEW`。
+- 前面的客套话（"好的，我来转录"）和 Markdown 代码围栏一律不要输出。
+
+**输出格式（必须严格遵守）**：
+<<<TYPE>>>标签
+<<<PAGE 1|NEW>>>
+（第 1 张图的完整文本）
+<<<PAGE 2|CONT>>>
+（第 2 张图的文本；若与上一页是同一道题的延续，省略重复内容）
+<<<PAGE 3|NEW>>>
+（第 3 张图的完整文本）
+<<<END>>>
+
+除上述内容外不要输出任何其他文字。
+"""
+
+
+# JSON 协议版合并调用（**第二顺位回退**，仅为兼容保留）。
+# 已知缺陷：LaTeX 反斜杠漏转义会静默损坏正文（见上方说明），因此不再作为首选协议。
+CLASSIFY_AND_TRANSCRIBE_JSON_PROMPT = r"""
 你是一个多模态文档解析引擎。请同时完成两件事：
 
 **任务 A —— 题型分类**：从下列标签中选出唯一最合适的一个：
 1. `MULTIPLE_CHOICE`：题目由一个或多个小题组成，每个小题后面跟着选项（A/B/C/D）。**优先级最高**。
 2. `FILL_IN_THE_BLANKS`：填空题，通常含有编号占位符、下划线，或"请输入答案"之类的提示。**第二优先**。
-3. `CODING`：编程题（ACM / LeetCode 风格），且不属于上面两类。
-4. `VISUAL_REASONING`：需要在图形、图案、规律中找规律的题，且不是选择题。
-5. `QUESTION_ANSWERING`：针对给定上下文提问，且不属于填空或选择。
-6. `GENERAL`：其他所有文字类题目。
+3. `ML_CODING`：要求实现/训练/评估机器学习或深度学习模型，且不属于上面两类。
+4. `CODING`：编程题（ACM / LeetCode 风格），且不属于上面三类。
+5. `VISUAL_REASONING`：需要在图形、图案、规律中找规律的题，且不是选择题。
+6. `QUESTION_ANSWERING`：针对给定上下文提问，且不属于填空或选择。
+7. `GENERAL`：其他所有文字类题目。
 
 **任务 B —— 逐页转录**：按顺序转录每一张图片的全部内容，输出一个数组，数组长度必须等于图片数量，顺序与图片顺序一致。
 - 表格用 Markdown 表格语法输出。
@@ -72,22 +126,35 @@ TEXT_MERGE_AND_POLISH_PROMPT = r"""
 # 角色/任务
 你是一位顶级的文档编辑专家。你的任务是接收多个由 '---[NEXT]---' 分隔的文本片段，并将它们智能地合并成一篇流畅、准确、格式正确的最终文档。
 
+# 第一步（必须先做）：场景判断
+先判断这些片段之间的关系属于下面哪一种，**再决定要不要去重**：
+- **场景一：同一题的多页连续截图** —— 片段之间是同一道题的接续（翻页/滚动导致上下文重叠）。
+  此时才允许做"重叠检测"：找到并丢弃重复的接缝内容，让过渡自然。
+- **场景二：互不相关的多道题** —— 每个片段（或每几个片段）是各自独立的题目。
+  **此时绝对禁止跨片段删除任何内容。** 相邻片段出现"下列哪项正确""（ ）"这类相同措辞
+  不代表它们是同一道题；把它们当重叠删掉，会**静默删掉一整道题的开头**。
+  场景二下你只做公式规范化与明显的 OCR 错字修正，正文一字不减。
+- 判断不了时，**一律按场景二处理**（宁可不合并，不可丢内容）。
+
 # 核心原则
-1.  **内容保真**: 绝不臆测或添加原始文本中没有的信息。
+1.  **内容保真**: 绝不臆测或添加原始文本中没有的信息；绝不因为"看起来像重复"就删除题目正文。
 2.  **格式继承**: 严格保持所有Markdown表格的原始格式。
 3.  **数学公式规范化**: **必须**将所有数学表达式用正确的 LaTeX 分隔符包裹。这是本任务最重要的要求。
    - 行内公式（短公式、变量、符号如 `X=1`、`b₁`、`E[X]`）：用 `$...$` 包裹，例如 `$X=1$`、`$E[X]=0.5$`。
    - 块级公式（矩阵、多行公式如 `\begin{bmatrix}...\end{bmatrix}`）：用 `$$...$$` 包裹并独占一行。
    - 所有 `\begin{...}` 到 `\end{...}` 的环境（如 matrix, bmatrix, align, cases 等）**必须**用 `$$...$$` 包裹。
    - 确保每个 `$` 或 `$$` 都成对出现，不要出现未闭合的数学分隔符。
-4.  **无缝拼接**: 必须识别并完美处理片段间的重叠内容，确保过渡自然。
+   - LaTeX 反斜杠必须原样保留（`\frac` / `\begin` / `\theta` / `\neq` / `\sqrt`），不得改成任何其他字符。
+4.  **无缝拼接**: 仅当第一步判定为**场景一**时，才识别并处理片段间的重叠内容，确保过渡自然。
 
 # CoT (Chain of Thoughts) - 执行步骤
-1.  **顺序读取**: 依次分析每个由 '---[NEXT]---' 分隔的文本片段。
-2.  **重叠检测**: 比较当前片段的开头与前一片段的结尾，找到最长的重叠部分。
-3.  **合并与修正**: 丢弃重叠部分，并将非重叠部分拼接起来。在此过程中，修正明显的OCR识别错误（如 `hell0` -> `hello`）并修复不自然的断行。
-4.  **公式规范化**: 遍历合并后的全文，确保所有数学表达式都已正确包裹。特别检查 `\begin`/`\end` 块、矩阵、分数、上下标等。
-5.  **循环迭代**: 重复步骤2到4，直到所有片段处理完毕。
+1.  **场景判断**: 先按上面的规则判定是"同一题多页"还是"多道独立题"。
+2.  **顺序读取**: 依次分析每个由 '---[NEXT]---' 分隔的文本片段。
+3.  **重叠检测（仅场景一）**: 比较当前片段的开头与前一片段的结尾，找到最长的重叠部分并丢弃。
+    场景二下**跳过本步**，只做拼接。
+4.  **合并与修正**: 拼接非重叠部分。在此过程中，修正明显的OCR识别错误（如 `hell0` -> `hello`）并修复不自然的断行。
+5.  **公式规范化**: 遍历合并后的全文，确保所有数学表达式都已正确包裹。特别检查 `\begin`/`\end` 块、矩阵、分数、上下标等。
+6.  **循环迭代**: 重复步骤3到5，直到所有片段处理完毕。
 
 # 输出规范
 - 你的输出必须是且只能是最终合并、润色、且数学公式已规范化的完整文本。
@@ -131,6 +198,22 @@ FILENAME_GENERATION_PROMPT = r"""
 ---
 {transcribed_text}
 ---
+"""
+
+# ------------------------------------------------------------------------------
+# 文件名建议（T4）：挂到每一次求解调用上，把"隐形的文件名生成调用"并进求解首行。
+# 此前每个任务都会额外调一次 deepseek 生成文件名，而且游离在 StageTimings 与
+# UsageReport 之外 —— 用户既看不到它的耗时，也看不到它的费用。
+# 由 `pipeline.build_prompt` 统一追加，`core_pipeline._run_solve_attempt` 负责剥掉首行。
+# ------------------------------------------------------------------------------
+FILENAME_SUGGESTION_INSTRUCTION = r"""
+
+# 输出格式（必须遵守）
+- 回答的**第一行**必须是文件名建议：`FILE: <题号>_<主题>`
+  - 题号沿用题目里的原始编号：连续写 `16-20`，不连续写 `1,2,5`；无法确定题号时只写主题。
+  - 主题用 8–10 个字概括所有题目。
+  - 例：`FILE: 16-20_多领域选择题综合解答`
+- **第二行起**照常输出解答正文（Markdown）。不要重复 FILE 行，也不要给它加代码围栏。
 """
 
 # ==============================================================================

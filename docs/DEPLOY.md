@@ -32,7 +32,8 @@
 - **构建期**需要能拉取 `node:20-alpine`、`python:3.10-slim`，并能访问 npm registry 与 PyPI。
   前端依赖要求 Node `^20.19.0 || >=22.12.0`（Vite 8 / `@vitejs/plugin-react` 6 的 `engines`），
   本 Dockerfile 用的 `node:20-alpine` 已满足。
-- **运行期**只需要能访问大模型 API（DeepSeek / 智谱），不需要数据库、缓存或消息队列。
+- **运行期**只需要能访问大模型 API（默认只有 DeepSeek；`VISION_PROVIDER=zhipu` 时另加智谱），
+  不需要数据库、缓存或消息队列。
 - Windows 上推荐 Docker Desktop（WSL2 后端）。
 - 若使用老式 `docker-compose`（连字符、v1），命令请自行把 `docker compose` 换成 `docker-compose`，
   并注意 v1 对 `healthcheck.start_period` 之外的部分字段支持有限。
@@ -51,17 +52,21 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-然后编辑 `.env`，**至少**填好两个密钥（缺任一都会导致对应能力不可用，
-启动日志里会有明确的“能力探测”告警）：
+然后编辑 `.env`，**至少填一个密钥**（本仓库默认配置下视觉层与求解共用 DeepSeek，缺了启动
+日志里会有明确的“能力探测”告警）：
 
 ```dotenv
-DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解器与辅助模型统一使用 deepseek-flash
-ZHIPU_API_KEY=xxxxxxxx              # 视觉模型 GLM-4.6V（分类 / OCR / 视觉推理）
+DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解 + 辅助（润色/文件名）+ 视觉层（分类/OCR/视觉推理/核对），统一 deepseek-flash
+# ZHIPU_API_KEY=xxxxxxxx            # 可选：仅当 VISION_PROVIDER=zhipu 回退时取消注释
+# VISION_PROVIDER=deepseek          # 视觉层供应商：deepseek（迁移目标/推荐）/ zhipu（代码默认的安全基线，一键回退，见 5.7）
 ```
 
 其余可选变量（`GROUP_TIMEOUT`、`MAX_CONCURRENT_TASKS`、`IMAGE_MAX_EDGE`、
 `MONITOR_RESCAN_INTERVAL`（漏检补偿扫描）、`SOLVER_THINKING_DEFAULT`（思考模式首选与升级）、
-`USE_COMBINED_VISION_CALL`（合并调用模式）等）见 `.env.example` 注释。
+`COMBINED_VISION_MAX_IMAGES`（多图合并适用上限，默认 8）、`VISION_BATCH_SIZE` /
+`VISION_BATCH_WORKERS`（分批合并的每批图数与批间并行度，默认 4 / 4）、
+`VISION_MAX_TOKENS`（视觉输出上限）、
+`OCR_PARALLEL_WORKERS`（回退路径逐页 OCR 并行度）等）见 `.env.example` 注释。
 
 关于 `SOLVER_ROOT_DIR`：
 
@@ -190,6 +195,7 @@ docker compose exec app python -c "import problem_solver_agent.config as c; prin
 | `./webapp/solutions/` | `/app/webapp/solutions/` | 生成的解答 Markdown | 建议备份 |
 | `./webapp/cache/` | `/app/webapp/cache/` | 图片预处理缓存 | 可不备份（会自动重建） |
 | `${SOLVER_DATA_DIR:-./solver-data}/Screenshots/` | `/data/Screenshots/` | 自动截图来源 | 按需 |
+| `${SOLVER_DATA_DIR:-./solver-data}/ocr/` | `/data/ocr/` | 逐页原始 OCR 归档（`<日期>/<task_id>.md`） | 按需（想事后比对识别质量就备份） |
 | `${SOLVER_DATA_DIR:-./solver-data}/solutions/` | `/data/solutions/` | 监控流水线的产物 | 建议备份 |
 | `${SOLVER_DATA_DIR:-./solver-data}/processed/` | `/data/processed/` | 已处理截图归档 | 按需 |
 | 宿主 `.env` | ——（通过 `env_file` 注入） | API 密钥与配置 | 必须单独保存 |
@@ -319,6 +325,34 @@ ports:
 - 注意 `/api/health` 只反映进程存活与密钥是否配置，**不会**真的调用外部 API，
   所以它 healthy 不代表大模型网络可达。
 
+### 5.7 视觉层要回退到智谱（或识别质量不对）
+
+视觉层默认走 DeepSeek（`deepseek-flash`），与求解**共用** `DEEPSEEK_API_KEY` 与
+`https://api.deepseek.com`，所以镜像与编排都不用改。要换回智谱的 GLM-4.6V 系列：
+
+```dotenv
+VISION_PROVIDER=zhipu
+ZHIPU_API_KEY=xxxxxxxx
+```
+
+```bash
+docker compose up -d --force-recreate    # 只改了 .env，不需要 --build
+```
+
+- 改的是**视觉层**（分类 / OCR / 视觉推理 / 核对）；求解与辅助链路仍是 `deepseek-flash`，
+  两张 provider 表互相独立；
+- 别名（`VISION_CLASSIFY_MODEL` / `VISION_REASONING_MODEL`）与 `base_url` 由 provider 表派生，
+  所以只需要这两个环境变量；
+- 配置写错（写了个不存在的 provider）会**静默回落**到 `deepseek` 而不是启动失败；
+- 确认生效：`docker compose logs app` 里的启动报告会打印
+  「视觉层：provider=… 模型=… 思考=…」与 OCR 归档目录，或直接
+  `docker compose exec app python -m tools.diag`；
+- 排查「图读不出来」时先看这一行：`vision_configured: false` 说明当前 provider
+  对应的那个环境变量没进容器（`docker compose exec app printenv VISION_PROVIDER DEEPSEEK_API_KEY ZHIPU_API_KEY`）；
+- 切换前后想量一下 OCR 差异与耗时，跑 A/B：
+  `docker compose exec app python -m tools.vision_ab check -i /data/Screenshots/test_images`
+  （耗时结论以实测为准，不要预判哪个更快）。
+
 ---
 
 ## 6. 关于外部依赖：为什么要刻意“少”
@@ -331,7 +365,7 @@ ports:
 | PostgreSQL / MySQL | `webapp/models.py`、`webapp/accounts.py` 直接用 Python 内置 `sqlite3` 打开 `webapp/data/tasks.db`，代码里没有任何数据库驱动与连接串配置；引入外部数据库需要改代码并做数据迁移，部署上没有任何收益 |
 | Redis | 任务状态在 `webapp/jobs.py` 的 `TaskRegistry`、事件在 `webapp/routes.py` 的 `TaskEventBus`，都是进程内对象；单容器单进程模型下没有跨进程共享状态的需求。只有在要跑多个副本做负载均衡时才需要它 |
 | Celery / RabbitMQ 等消息队列 | 解题流水线用线程池在进程内调度（`webapp/pipeline.py`、`problem_solver_agent/image_grouper.py`、`MAX_CONCURRENT_TASKS`），任务本身是“提交→流式增量→落库”的单进程流程 |
-| LiteLLM 等模型网关 | 代码通过 `openai` SDK 直连各家 OpenAI 兼容接口（`problem_solver_agent/solver_client.py`、`vision_client.py`），provider 与密钥由 `.env` 的 `{PROVIDER}_API_KEY` 决定，无需中间代理 |
+| LiteLLM 等模型网关 | 代码通过 `openai` SDK 直连各家 OpenAI 兼容接口（`problem_solver_agent/solver_client.py`、`vision_client.py`），provider 与密钥由 `.env` 的 `VISION_PROVIDER` + `{PROVIDER}_API_KEY` 决定，无需中间代理 |
 | Nginx / 反向代理容器 | FastAPI 同时提供 API 与静态资源，单机自用场景下 uvicorn 直接监听 8000 即可。若需要 HTTPS、域名或统一入口，再在容器前加一层反代 |
 | 单独的前端容器 | 前端是构建期产物（见文首说明），运行期不需要 Node 进程 |
 
@@ -348,7 +382,7 @@ ports:
 ## 7. 附：从零到可用的最短路径
 
 ```bash
-cp .env.example .env          # 填入 DEEPSEEK_API_KEY、ZHIPU_API_KEY
+cp .env.example .env          # 填入 DEEPSEEK_API_KEY（视觉层默认也用它，所以一个就够；智谱按需）
 mkdir -p webapp/data webapp/uploads webapp/solutions webapp/cache solver-data
 sudo chown -R 10001:10001 webapp/data webapp/uploads webapp/solutions webapp/cache solver-data  # Linux
 docker compose up -d --build

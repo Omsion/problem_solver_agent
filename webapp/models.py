@@ -14,10 +14,24 @@ _TASK_COLUMNS: dict[str, str] = {
     # 这样升级后既有任务仍然可见（归属到本地账号）。
     "user_id": "TEXT NOT NULL DEFAULT 'local'",
     "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
+    # 转录双层落盘的第二层：让历史搜索不必去 grep 磁盘上的文件。
+    # problem_text 是**润色后**送入求解的题目文本；ocr_raw_text 是**未被润色改写**的
+    # 逐页原始 OCR —— 两者都留，因为润色可能改掉用户搜索的关键词，只存一个会搜不到。
+    "problem_text": "TEXT DEFAULT ''",
+    "ocr_raw_text": "TEXT DEFAULT ''",
+    # combined | json | parallel，用于统计两条转录路径的耗时与失败率
+    "vision_mode": "TEXT DEFAULT ''",
 }
 
 # 合法任务状态（用于校验与文档化）
 TASK_STATUSES = ("pending", "processing", "completed", "failed", "cancelled")
+
+# 列表/搜索接口**不**下发的两个"重"文本列（F8）。
+# 逐页原始 OCR 可能有数 MB，而 `GET /api/tasks`（最多 100 条）/ `?q=`（最多 500 条）
+# 一次会把所有这些文本塞进 JSON，前端列表页却根本不消费它们。单任务详情
+# （get_task）仍然返回完整文本，历史详情页照常可用。
+# 注意：只是"不下发内容"，键仍然保留成空串 —— 前端的 TS 类型依赖这三个键存在。
+_HEAVY_TEXT_COLUMNS = ("problem_text", "ocr_raw_text")
 
 
 class TaskManager:
@@ -26,6 +40,8 @@ class TaskManager:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # 列表/搜索的列投影（排除重文本列）；_init_db 会按迁移后的实际列名重建
+        self._list_columns = "*"
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -69,6 +85,13 @@ class TaskManager:
                     PRIMARY KEY (task_id, stage)
                 )
             """)
+            # 列表/搜索的列投影：显式排除两个"重"文本列（_HEAVY_TEXT_COLUMNS）。
+            # 列名用 PRAGMA 现场取而不是硬编码：以后加列不会因为漏改 SELECT 而
+            # 让新字段在列表接口里凭空消失，只有这两个重列是**故意**排除的。
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(tasks)")]
+            self._list_columns = ", ".join(
+                f'"{name}"' for name in columns if name not in _HEAVY_TEXT_COLUMNS
+            )
             conn.commit()
 
     def _migrate_tasks(self, conn: sqlite3.Connection) -> None:
@@ -115,6 +138,11 @@ class TaskManager:
             "timings_json",
             "answer_card",
             "verified",
+            # 与 _TASK_COLUMNS 新增的三列保持同步：白名单是显式的，
+            # 漏一个就会在写库时抛「未知的任务字段」而不是静默丢弃。
+            "problem_text",
+            "ocr_raw_text",
+            "vision_mode",
         }
         unknown = set(kwargs) - allowed
         if unknown:
@@ -152,6 +180,10 @@ class TaskManager:
     ) -> list[dict]:
         """按时间倒序列出任务。
 
+        返回的行**不含**两个重文本列的内容（problem_text / ocr_raw_text 填成空串，
+        键仍保留）：列表接口一次最多 100 条，把可能数 MB 的 OCR 全发给前端纯属浪费。
+        需要完整文本请用 `get_task`。
+
         Args:
             user_id: 传入时只返回该用户的任务（多用户隔离）
             tenant_id: 传入时按租户过滤
@@ -170,9 +202,70 @@ class TaskManager:
         with self._get_conn() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?", params
+                f"SELECT {self._list_columns} FROM tasks {where} ORDER BY created_at DESC LIMIT ?",
+                params,
             ).fetchall()
-            return [_row_to_task(r) for r in rows]
+            return [_row_to_task(r, with_heavy_text=False) for r in rows]
+
+    def search_tasks(
+        self,
+        query: str,
+        limit: int = 100,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        """按关键词搜索历史任务（题目文本 / 原始 OCR / 文件名）。
+
+        用 `LIKE '%q%'` 而不是 FTS5：TASK_RETENTION_COUNT=100，百行表上的
+        全表 LIKE 是微秒级；而 FTS5 的默认分词器对中文完全无效，必须
+        `tokenize='trigram'`，还要多维护一张虚表和一套同步逻辑，收益为零。
+        **等任务表涨到万级时再换 `FTS5 + tokenize='trigram'`。**
+
+        返回的行与 `get_recent_tasks` 一致：**不含**两个重文本列的内容
+        （键保留、值为空串）。搜索本身仍然匹配这两列 —— 过滤发生在 SQL 里，
+        不是把内容取出来再发给前端。
+
+        Args:
+            query: 关键词；空串直接返回空列表（避免退化成"列出全部"）
+            user_id: 传入时只在该用户的任务里搜（多用户隔离）
+            tenant_id: 传入时按租户过滤
+        """
+        keyword = (query or "").strip()
+        if not keyword:
+            return []
+
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            params.append(tenant_id)
+
+        # 转义 LIKE 的通配符：否则用户输入的 % 或 _ 会变成通配符，
+        # 搜 "50%" 会命中全部任务。用 ESCAPE 子句显式声明转义字符。
+        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        clauses.append(
+            "(problem_text LIKE ? ESCAPE '\\' "
+            "OR ocr_raw_text LIKE ? ESCAPE '\\' "
+            "OR filename LIKE ? ESCAPE '\\')"
+        )
+        params.extend([pattern, pattern, pattern])
+
+        # 排序语义与 get_recent_tasks 一致：按创建时间倒序取最近的
+        safe_limit = max(1, min(int(limit), 500))
+        params.append(safe_limit)
+        with self._get_conn() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT {self._list_columns} FROM tasks WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+            return [_row_to_task(r, with_heavy_text=False) for r in rows]
 
     def all_task_ids(self) -> set[str]:
         with self._get_conn() as conn:
@@ -296,8 +389,14 @@ class TaskManager:
             return row[0] if row and row[0] else None
 
 
-def _row_to_task(row: sqlite3.Row) -> dict:
-    """把数据库行转成字典，并把 timings_json 解析成 timings 字段。"""
+def _row_to_task(row: sqlite3.Row, *, with_heavy_text: bool = True) -> dict:
+    """把数据库行转成字典，并把 timings_json 解析成 timings 字段。
+
+    Args:
+        with_heavy_text: False 时把两个"重"文本列填成空串（列表/搜索接口用）。
+            **键必须保留**：前端的 TS 类型依赖这三个转录字段始终存在，
+            少了键比值为空串更容易在客户端炸出 `undefined`。
+    """
     task = dict(row)
     raw = task.pop("timings_json", "") or ""
     timings = None
@@ -307,4 +406,7 @@ def _row_to_task(row: sqlite3.Row) -> dict:
         except (ValueError, TypeError):
             timings = None
     task["timings"] = timings
+    if not with_heavy_text:
+        for column in _HEAVY_TEXT_COLUMNS:
+            task[column] = ""
     return task

@@ -358,9 +358,32 @@ def stream_solve_text_only(final_prompt: str, provider: str, model: str, enable_
 
 def ask_for_analysis(final_prompt: str, provider: str, model: str) -> str | None:
     """
-    非流式调用LLM进行分析任务，内置自动重试逻辑。
+    非流式调用LLM进行分析任务（润色 / 文件名生成），内置自动重试逻辑。
+
+    两个此前被忽略的坑（T5）：
+    1. **思考模式一直开着**：旧实现没有下发 `extra_body`，而 DeepSeek「思考模式默认
+       打开，且 effort 默认为 high」。于是润色与命名每次都先跑一遍高强度思考——
+       纯延迟浪费，思考 token 照样计费，结果还被直接丢弃（只取 `message.content`）；
+       同时 `temperature=0.7` **静默失效**（思考模式不支持 temperature）。
+       修法与 `_build_payload` 里已有的做法一致：关闭思考必须**显式**下发。
+    2. **超时写死 120 s**：润色要把整篇合并文本重写一遍（输出 6–10K token），
+       思考模式下很容易撞上 120 s，再按 `MAX_RETRIES` 指数退避重试
+       （10s → 20s → 40s），一次润色最坏耗掉几分钟。改用 `config.AUX_TIMEOUT`。
     """
     logger.info(f"正在使用辅助模型 '{model}' (提供商: {provider}) 进行非流式分析...")
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "stream": False,
+        "temperature": 0.7,
+        "timeout": config.AUX_TIMEOUT,
+    }
+    # 只有支持思考开关的 provider 才下发；缺少这一步时思考会一直开着。
+    # 判定走 config 的能力位（与 vision_client 同一依据），而不是写死
+    # `provider == "deepseek"`：将来接入另一家支持该开关的 provider 时，只加一条
+    # 表项就生效，不会出现"换了 provider 就开始空转思考"的静默退化。
+    if config.provider_supports_thinking_control(provider):
+        payload["extra_body"] = {"thinking": {"type": "disabled"}}
 
     for attempt in range(config.MAX_RETRIES + 1):
         try:
@@ -368,8 +391,8 @@ def ask_for_analysis(final_prompt: str, provider: str, model: str) -> str | None
             messages: list[dict[str, Any]] = [{"role": "user", "content": final_prompt}]
 
             response = client.chat.completions.create(
-                model=model, messages=messages, stream=False, temperature=0.7, timeout=120.0
-            )  # type: ignore
+                messages=messages, **payload
+            )  # type: ignore[arg-type]
 
             # 如果成功，返回结果并退出重试循环
             if response and response.choices and response.choices[0].message.content:

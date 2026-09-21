@@ -42,10 +42,12 @@ python -m problem_solver_agent.main
 启动日志长这样（关键行已标注）：
 
 ```
-✓ GLM-4.6V API密钥配置正常
+✓ 视觉层密钥配置正常（provider=deepseek，模型=deepseek-flash，思考=关闭）
 ✓ 核心求解器 'deepseek' API连接测试通过
 监控目录: D:\Users\wzw\Pictures\Screenshots        ← 图片放这里
-题目视觉分类模型: GLM-4.6V-FlashX / 题目OCR模型: ...
+OCR 归档目录: D:\Users\wzw\Pictures\ocr            ← 逐页原始 OCR 落这里
+视觉层: provider=deepseek 模型=deepseek-flash（回退：zhipu=GLM-4.6V-FlashX）
+视觉推理模型: deepseek-flash
 辅助模型: deepseek -> deepseek-flash
 文件监控已启动，正在监视目录: ...                   ← 监控就绪，可以开始拍/截图了
 ```
@@ -207,7 +209,7 @@ python tools/human_typer.py
                  └───────────────────┬────────────────────┘
                                      ▼
                         同一套核心流水线（core_pipeline）
-                分类 → 逐页 OCR → 按拍摄时间拼成题干 → 润色 → 求解
+        分类 + 多图合并转录（1 次请求） → 按拍摄时间拼成题干 →（合并成功则跳过润色）→ 求解
 ```
 
 **"为什么网页上传后 `python -m` 没启动？"** —— 因为它本来就不该启动。这是两个平级的程序：
@@ -240,7 +242,7 @@ python tools/human_typer.py
 | Python | 3.10+ | `python --version` |
 | Node.js | 20+ | **仅当需要重新构建前端时**（`webapp/static/` 已有产物可跳过） |
 | 依赖包 | `pip install -r requirements.txt` | 已包含界面与全部小工具的依赖（`keyboard`/`pywin32`/`pyautogui`/`pyperclip`/`flask` 等） |
-| API 密钥 | DeepSeek + 智谱（GLM-4.6V） | 见下 |
+| API 密钥 | DeepSeek（默认唯一必填） | 视觉层默认也用 DeepSeek；智谱仅在回退时需要，见下 |
 
 ### 手机端
 | 项目 | 要求 |
@@ -258,9 +260,15 @@ notepad .env
 ```
 
 ```dotenv
-DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解模型：deepseek-flash
-ZHIPU_API_KEY=xxxxxxxx             # 视觉模型：GLM-4.6V 系列（分类 / OCR / 核对）
+DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解 + 辅助 + 视觉层（分类 / OCR / 视觉推理 / 核对）
+# ZHIPU_API_KEY=xxxxxxxx           # 可选：仅当 VISION_PROVIDER=zhipu 回退时取消注释
 ```
+
+`.env.example` 里显式写着 `VISION_PROVIDER=deepseek`：分类 / OCR / 视觉推理 / 核对
+全部用 `deepseek-flash`，和求解共用同一个密钥与 `https://api.deepseek.com`。
+**不想用 DeepSeek 做视觉**时，把 `VISION_PROVIDER` 改成 `zhipu`（或整行删掉）
+并填上 `ZHIPU_API_KEY` 即可一键回退（见第 9 节）。注意：整行删掉走的是代码默认值
+`zhipu` —— 双 provider 的 A/B 判定通过之前，deepseek 不作为代码默认值。
 
 ---
 
@@ -349,7 +357,7 @@ python run_web.py            # 默认 8000；python run_web.py 9000 换端口
   - 用最优解风格重解 / 用讲解风格重解；
   - **开启思考模式重解**（想让它多想一会儿，慢但更稳）；
   - **关闭思考模式重解**（最快）。
-- **核对答案**：用 GLM-4.6V 对照原图复核，给出「通过 / 发现疑点 / 无法判定」。
+- **核对答案**：用视觉推理模型（默认 `deepseek-flash`，回退时是 `GLM-4.6V`）对照原图复核，给出「通过 / 发现疑点 / 无法判定」。
 - **阅读模式 / 复制全文**：长答案阅读与导出。
 
 ---
@@ -400,6 +408,7 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 | 产物 | 命令行模式 | 网页模式 |
 |---|---|---|
 | 解答 Markdown | `<工作根目录>/solutions/*.md`（如 `D:\Users\wzw\Pictures\solutions`）← **手机 SMB 看这里** | `webapp/solutions/*.md` |
+| 原始 OCR 归档 | `<工作根目录>/ocr/<日期>/<task_id>.md`（逐页转录全文 + 页数/失败页） | 同（两层入口共用同一份目录） |
 | 原图归档 | `<工作根目录>/processed/`（处理完从 Screenshots **移走**） | 原图留在 `webapp/uploads/<任务ID>/`（不移动） |
 | 任务数据库 | — | `webapp/data/tasks.db`（网页历史/用量） |
 | 失败报告 | `solutions/<任务>_FAILED.md` | 网页错误提示 |
@@ -417,9 +426,10 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 ### 路径与密钥
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `SOLVER_ROOT_DIR` | 项目父目录 | 工作根目录；其下是 `Screenshots/`、`processed/`、`solutions/` |
-| `DEEPSEEK_API_KEY` | — | 求解模型（必填） |
-| `ZHIPU_API_KEY` | — | 视觉模型 GLM-4.6V（必填） |
+| `SOLVER_ROOT_DIR` | 项目父目录 | 工作根目录；其下是 `Screenshots/`、`processed/`、`ocr/`、`solutions/` |
+| `DEEPSEEK_API_KEY` | — | 求解 + 辅助 + 视觉层（**默认必填**） |
+| `VISION_PROVIDER` | `.env.example` 写的是 deepseek；代码默认 zhipu | 视觉层供应商：`deepseek`（分类/OCR/推理/核对全用 `deepseek-flash`）/ `zhipu`（回退；分类/OCR 用 `GLM-4.6V-FlashX`，推理/核对用 `GLM-4.6V`）。未知取值回落代码默认 provider（当前 `zhipu`） |
+| `ZHIPU_API_KEY` | — | 仅 `VISION_PROVIDER=zhipu` 时需要 |
 
 ### 进图与分组
 | 变量 | 默认 | 说明 |
@@ -441,9 +451,24 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 | `SOLVER_MAX_TOKENS` | 16000 | 首选档输出上限 |
 | `SOLVER_ESCALATE_MAX_TOKENS` | 32000 | 升级档输出上限（实测 API 接受 32768/65536） |
 | `SOLVER_REASONING_EFFORT` | medium | 思考深度 low/medium/high |
-| `USE_COMBINED_VISION_CALL` | auto | 合并视觉调用：`auto`=仅单图尝试，`true`=总是，`false`=从不 |
 | `IMAGE_MAX_EDGE` | 1600 | 发送前图片最长边（越小越快越省） |
 | `IMAGE_JPEG_QUALITY` | 80 | 发送前 JPEG 质量 |
+
+### 视觉层与 OCR（多图提速）
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `USE_COMBINED_VISION_CALL` | auto | 合并视觉调用：`auto`=图数 ≤ `COMBINED_VISION_MAX_IMAGES` 时尝试，`true`=总是，`false`=从不 |
+| `COMBINED_VISION_MAX_IMAGES` | 8 | 合并调用的适用图数上限；超出就整体走「分类 + 并行 OCR」回退路径 |
+| `VISION_BATCH_SIZE` | 4 | 单次合并请求最多带几张图；超过就**分批并发**（8 图 → 2 批 → 2 次请求，实测比一次带完更快） |
+| `VISION_BATCH_WORKERS` | 4 | 批间并行度（批与批互相独立，可并发） |
+| `VISION_DISABLE_THINKING` | true | 关闭视觉层思考模式（DeepSeek 思考默认开启且 effort=high，不关会吃光 `max_tokens`） |
+| `VISION_MAX_TOKENS` | 32768 | 视觉输出上限（旧值写死 8192，多图合并转录必被截断） |
+| `VISION_COMBINED_TIMEOUT` | 300 | 合并调用专用超时（秒）；逐页 OCR 仍是 `VISION_TIMEOUT=120` |
+| `VISION_INLINE_MERGE` | true | 合并成功后本地拼接并**跳过润色**；发现 CONT 页被多删内容时置 false 回退 |
+| `OCR_PARALLEL_WORKERS` | 4 | 回退路径的逐页 OCR 并行度（合并调用成功时用不到） |
+| `AUX_TIMEOUT` | 300 | 辅助调用（润色 / 文件名生成）超时（秒），旧值硬编码 120 会撞超时 |
+| `FILENAME_MODE` | auto | 文件名生成：`auto`=求解正文首行 `FILE:` → 本地题号 → 才调模型；`local`=从不调模型；`model`=旧行为 |
+| `OCR_DIR` | `<工作根目录>/ocr` | 逐页原始 OCR 归档目录（只读产物，可安全删除） |
 
 ### 访问控制（多人用时）
 | 变量 | 默认 | 说明 |
@@ -455,7 +480,42 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 
 ---
 
-## 9. 常见问题（FAQ）
+## 9. 视觉层一键回退到智谱
+
+视觉层默认走 **DeepSeek**（`deepseek-flash`，与求解共用 `DEEPSEEK_API_KEY`）。
+DeepSeek 侧限流/故障，或者你发现 OCR 质量在自家题库上退化时，改**两行 `.env`** 就能切回
+智谱的 GLM-4.6V 系列，**代码一行不用改**：
+
+```dotenv
+VISION_PROVIDER=zhipu
+ZHIPU_API_KEY=xxxxxxxx        # 只有这一行是新增；DEEPSEEK_API_KEY 保留不动
+```
+
+切完之后：
+
+| 环节 | deepseek（默认） | zhipu（回退） |
+|---|---|---|
+| 分类 / OCR（多图合并） | `deepseek-flash` | `GLM-4.6V-FlashX` |
+| 视觉推理 / 核对 | `deepseek-flash` | `GLM-4.6V` |
+| 密钥 | `DEEPSEEK_API_KEY` | `ZHIPU_API_KEY` |
+| 思考模式开关 | 默认关闭（`VISION_DISABLE_THINKING`） | 该 provider 不支持，开关不生效 |
+| 求解 / 辅助 | 不变，仍是 `deepseek-flash` | 不变，仍是 `deepseek-flash` |
+
+注意几点：
+
+- 求解层**不跟着切** —— 它是另一张 provider 表（`SOLVER_CONFIG`），所以回退只影响读图；
+- 重试旧任务时，阶段缓存里记了模型名，切换 provider 后旧缓存**自动失效**，不会混用；
+- 想确认切成功了：启动日志（或 `python tools/diag.py`）里会打印
+  `视觉层: provider=zhipu 模型=GLM-4.6V-FlashX`；
+- 切之前建议先用 A/B 工具量一次：`python -m tools.vision_ab check -i <图或目录>`
+  （同一组图跑两个 provider 的 OCR 并出差异报告）。**耗时与质量结论以实测为准，
+  不要在没跑之前断言哪个更快**；
+- 回退分支**长期保留**，不是临时过渡：单一供应商意味着 DeepSeek 挂了整条流水线都挂，
+  而回退的代价只是一个环境变量。
+
+---
+
+## 10. 常见问题（FAQ）
 
 **Q1：网页里上传了图片，为什么命令行那个 `python -m` 没反应？**
 见第 2 节：两个是平级入口，网页上传由网页服务自己处理，不需要也不会启动命令行 Agent。
@@ -495,14 +555,24 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 命令行模式处理完会把原图**移动**到 `processed/`（设计如此）；网页模式不移动。
 
 **Q11：想换模型？**
-改 `problem_solver_agent/config.py` 的 `SOLVER_CONFIG` / `VISION_*_MODEL`，或用 `.env` 覆盖；新增 provider 的密钥命名规则是 `{PROVIDER}_API_KEY`（全大写）。
+视觉层换供应商走 `.env` 的 `VISION_PROVIDER`（`deepseek` / `zhipu`，见第 9 节）；
+换求解模型改 `problem_solver_agent/config.py` 的 `SOLVER_CONFIG`。
+两张 provider 表互相独立：视觉层换 provider 不会动求解。新增 provider 的密钥命名规则是 `{PROVIDER}_API_KEY`（全大写）。
 
 **Q12：网页打不开？**
 看启动窗口报错；确认 `webapp/static/index.html` 存在（否则 `cd frontend && npm install && npm run build`）；端口被占用就 `python run_web.py 9000`；手机访问用局域网 IP（`tools/diag.py` 会打印）。
 
+**Q13：多图任务现在要等多久？还会一页一页慢慢 OCR 吗？**
+不会。最多 8 张图按 `VISION_BATCH_SIZE`（默认 4）**分批并发**，每批用
+`<<<PAGE n|NEW/CONT>>>` 分隔符协议一次拿回"题型 + 该批全部逐页转录"：8 图 = 2 次请求
+（旧行为是 9 次：1 次分类 + 8 次串行 OCR），合并成功时还会跳过润色调用。
+2026-09-21 的真实实测：8 图分批合并 ≈6.4 s，一次带完 8 张 ≈8.4 s（同轮对照），
+端到端（含求解）19.5 s。合并失败/图数超过 `COMBINED_VISION_MAX_IMAGES` 时自动回退到
+「分类 + 并行 OCR」路径（`OCR_PARALLEL_WORKERS=4`），缺页按页补做，不会整批作废。
+
 ---
 
-## 10. 排障工具箱
+## 11. 排障工具箱
 
 ```powershell
 # 一键自检：路径、密钥、Web 可达性、图片预处理收益、局域网 IP（做 SMB/扫码时要用）
@@ -510,9 +580,14 @@ python tools/diag.py
 python tools/diag.py --api            # 额外做一次真实 API 探活（极小额花费）
 python tools/diag.py --port 8000
 
+# 视觉层 A/B 评测：同一组图跑两个 provider 的 OCR，出差异报告（换 provider 前先跑它）
+python -m tools.vision_ab check -i "D:\Users\wzw\Pictures\Screenshots\test_images"
+
 # 健康检查（网页服务在跑时）
 Invoke-RestMethod http://localhost:8000/api/health
 Invoke-RestMethod http://localhost:8000/api/status
+# 按关键词搜历史任务（题目文本 / 原始 OCR / 文件名）
+Invoke-RestMethod "http://localhost:8000/api/tasks?q=洛必达"
 
 # 看最近任务（SQLite 只读）
 python -c "import sqlite3;c=sqlite3.connect('webapp/data/tasks.db');print(c.execute('select id,status,problem_type from tasks order by created_at desc limit 5').fetchall())"
@@ -526,34 +601,38 @@ python -c "import sqlite3;c=sqlite3.connect('webapp/data/tasks.db');print(c.exec
 | `检测到新图片（改名就位）` | Syncthing「临时文件+改名」的投递被识别了 |
 | `补偿扫描：补投 N 张图片` | 兜底扫描捡回了漏掉的文件 |
 | `图片已按拍摄时间重排` | 到达顺序是乱的，已自动纠正 |
-| `跳过合并调用` | 多图直接走两步流程（更快，不会白等） |
+| `视觉层: provider=` | 当前视觉 provider 与模型（切 provider 后先看这一行） |
+| `合并调用（分类 + 转录），协议=PAGE` | 8 图走的是 1 次合并请求 |
+| `跳过合并调用` | 图数超上限或开关关闭，走「分类 + 并行 OCR」两步流程 |
+| `PAGE 协议解析失败` / `回退 JSON 协议` | 合并结果没解析出来，正在逐级回退 |
 | `求解画像:` | 每次求解的模型/思考/配额/字符数/finish_reason |
 | `流水线失败 task=` | 该任务失败，后面跟原因 |
 
 ---
 
-## 11. 目录结构
+## 12. 目录结构
 
 ```
 OnlineTest/
 ├─ problem_solver_agent/          # 核心逻辑（CLI 与 Web 共用）
 │  ├─ main.py                    # ★ 命令行入口：python -m problem_solver_agent.main
-│  ├─ config.py                  # 全部配置常量（.env 覆盖）
+│  ├─ config.py                  # 全部配置常量（.env 覆盖）+ 视觉 provider 表
 │  ├─ file_monitor.py            # 文件夹监控：新建 + 改名就位 + 补偿扫描 + 去重账本
 │  ├─ image_grouper.py           # 时间窗分组 + 工作线程池
 │  ├─ image_order.py             # 按拍摄时间排序（EXIF → 文件名 → mtime）
-│  ├─ vision_client.py           # 分类 / 逐页 OCR / 视觉推理
-│  ├─ solver_client.py           # 求解（流式、思考模式、按需升级）
-│  ├─ core_pipeline.py           # 流水线编排：识别 → 拼接 → 润色 → 求解 → 答案卡
+│  ├─ vision_client.py           # 分类 / 多图合并转录（PAGE 协议）/ 逐页 OCR / 视觉推理
+│  ├─ solver_client.py           # 求解（流式、思考模式、按需升级）+ 辅助调用（润色/文件名）
+│  ├─ core_pipeline.py           # 流水线编排：识别 → 拼接 → 润色 → 求解 → 答案卡 → OCR 归档
 │  └─ prompts.py                 # 全部 Prompt 模板
 ├─ tools/                        # 小工具
-│  ├─ diag.py                    # 一键自检
+│  ├─ diag.py                    # 一键自检（含视觉 provider / 模型 / 思考状态）
+│  ├─ vision_ab.py               # ★ 视觉层 A/B 评测（两个 provider 的 OCR 差异报告）
 │  ├─ silent_screencapper.py     # ★ 静默热键截图（Alt+X，需管理员）
 │  ├─ human_typer.py             # 真实打字模拟器（接管 Ctrl+V）
 │  └─ remote_trigger.py          # 手机遥控触发截图（默认端口 5555）
 ├─ webapp/                       # 网页服务（复盘用）
 │  ├─ app.py / routes.py / auto_import.py
-│  ├─ data/tasks.db              # 任务 + 账号 + 用量
+│  ├─ data/tasks.db              # 任务 + 账号 + 用量（含 problem_text / ocr_raw_text / vision_mode）
 │  ├─ solutions/ uploads/ static/
 ├─ frontend/                     # React 源码（改完要 npm run build）
 ├─ tests/ docs/                  # 测试与文档
@@ -567,12 +646,13 @@ OnlineTest/
 Pictures/
 ├─ Screenshots/     ← 监控目录（Syncthing 目标；也可手机 SMB 直接放照片）
 ├─ processed/       ← 处理完的原图归档
+├─ ocr/             ← 逐页原始 OCR 归档（<日期>/<task_id>.md）
 └─ solutions/       ← 解答（手机 SMB 看这里）+ .monitor_seen.json 账本
 ```
 
 ---
 
-## 12. 已知限制与后续可改进
+## 13. 已知限制与后续可改进
 
 | 限制 | 说明 / 改进方向 |
 |---|---|
@@ -581,7 +661,9 @@ Pictures/
 | 顺序依赖 EXIF/文件名 | 都被清掉时只能退化成 mtime（某些聊天软件转发会丢 EXIF） |
 | "对错"无法自动判断 | 升级/重跑只看"答案是否完整"；判对错要用「核对答案」 |
 | 核对结果不跨刷新保留 | 刷新后已跑过的核对结论不显示（库里只存 `verified` 标志） |
-| 任务内 OCR 串行 | `OCR_PARALLEL_WORKERS=1`，多图时较慢 |
+| 超过 8 图的图组不分批 | 超过 `COMBINED_VISION_MAX_IMAGES`（默认 8）的图组整体退回「分类 + 并行 OCR」，调用次数重新变多（8 张以内已是分批并发，无此问题） |
+| 历史搜索用 LIKE，未上 FTS5 | `TASK_RETENTION_COUNT=100` 是百行表，LIKE 是微秒级；FTS5 默认分词器对中文无效，要 `tokenize='trigram'` 还得多维护一张虚表，收益为零。等任务表涨到万级时再换 |
+| 隐私没有因为迁移而改善 | 图片以 base64 **编码**（不是加密）发送，模型看到的就是完整原图；换 provider 只是换了接收方，暴露面不变。唯一根治手段是本机跑视觉模型 |
 
 ---
 
@@ -590,7 +672,7 @@ Pictures/
 ```
 【一次性准备】
 1. pip install -r requirements.txt
-2. copy .env.example .env → 填 DEEPSEEK_API_KEY / ZHIPU_API_KEY
+2. copy .env.example .env → 填 DEEPSEEK_API_KEY（视觉层默认也用它；ZHIPU_API_KEY 按需）
 3. 手机装 Syncthing：DCIM/Camera（仅发送）→ D:\Users\wzw\Pictures\Screenshots（仅接收）
 4. （想在手机看答案）把 solutions 文件夹做成共享（SMB），手机文件管理器添加
 
@@ -602,4 +684,5 @@ Pictures/
 8. 想在考试客户端里作答 → 手机复制代码（跨设备剪贴板同步到电脑）
    → 鼠标停在输入框上 → python tools/human_typer.py → Ctrl+V（期间别动鼠标）
 9. 想复盘/重解/核对 → 关掉它，改开 start_web.bat（别同时开）
+10. （可选）视觉层想回退智谱：.env 里 VISION_PROVIDER=zhipu + ZHIPU_API_KEY
 ```

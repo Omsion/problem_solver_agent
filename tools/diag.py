@@ -5,8 +5,10 @@ diag.py - 一键自检脚本
 用途：在"推理结果不对/手机连不上/出答案太慢"时快速定位问题，而不是靠猜。
 
 检查项：
-1. 路径与配置（工作目录、监控目录、解答目录、图片参数）
+1. 路径与配置（工作目录、监控目录、解答目录、OCR 归档目录、图片参数）
 2. API 密钥与求解器/视觉客户端可用性（是否只做了本地检查、是否真的调用）
+   —— 视觉层密钥**按 provider 判定**：问的是"当前 provider 需要哪个环境变量"，
+      而不是写死 ZHIPU_API_KEY（迁移后默认是 DEEPSEEK_API_KEY）
 3. Web 服务可达性（/api/health、/api/status）
 4. 图片预处理收益实测（用真实截图跑一遍，报告体积缩小倍数）
 5. 本机网络信息（局域网地址，供手机访问）
@@ -53,6 +55,9 @@ def check_paths() -> None:
         ("监控目录", config.MONITOR_DIR),
         ("归档目录", config.PROCESSED_DIR),
         ("解答目录", config.SOLUTION_DIR),
+        # OCR 归档（第 1 层落盘，<OCR_DIR>/<日期>/<task_id>.md）与上面同级。
+        # 单列出来是因为"OCR 没落盘"是排查"解答里题目文本不对"时的第一现场。
+        ("OCR 归档目录", config.OCR_DIR),
     ):
         if path.exists():
             _line(OK, f"{label}存在: {path}")
@@ -69,6 +74,18 @@ def check_paths() -> None:
         f"合并视觉调用: {config.USE_COMBINED_VISION_CALL}"
         f"（auto 时仅 <= {config.COMBINED_VISION_MAX_IMAGES} 张图才尝试）",
     )
+    _line(
+        OK,
+        f"分批合并    : 每批 <= {config.VISION_BATCH_SIZE} 张图 / {config.VISION_BATCH_WORKERS} 批并发"
+        f"（8 图 → {max(1, -(-8 // max(1, config.VISION_BATCH_SIZE)))} 次请求）",
+    )
+    _line(
+        OK,
+        f"合并调用超时: {config.VISION_COMBINED_TIMEOUT:g} s / 输出上限 {config.VISION_MAX_TOKENS} token "
+        f"/ 内联拼接={'开' if config.VISION_INLINE_MERGE else '关'}",
+    )
+    _line(OK, f"OCR 并行数  : {config.OCR_PARALLEL_WORKERS}（仅回退路径生效）")
+    _line(OK, f"文件名模式  : {config.FILENAME_MODE}")
     _line(OK, f"并发上限    : {config.MAX_CONCURRENT_TASKS}")
     _line(
         OK,
@@ -76,21 +93,85 @@ def check_paths() -> None:
     )
 
 
+def _vision_profile() -> tuple[str, dict[str, str], bool]:
+    """解析出"生效的"视觉层配置。
+
+    为什么要有这一步：`.env` 里可能写着 `VISION_PROVIDER=zhipu` 之外的错字，
+    而 `config` 会把未知取值**静默回落**到 deepseek（配置写错不该让服务起不来）。
+    自检工具的价值恰恰在于"把静默回落显式说出来"，否则用户会以为自己在用智谱。
+
+    Returns:
+        (生效 provider, 该 provider 的配置字典, 是否需要提示回落)
+    """
+    raw = (config.VISION_PROVIDER or "").strip().lower()
+    fell_back = raw not in config.VISION_PROVIDER_CONFIG
+    provider = config.VISION_PROVIDER  # config 已经做过回落
+    return provider, config.VISION_PROVIDER_CONFIG[provider], fell_back
+
+
+def _thinking_text(provider: str, cfg: dict[str, str]) -> str:
+    """描述"思考模式"在该 provider 上的实际状态（而不是只念开关值）。"""
+    if cfg.get("supports_thinking_control") != "1":
+        return "该 provider 不支持关闭"
+    return "关闭" if config.VISION_DISABLE_THINKING else "开启"
+
+
 def check_keys() -> bool:
+    """密钥自检：**按 provider 判定**，错误文案必须点名该配的环境变量。
+
+    旧实现写死 `ZHIPU_API_KEY`，迁移到 DeepSeek 后会出现两种坏情况：
+    ① 密钥齐了也报 FAIL；② 缺的是 DEEPSEEK_API_KEY 却让人去配智谱的 key。
+    所以这里一律从 `config.VISION_PROVIDER_CONFIG` 取 `api_key_env`。
+    """
     print("\n== API 密钥 ==")
     healthy = True
-    if config.ZHIPU_API_KEY:
-        _line(OK, "ZHIPU_API_KEY 已配置（视觉分类 / OCR / 视觉推理）")
+
+    provider, cfg, fell_back = _vision_profile()
+    env_name = cfg["api_key_env"]
+    key_ok = bool(config._vision_api_key(provider))  # noqa: SLF001 自检工具直接用底层出口
+
+    if key_ok:
+        _line(OK, f"{env_name} 已配置（视觉分类 / OCR / 视觉推理 / 核对）")
     else:
-        _line(FAIL, "ZHIPU_API_KEY 缺失：所有视觉步骤都会失败")
+        _line(FAIL, f"{env_name} 缺失：当前视觉层 provider={provider}，所有视觉步骤都会失败")
         healthy = False
 
-    for provider in config.SOLVER_CONFIG:
-        key = getattr(config, f"{provider.upper()}_API_KEY", None)
+    if fell_back:
+        _line(
+            WARN,
+            f"VISION_PROVIDER 取值无法识别，已按默认回落为 {provider}（可选："
+            f"{' / '.join(config.VISION_PROVIDER_CONFIG)}）",
+        )
+
+    # 一行汇总，回答"现在到底在用哪家的哪个模型、思考关了没、钥匙配了没"。
+    # 迁移方案第 7 节的验收就是看这一行。
+    _line(
+        OK,
+        f"视觉层      : provider={provider} 模型={config.VISION_CLASSIFY_MODEL} "
+        f"思考={_thinking_text(provider, cfg)} 密钥={'已配置' if key_ok else '缺失'}",
+    )
+    _line(
+        OK,
+        f"视觉推理模型: {config.VISION_REASONING_MODEL}（端点 {config.VISION_BASE_URL}）",
+    )
+
+    # 其他 provider 只做提示：它们当前不生效，缺密钥不该让自检失败。
+    for name, other in config.VISION_PROVIDER_CONFIG.items():
+        if name == provider:
+            continue
+        other_env = other["api_key_env"]
+        other_ok = bool(config._vision_api_key(name))  # noqa: SLF001
+        _line(
+            OK if other_ok else WARN,
+            f"{other_env}：{'已配置' if other_ok else '未配置'}（仅当 VISION_PROVIDER={name} 时需要）",
+        )
+
+    for solver in config.SOLVER_CONFIG:
+        key = getattr(config, f"{solver.upper()}_API_KEY", None)
         if key:
-            _line(OK, f"{provider.upper()}_API_KEY 已配置（求解器 {provider}）")
+            _line(OK, f"{solver.upper()}_API_KEY 已配置（求解器 {solver}）")
         else:
-            _line(FAIL, f"{provider.upper()}_API_KEY 缺失：求解器 {provider} 不可用")
+            _line(FAIL, f"{solver.upper()}_API_KEY 缺失：求解器 {solver} 不可用")
             healthy = False
     return healthy
 
@@ -108,11 +189,23 @@ def check_api_alive() -> None:
             continue
         _line(OK if ok else FAIL, f"求解器 {provider} ({model}) {'可用' if ok else '不可用'}")
 
-    try:
-        client = vision_client._get_vision_client()  # noqa: SLF001
-        _line(OK if client else FAIL, f"视觉客户端 {'初始化成功' if client else '初始化失败'}")
-    except Exception as exc:
-        _line(FAIL, f"视觉客户端初始化异常: {exc}")
+    # 视觉客户端按 provider 探活：`_get_vision_client(provider=...)` 是底座新增的能力，
+    # 这里两个 provider 都试一遍——用户切 provider 后最先出问题的就是密钥/端点。
+    active, _cfg, _fell = _vision_profile()
+    for name in config.VISION_PROVIDER_CONFIG:
+        try:
+            client = vision_client._get_vision_client(name)  # noqa: SLF001
+        except Exception as exc:
+            _line(FAIL, f"视觉客户端 [{name}] 初始化异常: {exc}")
+            continue
+        if client:
+            _line(OK, f"视觉客户端 [{name}] 初始化成功"
+                     f"{'（当前生效）' if name == active else '（备用 provider）'}")
+        else:
+            # 非当前 provider 缺密钥属正常，降级为 WARN 不误导
+            mark = FAIL if name == active else WARN
+            _line(mark, f"视觉客户端 [{name}] 初始化失败"
+                        f"（检查 {config.VISION_PROVIDER_CONFIG[name]['api_key_env']}）")
 
 
 def check_web(port: int) -> None:

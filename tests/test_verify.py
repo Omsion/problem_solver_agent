@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from problem_solver_agent import verify
+from problem_solver_agent import config, verify
 
 
 def test_parse_clean_agree():
@@ -91,14 +91,26 @@ def test_markdown_render_disagree():
         verdict="disagree",
         issues=["第 2 小问漏答"],
         corrections="补上：选 C",
-        model="GLM-4.6V",
+        model="m-test",
     )
     text = result.as_markdown()
     assert "## 核对结果" in text
     assert "核对发现疑点" in text
     assert "- 第 2 小问漏答" in text
     assert "补上：选 C" in text
-    assert "GLM-4.6V" in text
+    assert "m-test" in text
+
+
+@pytest.mark.parametrize("model", [config.VISION_REASONING_MODEL, "GLM-4.6V"])
+def test_markdown_render_includes_whichever_model_was_used(model):
+    """渲染只负责把**实际用到的**模型名写进报告，与当前 provider 无关。
+
+    为什么参数化：迁移前写的断言硬编码了 `GLM-4.6V`，provider 一换这条用例的语义
+    就变成"断言报告里必须出现一个已经不再使用的模型名"。这里同时覆盖"当前 provider
+    的模型"与"旧 GLM 模型名"，锁定的是渲染的**通用性**。
+    """
+    text = verify.VerificationResult(verdict="disagree", issues=["x"], model=model).as_markdown()
+    assert model in text
 
 
 def test_markdown_render_agree():
@@ -133,6 +145,47 @@ def test_verify_answer_with_empty_answer():
     result = verify.verify_answer([Path("x.jpg")], "   ")
     assert result.verdict == "unclear"
     assert "解答内容为空" in result.reason
+
+
+def test_verify_answer_uses_configured_reasoning_model(monkeypatch, tmp_path):
+    """核对模型自动跟随 `config.VISION_REASONING_MODEL`（provider 切换不用改这里）。
+
+    为什么这么测：`verify.py` 里是 `model or config.VISION_REASONING_MODEL`，
+    迁移时**无需改代码**。把它锁住，避免以后有人又写死一个 GLM 模型名。
+    """
+    captured: dict = {}
+
+    def fake_call(image_paths, prompt, model_name, **kwargs):
+        captured["model_name"] = model_name
+        return '{"verdict":"agree","issues":[]}'
+
+    monkeypatch.setattr(verify.vision_client, "_call_vision_api", fake_call)
+    image = tmp_path / "p.jpg"
+    image.write_bytes(b"x")
+
+    result = verify.verify_answer([image], "答案")
+
+    assert result.verdict == "agree"
+    assert captured["model_name"] == config.VISION_REASONING_MODEL
+    assert result.model == config.VISION_REASONING_MODEL
+
+
+def test_verify_answer_model_override_wins(monkeypatch, tmp_path):
+    """显式传 `model=` 时以参数为准 —— 用例与 A/B 工具靠它独立于当前 provider。"""
+    captured: dict = {}
+
+    def fake_call(image_paths, prompt, model_name, **kwargs):
+        captured["model_name"] = model_name
+        return '{"verdict":"agree","issues":[]}'
+
+    monkeypatch.setattr(verify.vision_client, "_call_vision_api", fake_call)
+    image = tmp_path / "p.jpg"
+    image.write_bytes(b"x")
+
+    result = verify.verify_answer([image], "答案", model="some-other-vlm")
+
+    assert captured["model_name"] == "some-other-vlm"
+    assert result.model == "some-other-vlm"
 
 
 def test_verify_answer_truncates_long_answer(monkeypatch, tmp_path):

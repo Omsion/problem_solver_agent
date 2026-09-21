@@ -7,6 +7,7 @@ test_accounts.py - 账户/密码/额度/用量/验证码测试
 - 安全视图：`to_public_dict()` 不泄露密码哈希、原始手机号与完整 API Key
 - 额度：够用不抛、不足抛 BudgetExceededError（含 remaining/required）、消费后余量下降
 - 用量：record_usage 费用与 estimate_cost 一致、按模型/按阶段聚合、全局 Top 用户排序
+- 单价：COST_TABLE 反映迁移后的真实单价（S6），且金额断言不再依赖写死的旧单价
 - 密钥：rotate_api_key 后旧 key 立即失效；set_budget/set_role 对不存在的用户返回 False
 - 短信验证码：一次性消费、错误码拒绝、过期码拒绝（直接改库，不 sleep）
 
@@ -21,6 +22,7 @@ import time
 
 import pytest
 
+from problem_solver_agent import config as core_config
 from webapp.accounts import (
     COST_TABLE,
     ROLE_ADMIN,
@@ -219,22 +221,31 @@ def test_check_budget_for_unknown_user(manager: AccountManager):
 
 
 def test_spending_reduces_remaining(manager: AccountManager):
-    """消费后 spent 增加、remaining 相应减少。"""
-    user = manager.create_user(phone="13800000022", password="pw", budget=1.0)
+    """消费后 spent 增加、remaining 相应减少（金额全部由 COST_TABLE 推导）。
+
+    不再写死"1M 输入 = 0.5 元"：那是 `deepseek-flash` 修正前的错误单价
+    （实际高峰价 2.0/8.0）。改成用 `estimate_cost` 推导期望值后，即使单价再调整，
+    这个用例仍然只验证"消费与余额的**关系**"，不会被单价变化误伤。
+    """
+    user = manager.create_user(phone="13800000022", password="pw", budget=10.0)
     manager.record_usage(
         user_id=user.id,
         stage="solve",
         model="deepseek-flash",
         input_tokens=1_000_000,
         output_tokens=0,
-    )  # 0.5 元
+    )
+
+    cost = estimate_cost("deepseek-flash", 1_000_000, 0)
+    assert cost > 0
 
     after = manager.get_user(user.id)
-    assert after.spent == pytest.approx(0.5)
-    assert after.remaining == pytest.approx(0.5)
-    # 花掉一半后，需要 0.6 元的调用应被拒绝
+    assert after.spent == pytest.approx(cost)
+    assert after.remaining == pytest.approx(10.0 - cost)
+    # 余额内够用、超出即拒绝
+    manager.check_budget(user.id, after.remaining)
     with pytest.raises(BudgetExceededError):
-        manager.check_budget(user.id, 0.6)
+        manager.check_budget(user.id, after.remaining + 0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -272,38 +283,43 @@ def test_usage_summary_aggregates_by_model_and_stage(manager: AccountManager):
 
     注意：项目内 DeepSeek 模型已统一为 `deepseek-flash`，为了仍然覆盖"多个模型
     分别聚合"的场景，这里另造一个未登记在 COST_TABLE 的模型名（回落到 default 单价）。
+    期望金额一律由 `estimate_cost` 推导，避免单价修正（S6）后又要改一遍断言。
     """
     user = manager.create_user(phone="13800000024", password="pw", budget=100.0)
     manager.record_usage(
         user_id=user.id, stage="ocr", model="deepseek-flash",
         input_tokens=1_000_000, output_tokens=0,
-    )  # 0.5
+    )
     manager.record_usage(
         user_id=user.id, stage="solve", model="unlisted-model",
         input_tokens=0, output_tokens=1_000_000,
-    )  # 8.0（default 单价）
+    )
     manager.record_usage(
         user_id=user.id, stage="solve", model="deepseek-flash",
         input_tokens=0, output_tokens=1_000_000,
-    )  # 2.0
+    )
+
+    flash_in = estimate_cost("deepseek-flash", 1_000_000, 0)
+    flash_out = estimate_cost("deepseek-flash", 0, 1_000_000)
+    unlisted_out = estimate_cost("unlisted-model", 0, 1_000_000)
 
     summary = manager.usage_summary(user.id)
     assert summary["calls"] == 3
-    assert summary["cost"] == pytest.approx(10.5)
+    assert summary["cost"] == pytest.approx(flash_in + flash_out + unlisted_out)
     assert summary["input_tokens"] == 1_000_000
     assert summary["output_tokens"] == 2_000_000
 
     by_model = {row["model"]: row for row in summary["by_model"]}
     assert by_model["unlisted-model"]["calls"] == 1
-    assert by_model["unlisted-model"]["cost"] == pytest.approx(8.0)
+    assert by_model["unlisted-model"]["cost"] == pytest.approx(unlisted_out)
     assert by_model["deepseek-flash"]["calls"] == 2
-    assert by_model["deepseek-flash"]["cost"] == pytest.approx(2.5)
+    assert by_model["deepseek-flash"]["cost"] == pytest.approx(flash_in + flash_out)
 
     by_stage = {row["stage"]: row for row in summary["by_stage"]}
     assert by_stage["solve"]["calls"] == 2
-    assert by_stage["solve"]["cost"] == pytest.approx(10.0)
+    assert by_stage["solve"]["cost"] == pytest.approx(flash_out + unlisted_out)
     assert by_stage["ocr"]["calls"] == 1
-    assert by_stage["ocr"]["cost"] == pytest.approx(0.5)
+    assert by_stage["ocr"]["cost"] == pytest.approx(flash_in)
 
     # 两个维度的聚合都按花费倒序
     model_costs = [row["cost"] for row in summary["by_model"]]
@@ -320,15 +336,18 @@ def test_global_usage_summary_top_users_sorted_by_cost(manager: AccountManager):
     manager.record_usage(
         user_id=small.id, stage="ocr", model="deepseek-flash",
         input_tokens=1_000_000, output_tokens=0,
-    )  # 0.5
+    )
     manager.record_usage(
         user_id=big.id, stage="solve", model="deepseek-flash",
         input_tokens=0, output_tokens=1_000_000,
-    )  # 2.0
+    )
+
+    out_price = estimate_cost("deepseek-flash", 0, 1_000_000)
+    in_price = estimate_cost("deepseek-flash", 1_000_000, 0)
 
     summary = manager.global_usage_summary()
     assert summary["calls"] == 2
-    assert summary["cost"] == pytest.approx(2.5)
+    assert summary["cost"] == pytest.approx(in_price + out_price)
     assert summary["output_tokens"] == 1_000_000
 
     ids = [row["id"] for row in summary["top_users"]]
@@ -339,6 +358,24 @@ def test_global_usage_summary_top_users_sorted_by_cost(manager: AccountManager):
 
     # 管理员看板同样不泄露原始手机号
     assert "13800000030" not in json.dumps(summary["top_users"])
+
+
+def test_cost_table_reflects_migration_prices():
+    """S6：单价表反映真实（高峰）单价，额度扣减不再长期低估。
+
+    迁移文档 §2.4：`deepseek-flash` 空闲 1/4、高峰 2/8。额度系统的目的是限制滥用，
+    因此按**高峰价**计（宁可高估）。旧值 `(0.5, 2.0)` 把输入低估 4 倍、输出低估 4 倍。
+    GLM 两条必须继续留在表里 —— `VISION_PROVIDER=zhipu` 一键回退时仍要走这里的单价。
+    """
+    assert COST_TABLE["deepseek-flash"] == (2.0, 8.0)
+    assert COST_TABLE["deepseek-v4-pro"] == (9.0, 27.0)
+    assert COST_TABLE["GLM-4.6V-FlashX"] == (0.5, 1.5)
+    assert COST_TABLE["GLM-4.6V"] == (2.0, 6.0)
+    assert COST_TABLE["default"] == (2.0, 8.0)
+
+    # 视觉层当前使用的模型必须在表里，否则会静默回落到 default 单价
+    assert core_config.VISION_CLASSIFY_MODEL in COST_TABLE
+    assert estimate_cost("deepseek-flash", 1_000_000, 1_000_000) == pytest.approx(10.0)
 
 
 def test_estimate_cost_unknown_model_uses_default_price():

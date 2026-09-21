@@ -6,6 +6,7 @@ test_solver_client.py - 求解器客户端的健壮性测试
 - 关闭思考模式后仍为空时报出可诊断的错误（带 finish_reason / 字符数）
 - 建连阶段的网络错误仍然重试，最终失败时错误事件带真实异常文本
 - 流式迭代中途抛错时不会把异常泄漏给调用方
+- 辅助链路 `ask_for_analysis`（润色 / 文件名生成）的请求形状：S10 关思考 + `AUX_TIMEOUT`
 
 运行：pytest tests/test_solver_client.py -v
 """
@@ -285,3 +286,66 @@ def test_reasoning_limit_aborts_before_burning_the_budget(make_client):
     assert metas[0]["content_chars"] == 0
     # 第二次请求必须真正关掉思考
     assert client.payloads[1]["extra_body"]["thinking"]["type"] == "disabled"
+
+
+# ---------------------------------------------------------------------------
+# 辅助链路（ask_for_analysis）：S10 —— 思考必须关掉、超时必须可配
+# ---------------------------------------------------------------------------
+
+
+def test_ask_for_analysis_disables_thinking(make_client):
+    """S10：`ask_for_analysis` 发给 DeepSeek 的 payload 必须显式关掉思考。
+
+    为什么这么测：润色 / 文件名生成本来就跑在 `deepseek-flash` 上，而 DeepSeek
+    「思考模式默认打开，且 effort 默认为 high」。旧实现没有下发 `extra_body`，
+    于是每次润色都先跑一遍高强度思考——纯延迟浪费、token 照付、`temperature=0.7`
+    还静默失效。修法与 `_build_payload` 一致：关闭思考必须**显式**下发。
+    """
+    client = make_client(
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="润色结果"))])
+    )
+
+    result = solver_client.ask_for_analysis("请润色", "deepseek", "deepseek-flash")
+
+    assert result == "润色结果"
+    payload = client.payloads[0]
+    assert payload["extra_body"] == {"thinking": {"type": "disabled"}}
+    # 非流式：润色要把整篇文本重写一遍，流式在这里没有收益
+    assert payload["stream"] is False
+
+
+def test_ask_for_analysis_timeout_comes_from_aux_timeout(make_client):
+    """超时必须是 `config.AUX_TIMEOUT`，而不是旧实现写死的 120 s。
+
+    旧硬编码 120 s 会让润色（输出 6–10K token）撞超时，再按 `MAX_RETRIES`
+    指数退避重试，一次润色最坏耗掉几分钟——这是延迟长尾的最大来源。
+    """
+    client = make_client(
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="结果"))])
+    )
+
+    solver_client.ask_for_analysis("请润色", "deepseek", "deepseek-flash")
+
+    payload = client.payloads[0]
+    assert payload["timeout"] == config.AUX_TIMEOUT
+    assert payload["timeout"] != 120.0
+    assert payload["timeout"] > 120.0  # 默认 300 s；调小就失去意义了
+
+
+def test_ask_for_analysis_without_thinking_control_omits_extra_body(make_client):
+    """非 DeepSeek provider 不支持思考开关，payload 里不得出现 `extra_body`。
+
+    （迁移后辅助链路仍固定走 deepseek，但分支语义要锁住：`extra_body` 是
+    DeepSeek 特有字段，发给别家可能直接 400。）
+    """
+    client = make_client(
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="结果"))])
+    )
+
+    solver_client.ask_for_analysis("请润色", "zhipu", "GLM-4.6V")
+
+    payload = client.payloads[0]
+    assert "extra_body" not in payload
+    assert payload["stream"] is False
+    assert payload["timeout"] == config.AUX_TIMEOUT
+    assert payload["model"] == "GLM-4.6V"

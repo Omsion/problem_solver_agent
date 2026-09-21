@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-STAGES = ("classify", "ocr", "polish", "solve", "total")
+STAGES = ("classify", "ocr", "polish", "solve", "filename", "total")
 
 
 @dataclass

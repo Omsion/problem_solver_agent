@@ -26,6 +26,7 @@ from . import config as web_config
 from .accounts import AccountManager, BudgetExceededError, User
 from .deps import get_current_user
 from .jobs import TaskRegistry
+from .pipeline import delete_ocr_archives, read_cached_transcript, transcript_text_views
 from .presence import RemotePresence, watch_connection
 from .retention import dir_size_bytes
 from .timings import aggregate_timings
@@ -684,10 +685,16 @@ async def resolve_task(
         transcribed_text = pipeline_service.extract_problem_text(Path(solution_path))
 
     if not transcribed_text:
-        cached = task_manager.get_cached_stage(task_id, "vision")
-        pages = cached.get("pages") if isinstance(cached, dict) else None
-        if pages:
-            transcribed_text = "\n---[NEXT]---\n".join(str(p).strip() for p in pages)
+        # 阶段缓存里是迁移后的包装（`{"_meta": …, "value": …}`），且必须与当前视觉
+        # 模型/provider 匹配：迁移前的裸 payload 与换 provider 后的旧缓存一律不用
+        # —— 否则"重试/重解不重复付 OCR 钱"要么恒不生效（读到 None），要么更糟：
+        # 拿上一个 provider 的转录去求解。读取逻辑统一在 read_cached_transcript。
+        cached = read_cached_transcript(task_manager, task_id)
+        if cached:
+            # 缓存里通常只有逐页文本（润色发生在写缓存之后），用 core 同一个
+            # join_by_continuation 还原题面，而不是自己造分隔符
+            cached_problem_text, cached_ocr_text = transcript_text_views(cached)
+            transcribed_text = cached_problem_text or cached_ocr_text
 
     if not transcribed_text:
         return JSONResponse(
@@ -875,6 +882,10 @@ async def delete_task(task_id: str, user: User = Depends(get_current_user)):
             Path(solution_path).unlink(missing_ok=True)
         except OSError:
             pass
+    # F6：OCR 归档（`<OCR_DIR>/<日期>/<task_id>.md`，组 I 第 1 层落盘）同样是这个
+    # 任务的产物。此前只删解答文件与上传目录，归档会永久残留在磁盘上。
+    # 删除只可能落在 OCR_DIR 之内（见 delete_ocr_archives），没有归档也不报错。
+    delete_ocr_archives([task_id])
     # 清理上传图片目录
     task_dir = web_config.UPLOAD_DIR / task_id
     if task_dir.exists():
@@ -888,12 +899,29 @@ async def delete_task(task_id: str, user: User = Depends(get_current_user)):
 
 
 @router.get("/api/tasks")
-async def list_tasks(limit: int = 100, user: User = Depends(get_current_user)):
-    """获取最近的任务列表。
+async def list_tasks(
+    limit: int = 100,
+    q: str | None = None,
+    user: User = Depends(get_current_user),
+):
+    """获取最近的任务列表，可选按关键词搜索。
 
     普通用户只能看到自己的任务；管理员（user_id=None）可以看到全部。
+    `q` 传入且非空时改走 `search_tasks`（题目文本/原始 OCR/文件名 LIKE），
+    过滤与排序语义与不带 `q` 时完全一致。
+
+    注意（F8）：返回的行里 `problem_text` / `ocr_raw_text` 恒为空串 —— 这两列可能
+    各有数 MB，列表接口最多一次 100/500 条，全量下发只会白占带宽。键仍然保留
+    （前端 TS 类型依赖），完整文本走单任务详情 `GET /api/tasks/{id}`。
     """
-    tasks = task_manager.get_recent_tasks(limit=limit, user_id=_visible_user_id(user))
+    visible_user_id = _visible_user_id(user)
+    keyword = (q or "").strip()
+    if keyword:
+        tasks = task_manager.search_tasks(
+            keyword, limit=limit, user_id=visible_user_id
+        )
+    else:
+        tasks = task_manager.get_recent_tasks(limit=limit, user_id=visible_user_id)
     return {"tasks": tasks}
 
 
@@ -1055,7 +1083,7 @@ async def health():
     return {
         "status": "ok",
         "version": __import__("webapp").__version__,
-        "vision_configured": bool(core_config.ZHIPU_API_KEY),
+        "vision_configured": bool(core_config.VISION_API_KEY),
         "solver_providers": sorted(core_config.SOLVER_CONFIG.keys()),
         "keys_configured": {
             provider: bool(getattr(core_config, f"{provider.upper()}_API_KEY", None))

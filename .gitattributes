@@ -1,0 +1,5 @@
+# Windows 批处理（start_web.bat 等）必须用 CRLF：CMD 对 LF-only 的 .bat 会在
+# 解析多行 if/for 括号块时出错（报 "was unexpected at this time" 之类）。
+# 这条规则同时保护后续所有编辑器/工具的改动，避免再次被写成 LF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
