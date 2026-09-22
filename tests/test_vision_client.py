@@ -207,15 +207,18 @@ def test_missing_end_marker_is_reported_as_not_ended(tmp_path, monkeypatch):
 
 
 def test_multi_image_group_merges_in_batches(tmp_path, monkeypatch):
-    """默认配置下 8 图分组走**分批合并**：2 批 ×4 张、批间并发、页序按原图下标。
+    """默认配置下 8 图分组走**分批合并**，页序按原图下标写回。
 
-    语义变化（组 H2，2026-09-21 实测驱动）：早先是"8 张塞进一次请求"。真实对照显示
-    一次带 8 张是中位数 6.8 s（单序列串行生成），而 2 批各 4 张并发约 3.5 s，
-    同时保住"每张图只上传一次"与批内 NEW/CONT 去重，因此默认改为分批。
+    语义变化（组 H2，2026-09-21 实测驱动）：早先是"8 张塞进一次请求"，当时改成
+    "2 批各 4 张并发"。**2026-09-23 的交替轮次实测推翻了那次的前提**（批量 4：
+    8.68 s / 3 请求 / 每轮补页；批量 8：7.68 s / 1 请求 / 0 补页），默认因此改回 8。
+
+    用例把它固定成 4 张一批，好继续锁住"批次切分 + 按原图下标写回页序"这条契约 ——
+    这是分批逻辑的核心，与默认值无关。
     """
     monkeypatch.setattr(config, "USE_COMBINED_VISION_CALL", "auto")
+    monkeypatch.setattr(config, "VISION_BATCH_SIZE", 4)
     assert config.COMBINED_VISION_MAX_IMAGES == 8
-    assert config.VISION_BATCH_SIZE == 4
 
     # 假响应按"这一批内"的页号作答 —— 每批都是 PAGE 1..4
     body = "".join(f"<<<PAGE {i}|NEW>>>\n第 {i} 页正文\n" for i in range(1, 5))

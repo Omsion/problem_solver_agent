@@ -492,7 +492,7 @@ py -3.10 -m tools.requeue --pattern "IMG_20260916_19*.jpg"   # 只重投某一�
 |---|---|---|
 | `USE_COMBINED_VISION_CALL` | auto | 合并视觉调用：`auto`=图数 ≤ `COMBINED_VISION_MAX_IMAGES` 时尝试，`true`=总是，`false`=从不 |
 | `COMBINED_VISION_MAX_IMAGES` | 8 | 合并调用的适用图数上限；超出就整体走「分类 + 并行 OCR」回退路径 |
-| `VISION_BATCH_SIZE` | 4 | 单次合并请求最多带几张图；超过就**分批并发**（8 图 → 2 批 → 2 次请求，实测比一次带完更快） |
+| `VISION_BATCH_SIZE` | 8 | 单次合并请求最多带几张图；**与 token 成本无关**，只影响请求数/漏页风险/延迟。≤8 张的组就是 1 次请求，超过才分批并发 |
 | `VISION_BATCH_WORKERS` | 4 | 批间并行度（批与批互相独立，可并发） |
 | `VISION_DISABLE_THINKING` | true | 关闭视觉层思考模式（DeepSeek 思考默认开启且 effort=high，不关会吃光 `max_tokens`） |
 | `VISION_MAX_TOKENS` | 32768 | 视觉输出上限（旧值写死 8192，多图合并转录必被截断） |
@@ -598,12 +598,14 @@ ZHIPU_API_KEY=xxxxxxxx        # 只有这一行是新增；DEEPSEEK_API_KEY 保�
 看启动窗口报错；确认 `webapp/static/index.html` 存在（否则 `cd frontend && npm install && npm run build`）；端口被占用就 `python run_web.py 9000`；手机访问用局域网 IP（`tools/diag.py` 会打印）。
 
 **Q13：多图任务现在要等多久？还会一页一页慢慢 OCR 吗？**
-不会。最多 8 张图按 `VISION_BATCH_SIZE`（默认 4）**分批并发**，每批用
-`<<<PAGE n|NEW/CONT>>>` 分隔符协议一次拿回"题型 + 该批全部逐页转录"：8 图 = 2 次请求
-（旧行为是 9 次：1 次分类 + 8 次串行 OCR），合并成功时还会跳过润色调用。
-2026-09-21 的真实实测：8 图分批合并 ≈6.4 s，一次带完 8 张 ≈8.4 s（同轮对照），
-端到端（含求解）19.5 s。合并失败/图数超过 `COMBINED_VISION_MAX_IMAGES` 时自动回退到
-「分类 + 并行 OCR」路径（`OCR_PARALLEL_WORKERS=4`），缺页按页补做，不会整批作废。
+不会。8 张以内的图组**一次请求**拿回"题型 + 全部逐页转录"（`<<<PAGE n|NEW/CONT>>>`
+分隔符协议），旧行为是 9 次请求（1 次分类 + 8 次串行 OCR）。合并成功时还会跳过润色调用。
+2026-09-23 的真实实测：8 图 1 次请求 ≈7.7 s（批量 4 分批模式反而更慢：8.7 s / 3 请求 /
+每轮触发补页，因此默认值已由 4 改为 8）。**只有超过 8 张的组才分批并发**
+（`VISION_BATCH_SIZE`，默认 8），跨批接缝按 NEW 保守处理。合并失败或图数超过
+`COMBINED_VISION_MAX_IMAGES` 时自动回退到「分类 + 并行 OCR」路径
+（`OCR_PARALLEL_WORKERS=4`），缺页按页补做，不会整批作废。
+端到端（含求解）19.5–30 s，具体取决于服务端负载。
 
 ---
 

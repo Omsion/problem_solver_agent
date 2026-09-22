@@ -117,14 +117,15 @@ PNG 上传时格式标记与实际内容不符。
 数据见 `docs/plans/deepseek_vision_migration.md` §8.6）。**两张 provider 表互相独立**，
 换视觉 provider 不会动求解。
 
-调用链（8 图任务，`COMBINED_VISION_MAX_IMAGES=8`、`VISION_BATCH_SIZE=4` 时）：
+调用链（8 图任务，`COMBINED_VISION_MAX_IMAGES=8`、`VISION_BATCH_SIZE=8` 时）：
 
 ```
-截图 ×8 ──> 按 4 张一批切分（VISION_BATCH_SIZE），2 批**并发**（VISION_BATCH_WORKERS）
+截图 ×8 ──> 按 8 张一批切分（VISION_BATCH_SIZE）→ **1 批**（≤8 张时就是 1 次请求）
           └─> 每批 1 次 POST /chat/completions（extra_body={"thinking":{"type":"disabled"}}）
-                └─> <<<TYPE>>> + <<<PAGE 1..4|NEW/CONT>>> + <<<END>>>
+                └─> <<<TYPE>>> + <<<PAGE 1..8|NEW/CONT>>> + <<<END>>>
                       ├─ 解析全部成功 → vision_mode="batched"（seams=True，批首按 NEW）
-                      │    └─ join_by_continuation() 本地拼接，润色调用 = 0（VISION_INLINE_MERGE）
+                      │    └─ text_layout.normalize_pages() 本地排版 + 仅公式送模型规范化
+                      │         （润色调用 = 0；VISION_INLINE_MERGE 与 A+C 见下）
                       └─ 部分缺页 → refill_pages() 只补失败的那几页（补 k 页 = k 次调用，
                                     按 OCR_PARALLEL_WORKERS 并行）
                             ↓ 某批连页标记都没有
@@ -133,10 +134,21 @@ PNG 上传时格式标记与实际内容不符。
                           1 次分类 + N 次并行 OCR（OCR_PARALLEL_WORKERS=4）→ vision_mode="parallel"
 ```
 
-**为什么分批而不是一次带完 8 张**：一次请求带 N 张图时，模型是在**单序列**上逐页生成
-（8 图实测 8.4 s）；拆成 2 批并发后同样的 8 张只要 6.4 s（同轮对照，两轮都成立），
-而图片 token 仍只上传一次、批内 NEW/CONT 去重照旧。跨批的接缝没法判断，因此每批首页
-按 `NEW` 保守处理。完整数据见 `docs/plans/deepseek_vision_migration.md` §8.2/§8.5。
+**批量大小（`VISION_BATCH_SIZE`）取 8 而不是 4**：2026-09-23 的交替轮次实测
+（`_probe/probe_batch_sizes.py`，8 张真实题图 ×3 轮）显示批量 4 是 8.68 s / 3 次请求 /
+**每轮都触发补页**，而批量 8 是 7.68 s / 1 次请求 / 0 补页。**它与 token 成本无关**
+（每图独立计费、分批不重传，实测"图片张次"恒等于图片数），只影响请求数、单请求
+输出长度与延迟。**它只对超过 8 张的组起作用**：≤8 张时无论 4 还是 8 都只有 1 批。
+`16` 需要同时抬 `COMBINED_VISION_MAX_IMAGES`（闸门卡的是总图片数且在分批之前），
+且实测 16 页漏抄 9 页 —— 不采用。详见 `docs/plans/deepseek_vision_migration.md` §8.8。
+
+**为什么合并成功后还要本地排版（A）与公式规范化（C）**：内联拼接为了省掉一次
+"重写整篇 10K token"的润色调用，代价是润色 prompt 里的排版与公式规范化一起消失了 ——
+App 页眉（`满分：135 分 及格：115 分 已答`、试卷 ID）会直接进解答文件。
+`problem_solver_agent/text_layout.py` 补上这一环：剥离页眉/按钮行但**保留题号与题型**
+（`单选题 第18/60题 自动跳下一题` → `单选题 第18题`）、合并被翻页切开的代码围栏、
+去掉 CONT 页的重抄段；公式则只把片段送去一次轻量调用（输出几十 token），
+**正文一个字符都不经过模型**，因此没有"静默删内容"的风险。
 
 **为什么必须同时换协议**：旧的 JSON 协议要求把全部转录塞进一个 JSON 字符串，而
 `\frac` / `\begin` / `\theta` / `\neq` 漏转义时 `\f` `\b` `\t` `\n` 都是**合法**转义 ——
@@ -154,7 +166,7 @@ PNG 上传时格式标记与实际内容不符。
 |---|---|---|
 | 分类 | 1 | ——（并入合并调用） |
 | 逐页 OCR | **8**（`OCR_PARALLEL_WORKERS=1`，串行） | **0**（合并调用按批带图） |
-| **视觉请求数** | **9** | **2**（`VISION_BATCH_SIZE=4` → 8 图分 2 批并发） |
+| **视觉请求数** | **9** | **1**（`VISION_BATCH_SIZE=8`；≤8 张的组就是 1 次请求，超过 8 张才分批） |
 | 润色 | 1（整篇重写，输入输出各约 10K token） | **0**（合并成功即内联拼接，`timings.polish == 0`） |
 | 文件名生成 | 1（一次隐形调用：不计时、不计费、界面不可见） | **0**（`FILENAME_MODE=auto`：求解正文首行 `FILE:` → 本地题号 → 才调模型） |
 | 求解 | 1（流式） | 1（流式，不变） |
@@ -162,9 +174,9 @@ PNG 上传时格式标记与实际内容不符。
 | **API 调用总数** | **12** | **3–4** |
 
 > **调用次数是确定结论**（配置与代码路径决定，可用日志与 `_probe/probe_e2e_real.py` 验证）。
-> **耗时以实测为准**：分批合并 8 图 ≈6.4 s（同轮对照），一次带完 ≈8.4 s，并行回退 3.7–8.5 s
-> （服务端负载差异明显）。`VISION_BATCH_SIZE` / `VISION_BATCH_WORKERS` 是这两个数的旋钮，
-> 完整数据见 `docs/plans/deepseek_vision_migration.md` §8.2。
+> **耗时以实测为准**：8 图 1 次合并请求 ≈7.7 s，并行回退 3.7–8.5 s（服务端负载差异明显，
+> 同一脚本两次测量可差一倍）。`VISION_BATCH_SIZE` / `VISION_BATCH_WORKERS` 是这两个数的旋钮，
+> 完整数据见 `docs/plans/deepseek_vision_migration.md` §8.2 / §8.7 / §8.8。
 
 **回退与降级都不会整批作废**：缺页按页补做；`<<<TYPE>>>` 也缺失时才补一次分类；
 `CONT` 标记缺失或非法按 `NEW` 保守处理（宁可多花一次润色，也不能丢掉一道题的开头）。
@@ -282,8 +294,10 @@ is_client_remote = client_host not in ("127.0.0.1", "::1", "localhost", lan_ip)
   若常用核对，可适当调大 `TASK_RETENTION_DAYS`
 - **前端未做视觉回归测试**：现有测试覆盖逻辑与关键组件行为，不含截图对比
 - **合并调用有图数上限**：超过 `COMBINED_VISION_MAX_IMAGES`（默认 8）的图组退回
-  「分类 + 并行 OCR」，调用次数重新变多；8 张以内的图组按 `VISION_BATCH_SIZE`（默认 4）
-  **分批并发**（跨批接缝按 NEW 保守处理，不做跨批去重）
+  「分类 + 并行 OCR」，调用次数重新变多、图片被上传两次；8 张以内的图组按
+  `VISION_BATCH_SIZE`（默认 8，因此通常就是 1 次请求）处理，超过该值才分批并发
+  （跨批接缝按 NEW 保守处理，不做跨批去重）。**注意两个参数是"闸门先卡、再分批"**：
+  总图数超过闸门时一次合并请求都不发，所以只抬 `VISION_BATCH_SIZE` 没有意义
 - **单一供应商**：视觉与求解都在 DeepSeek 上，任一侧不可用即整条流水线不可用 ——
   这是保留 `zhipu` 回退分支的主要理由（回退成本只是一个环境变量）
 - **历史搜索用 LIKE 而非 FTS5**：`TASK_RETENTION_COUNT=100` 是百行表，LIKE 微秒级；
