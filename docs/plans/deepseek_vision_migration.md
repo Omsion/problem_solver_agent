@@ -940,6 +940,22 @@ $env:VISION_PROVIDER="zhipu"; pytest tests/test_vision_provider.py -v
 # 4) 回归
 pytest
 cd frontend; npm test
+
+# 5) 真实 API 的端到端（生产路径：视觉 → OCR 归档 → 文本 → 求解 → 命名）
+py -3.10 _probe/probe_e2e_real.py _probe/ab_images --no-archive
+#    期望 16/16 通过（含 S8/S9/S11/S12 与组 I 落库字段）
+
+# 6) 转录形态的耗时对照（**交替轮次**，不能用成块测量，理由见 §8.7）
+py -3.10 _probe/probe_batch_interleaved.py _probe/ab_images --cycles 4
+
+# 7) 两条路径的**真实 token 成本**（读服务端 usage，不是估算）
+py -3.10 _probe/probe_vision_cost.py _probe/ab_images
+
+# 8) S1 重算：对已保存的 A/B 产物重新判分（不花 API 费用）
+py -3.10 _probe/rescore_s1.py
+
+# 9) 计费口径回归（图片 token 不随请求次数放大）
+pytest tests/test_usage.py -v
 ```
 
 **手工端到端（必须做一次）**
@@ -1088,6 +1104,13 @@ cd frontend; npm test
 > 与前两次的差别只有服务端负载（视觉 5.9–24.8 s），功能项逐条一致；
 > "补 1 页"再次出现，说明 `refill_pages` 在多批次里是**常态而非异常路径**。
 
+**第四次复跑（2026-09-22 稍晚，计费口径修复之后）**：同样 16/16 通过，
+用量事件里已带上 `images` 字段（`vision` → 8、`vision_refill` → 1、`solve` → 0），
+即 `webapp/usage.py` 现在拿到的是"真实上传了几张图"而不是"页数 × 请求数"。
+该轮 **求解阶段耗时 75.5 s**（此前三轮为 5.0 / 5.3 / 6.3 s）——阶段耗时里
+`solve` 是唯一受服务端负载与两段式思考升级共同影响的量，**视觉与转录部分
+（6.6 s）依旧稳定**。功能判定不受影响。
+
 ### 8.4 双 provider A/B 判定（2026-09-21，`ZHIPU_API_KEY` 补回后完成）
 
 命令（工具会按 `--reference` 自动补跑基准那一家）：
@@ -1206,6 +1229,60 @@ VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))  # 批间并�
 图片 token 付两次、且没有跨页去重。分批合并用同样"每图只上传一次"的成本拿到
 与并行相当的耗时，因此是更优解。
 
+> **上面这句"耗时相当"已被 §8.7 的交替轮次复测修正**：并行其实稳定快约 2.3 s
+> （3.71 s vs 6.01 s，4/4 cycle 全胜）。但并行路径的成本高近一倍
+> （prompt_tokens 17155 vs 8792，服务端实测），且分批路径的"每图只上传一次"
+> 优势是真实的。**默认值因此维持 4，但依据从"耗时相当"改为"成本 + 补页率"** —— 见 §8.7。
+
+### 8.7 交替轮次复测与真实 token 成本（2026-09-22，修正 §8.2/§8.6 的耗时前提）
+
+§8.2 的成块测量（先跑完 3 轮 A，再跑 3 轮 B，再跑 3 轮 C）在服务端负载漂移下
+**不足以支撑两秒级的结论**。第三次复跑就撞上了这一点（1×8 中位数 6.5 s、
+分批 8.2 s、并行 8.7 s，与 §8.6 的"分批两轮都更快"相反）。因此改用**交替轮次**：
+A/B/C 各一轮算一个 cycle，连续 4 个 cycle，用"每个 cycle 内谁最快"做配对比较，
+以抵消同一时间窗内的负载漂移。
+
+命令：`py -3.10 _probe/probe_batch_interleaved.py _probe/ab_images --cycles 4`
+
+| 形态 | 4 轮原始值 | 中位数 | 请求数 | 补页 | 每 cycle 最快 |
+|---|---|---|---|---|---|
+| A 一次带完 1×8 | 7.66 / 5.34 / 5.74 / 5.25 | **5.54 s** | 1 | 1/4 轮 | 0/4 |
+| B 分批 2×4（当前默认） | 5.79 / 5.68 / 6.37 / 6.23 | **6.01 s** | 2 | **4/4 轮各补 1 页** | 0/4 |
+| C 并行 workers=4 | 3.74 / 3.85 / 3.68 / 3.43 | **3.71 s** | 9 | 0 | **4/4** |
+
+**结论一：并行回退路径在耗时上稳定胜出** —— 同 cycle 内 **4/4 全胜**，方差也最小
+（3.43–3.85 s）。§8.6 那句"分批与并行耗时相当"**不成立**，那是成块测量造成的假象。
+
+**结论二：但并行路径的成本约为合并路径的 2 倍。** 原因是它的调用结构 ——
+分类那一次**必须带全部 N 张图**（而它只产出 1 个题型标签），逐页 OCR 再各带 1 张。
+用服务端返回的 `usage`（真实计费口径，不是 `webapp/usage.py` 的估算）实测：
+
+命令：`py -3.10 _probe/probe_vision_cost.py _probe/ab_images`
+
+| 指标 | 分批合并 2×4 | 并行 workers=4 | 并行 / 分批 |
+|---|---|---|---|
+| 请求数 | 2 | 9 | **4.50×** |
+| 图片上传张次 | 8 | 16 | **2.00×** |
+| prompt_tokens（服务端实测） | 8792 | 17155 | **1.95×** |
+| completion_tokens | 1415 | 1580 | 1.12× |
+
+按高峰单价（2 / 8 元每百万）折算：**分批 ≈0.029 元 vs 并行 ≈0.047 元**（8 图任务）；
+而并行的输出量并没有更多（1580 vs 1415）—— **多付的 60% 全花在那趟"为了拿一个
+题型标签而重传 8 张图"的分类调用上**。
+
+**因此默认值维持 `VISION_BATCH_SIZE=4`（分批合并）**：耗时比并行慢约 2.3 s，
+但省下近一半成本、少 7 次请求。另有一个此前没被记录的差异：**分批 4/4 轮都触发了
+单页补做，而并行 0 次** —— 分批把 8 页挤进 2 个响应，模型更容易漏页（每次补做
+≈1 次单页调用 + 1–3 s），这正好抵消了一部分耗时优势。
+
+> "要不要为了 2.3 s 把视觉成本翻倍"是**产品决策**而非技术判据。在用户明确要求
+> 换到并行之前，取成本更低的一侧 —— 与 §0.4"合并慢过并行 30% 就降级"的原始判据
+> 相比，这里把判据从**单看耗时**扩展为**耗时 / 成本 / 补页率**三个维度。
+
+> **本节关闭 §11.6 第 8 项**（"分批 vs 并行 vs 一次带完的耗时受负载影响大、
+> 默认值的证据强度有限"）：交替轮次 + 配对比较解决了成块测量的"块内自相关"
+> 方法论问题，两个新探针脚本（`_probe/probe_batch_interleaved.py` /
+> `_probe/probe_vision_cost.py`）都可复跑。
 
 ---
 
@@ -1279,6 +1356,8 @@ VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))  # 批间并�
 | H | T1 上限 1→8 + PAGE 协议 + 三级回退 + `refill_pages`；T2 并行度 1→4；T3 内联润色 + 润色 prompt 场景判断；T4 文件名三档 + `FILE:` 首行 + 计时计费；T5 辅助链路关思考 + `AUX_TIMEOUT` | `config.py`、`prompts.py`、`vision_client.py`、`solver_client.py`、`core_pipeline.py` |
 | **H2** | **分批合并 + 批间并行**（2026-09-21 实测后追加）：`VISION_BATCH_SIZE`(4) / `VISION_BATCH_WORKERS`(4)、`_combined_once` / `_merge_batch_results`、`calls`+`seams` 契约、`_textualize(seams=...)` | `config.py`、`vision_client.py`、`core_pipeline.py` |
 | I | `<OCR_DIR>/<日期>/<task_id>.md` 归档（视觉阶段后立刻写）；frontmatter 加 `task_id`/`ocr_archive`；`tasks` 三列 + `search_tasks` + `GET /api/tasks?q=` | `core_pipeline.py`、`webapp/models.py`、`webapp/routes.py`、`webapp/pipeline.py` |
+| **C2** | **图片 token 计费口径**（2026-09-22，§11.6-5）：`UsageReport.images`（实际上传图片数，与 `calls` 解耦）+ `estimate_tokens(..., calls=, images=)` 分开算固定开销与图片；纯文本阶段上报 `images=0` | `core_pipeline.py`、`webapp/usage.py`、`tests/test_usage.py` |
+| **I2** | **无主任务的 OCR 归档清理**（2026-09-22，§11.6-1）：`_startup_cleanup` 对孤儿 id 调 `delete_ocr_archives` | `webapp/app.py`、`tests/test_retention.py` |
 | — | 清理：`ML_CODING` 上移到分类 prompt（视觉模型直接判，比关键词匹配准），删除死代码 `reclassify_problem_type` 与两个 KEYWORDS 表 | `pipeline.py`、`config.py`、`prompts.py` |
 
 ### 11.2 与设计稿的差异（都是有意的）
@@ -1333,7 +1412,7 @@ VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))  # 批间并�
 | S1 | OCR 不倒退 | ✅ | 双 provider A/B，基准 zhipu、候选 deepseek，5 组共 40 张真实题图（§8.4）：**题目正文**要素缺失 **0**，候选一致地多出 7–28 个要素、字符数 +345…+1129；截断 0、LaTeX 静默损坏 0。判据修正与人工逐页复核记录见 §8.4，重算命令 `py -3.10 _probe/rescore_s1.py`（不花 API 费用） |
 | S2 | 分类一致率 ≥90% | ✅ | 36 个**逐图**独立分类样本一致率 **97.2%**（35/36），唯一分歧是 `CODING→ML_CODING`（§8.4）。组级一致率不可用作判据（一组图可能混合多种题型，聚合口径本身没有唯一答案） |
 | S3 | 视觉调用关思考 | ✅ | 单测断言 payload（`test_deepseek_payload_disables_thinking`）+ 真实调用实测 `reasoning_content=None`（8.1） |
-| S4 | 现有 pytest 全绿 | ✅ | 全量 `pytest -o addopts=""` → **464 passed**（2026-09-22 收尾复核；2026-09-21 为 458 passed，此后新增 A/B 判据剥离页眉的 4 条与无主任务 OCR 归档清理的 2 条）；前端 `vitest` 158 passed、`tsc --noEmit` exit 0 |
+| S4 | 现有 pytest 全绿 | ✅ | 全量 `pytest -o addopts=""` → **478 passed**（2026-09-22 收尾复核；2026-09-21 为 458，此后新增 A/B 判据剥离页眉 4 条、无主任务 OCR 归档清理 2 条、**计费口径 14 条**）；前端 `vitest` 158 passed、`tsc --noEmit` exit 0 |
 | S5 | `VISION_PROVIDER=zhipu` 一键回退 | ✅ | `test_zhipu_payload_has_no_extra_body`（含输出上限 8192）、`test_zhipu_env_derives_glm_models`（子进程）、`test_zhipu_config_table_matches_pre_migration` |
 | S6 | 成本可见（单价真实） | ✅ | `test_cost_table_reflects_migration_prices` |
 | S7 | 配置自检报明确错误 | ✅ | `py -3.10 -m tools.diag` 输出 `provider=deepseek 模型=deepseek-flash 思考=关闭 密钥=已配置`（缺密钥时点名 `DEEPSEEK_API_KEY`） |
@@ -1421,19 +1500,23 @@ VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))  # 批间并�
 | 2 | `webapp` 的缓存读取只校验 `model`/`provider`，不校验 `max_tokens`/`protocol` | 用旧 `VISION_MAX_TOKENS` 写下的转录仍可被 `/resolve` 复用（那是"当时付过钱的文本"，语义上可接受） | 与 core 的严格指纹是**有意的不对称**：resolve 的目标是"别再付一次钱"，core 的目标是"别复用可能被截断的结果" |
 | 3 | 空页（模型对纯图页合法返回空块）也会进 `failed_pages` 并触发一次补做 | 每张纯图页浪费 1 次单页调用（≈1–3 s） | 无法与"模型其实没读出来"区分；宁可多补一次，不可漏页 |
 | 4 | `timeout=300` 是 httpx 的**单次操作**超时，不是整段墙钟上限 | 慢速滴流的响应可能远超 300 s | 需要把 deadline 传进 `_collect_stream`；当前无实测触发案例 |
-| 5 | `stage="ocr"` 的用量事件用 `pages × calls` 反映输入 token | 8 图回退路径把输入 token 高估 ≈5 倍（**保守**：多扣额度，不会少扣） | 迁移前就存在（`git show HEAD` 可复现），且方向是安全侧；修它要动 `usage.py` 的估算模型 |
+| 5 | ~~`stage="ocr"` 的用量事件用 `pages × calls` 反映输入 token~~ | — | **已修（2026-09-22）**：`UsageReport` 新增 `images` 字段（**实际上传的图片张数**，与 `calls` 解耦），`webapp/usage.py` 的 `estimate_tokens(pages, chars, *, calls, images)` 把"固定开销×调用次数 + 图片×每图 token"分开算。旧口径把 OCR 的 8 张图按 8 次调用乘成 64 张，8 图回退路径高估输入 token **4.5 倍**；合并路径不受影响（`calls` 恒为 1）。纯文本阶段（润色/求解/重解/文件名）显式上报 `images=0`，否则会被兜底成 `calls × pages`。老 payload（无 `images` 键）按旧口径兜底，不会少扣。回归用例：`tests/test_usage.py`（14 条） |
 | 6 | `compare_pages` 的 docstring 仍说基准是"两版并集"（代码只用基准页） | 文档不准确 | 改成并集语义会**削弱** B2 的空基准修复 |
 | 7 | ~~真机 A/B（S1/S2）~~ | — | **已完成（2026-09-21）**：`ZHIPU_API_KEY` 补回后跑完 5 组 40 张图的要素比对 + 36 个逐图分类样本，判定 S1/S2 通过（§8.4） |
-| 8 | 8 图"分批 vs 并行 vs 一次带完"的耗时受服务端负载影响大（同一脚本两次测量差一倍） | 默认值 `VISION_BATCH_SIZE=4` 的证据强度有限 | 需要多时段重复测量；当前结论基于**同轮对照**（分批两轮都更快） |
+| 8 | ~~8 图"分批 vs 并行 vs 一次带完"的耗时受服务端负载影响大~~ | — | **已解决（2026-09-22）**：改用**交替轮次 + 配对比较**（§8.7），得到并行 4/4 cycle 全胜（3.71 s vs 6.01 s），并用服务端 `usage` 实测出并行成本是分批的近 2 倍（17155 vs 8792 prompt token）。默认值维持 `VISION_BATCH_SIZE=4`，依据改为"耗时 / 成本 / 补页率"三维度 |
 
 **下一步（按优先级）**：
 1. ~~填回 `ZHIPU_API_KEY` → 跑 A/B → 把 S1/S2 判定回填 §8.4~~ → **已完成 2026-09-21**（§8.4）；
-2. ~~S1/S2 通过 → 把 `config.DEFAULT_VISION_PROVIDER` 由 `zhipu` 改为 `deepseek`~~ → **已完成 2026-09-21**（一行默认值 + `.env.example`/README/ARCHITECTURE/USER_GUIDE/DEPLOY/API 措辞同步）；
-3. 多时段各跑一次 `_probe/probe_8images.py`（`--repeats 3`）确认 `VISION_BATCH_SIZE` 的默认值
-   —— 唯一还值得做的**测量**类工作（当前 4 的证据只有同轮两轮对照）；
-4. 视需要处理 11.6 的第 5 项（`stage="ocr"` 的输入 token 高估；方向保守，不紧急）。
+2. ~~S1/S2 通过 → 把 `config.DEFAULT_VISION_PROVIDER` 由 `zhipu` 改为 `deepseek`~~ → **已完成 2026-09-21**（一行默认值 + 全部文档措辞同步）；
+3. ~~多时段复测 `VISION_BATCH_SIZE` 的默认值~~ → **已完成 2026-09-22**（§8.7：交替轮次 + 真实 token 成本）；
+4. ~~处理 11.6 第 1、5 两项~~ → **两项均已完成 2026-09-22**（无主任务 OCR 归档清理；图片 token 计费口径）。
 
-> **迁移文档至此无阻塞项。** 剩余两项都不是"迁移未完成"，而是测量强度与
-> 既有保守偏差（第 3、4 条），不影响 S1–S12 的判定。
+> **迁移文档至此无未决项、无阻塞项。** 唯一剩下的第 6 条是"docstring 措辞不准"，
+> 且**故意不改**（改成并集语义会削弱空基准的假 PASS 修复，见该行说明）。
+
+**用户可决策项（不是待办）**：§8.7 显示并行回退路径快约 2.3 s、贵约 60%。
+当前默认取成本更低的一侧；若更看重端到端延迟，把
+`COMBINED_VISION_MAX_IMAGES=1` 或 `USE_COMBINED_VISION_CALL=false` 走并行即可
+（一行配置，代价见 §8.7 的 token 实测）。
 
 

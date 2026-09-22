@@ -71,6 +71,12 @@ class UsageReport:
     pages: int = 0
     output_chars: int = 0
     calls: int = 1
+    # 本阶段**实际上传的图片张数**。与 `calls` 是两个独立的量，必须分开报：
+    # 逐页 OCR 的 8 次调用各带 1 张图（calls=8, images=8），而分批合并的 2 次
+    # 调用合起来带 8 张（calls=1, images=8）—— 只报 calls 时计费侧无法区分
+    # "同一批图被传了多次"和"每次传一张不同的图"（见 webapp/usage.py）。
+    # `None` = 未上报，计费侧按旧口径（calls × pages）兜底，语义见 UsageRecorder。
+    images: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +86,7 @@ class UsageReport:
             "pages": self.pages,
             "output_chars": self.output_chars,
             "calls": self.calls,
+            "images": self.images,
         }
 
 
@@ -269,6 +276,9 @@ class SolutionPipeline:
                         provider=config.AUX_PROVIDER,
                         output_chars=len(transcribed_text),
                         calls=1,
+                        # 纯文本调用：不上传任何图片（不写 0 会被计费侧按旧口径兜底成
+                        # calls × pages，凭空给这次润色加上 8 张图的输入 token）
+                        images=0,
                     ))
 
             # ---- 步骤 4：求解 ----
@@ -298,6 +308,7 @@ class SolutionPipeline:
                 provider=provider,
                 output_chars=len(answer_text),
                 calls=1,
+                images=0,   # 文本求解，不带图
             ))
 
             # ---- 步骤 5：答案卡 + 命名 + 归档 ----
@@ -444,6 +455,7 @@ class SolutionPipeline:
                 provider=provider,
                 output_chars=len(answer_text),
                 calls=1,
+                images=0,   # 文本重解，不带图
             ))
 
             cancel.raise_if_cancelled()
@@ -658,8 +670,8 @@ class SolutionPipeline:
 
         if calls["combined"]:
             # 合并调用同时完成分类与全部页面转录。分批合并时这里有多次真实请求，
-            # 但 `calls` 保持 1：它是**计费放大倍数**（输入 token 已按"每图 1024"折算，
-            # 请求数乘上来会让视觉成本变成 N 倍），请求数只写日志便于排查。
+            # 但 `calls` 保持 1：它是**计费放大倍数**（固定 prompt 开销与输出都只算
+            # 一份，因为每张图只上传一次）；请求数只写日志便于排查。
             if calls["combined"] > 1:
                 logger.info(
                     "视觉阶段合并调用共 %d 次请求（分批合并，每批 ≤%d 张图，%d 批并发）",
@@ -671,15 +683,22 @@ class SolutionPipeline:
                 provider=config.VISION_PROVIDER_NAME,
                 pages=len(image_paths),
                 calls=1,
+                # 每张图只上传一次（分批只是切分请求，不重传）—— 这是合并路径
+                # 相对并行回退路径唯一的成本优势，必须如实上报
+                images=len(image_paths),
             ))
         elif calls["parallel"]:
-            # 回退路径：1 次分类 + 每页 1 次转录
+            # 回退路径：1 次分类 + 每页 1 次转录。
+            # 关键：分类那次带的是**全部** N 张图（DeepSeek 视觉调用必须带图），
+            # 逐页 OCR 每次带 1 张 —— 因此 images 是 N + N，而 calls 是 1 + N。
+            # 旧口径把"每图 1024 token"按 calls 再乘一遍，8 图会高估输入 token ≈4 倍。
             self._emit_usage(UsageReport(
                 stage="classify",
                 model=config.VISION_CLASSIFY_MODEL,
                 provider=config.VISION_PROVIDER_NAME,
                 pages=len(image_paths),
                 calls=1,
+                images=len(image_paths),
             ))
             self._emit_usage(UsageReport(
                 stage="ocr",
@@ -687,12 +706,13 @@ class SolutionPipeline:
                 provider=config.VISION_PROVIDER_NAME,
                 pages=len(image_paths),
                 calls=len(image_paths),
+                images=len(image_paths),
             ))
         # 既没走合并也没走并行 = 命中缓存，一次调用都没发生，自然不记账。
 
         # refill_pages 的单页补做是真金白银的调用（补 2 页 = 2 次请求），必须如实反映。
-        # 单独发一条 stage，而不是把次数加到上面的 vision 里：webapp 记费时会把
-        # `pages × 每图 1024 token` 再乘一遍 calls，加到 vision 上会让补做变成平方级高估。
+        # 单独发一条 stage，而不是把次数加到上面的 vision 里：补做发生在合并路径之后，
+        # 并进去会把"固定开销"按补做次数再放大一遍，且无法区分补做与首次转录的成本。
         if calls["refilled"]:
             self._emit_usage(UsageReport(
                 stage="vision_refill",
@@ -700,6 +720,7 @@ class SolutionPipeline:
                 provider=config.VISION_PROVIDER_NAME,
                 pages=calls["refilled"],
                 calls=1,
+                images=calls["refilled"],   # 每次补做只重传那 1 页
             ))
 
         return result
@@ -1288,6 +1309,7 @@ class SolutionPipeline:
             provider=config.AUX_PROVIDER,
             output_chars=len(body or ""),
             calls=1,
+            images=0,   # 纯文本生成文件名
         ))
         return body
 

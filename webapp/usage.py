@@ -32,14 +32,44 @@ TOKENS_PER_IMAGE = 1024
 BASE_INPUT_TOKENS = 600
 
 
-def estimate_tokens(pages: int, output_chars: int) -> tuple[int, int]:
+def estimate_tokens(
+    pages: int,
+    output_chars: int,
+    *,
+    calls: int = 1,
+    images: int | None = None,
+) -> tuple[int, int]:
     """估算 (输入 token, 输出 token)。
 
-    输入侧只算图片与固定开销：题目文本的真实长度在 core 层没有回传，
-    与其拍一个可能严重偏离的数字，不如只计可确定的部分。
+    **三个量必须分开算，这是旧口径最大的错误来源**：
+
+    | 量 | 含义 | 随什么增长 |
+    |---|---|---|
+    | `calls` | 真实 API 请求次数 | 固定开销（prompt 模板 + 上下文）与输出**按次**重复 |
+    | `images` | 实际上传的图片张数 | 图片 token **按张**计费 |
+    | `pages` | 本题的页数 | 仅作 `images` 未上报时的旧口径兜底 |
+
+    为什么不能把 `pages × 每图 token` 再乘 `calls`（旧实现）：逐页 OCR 是
+    **8 次调用、每次 1 张图**，而分批合并是 **2 次调用、合起来 8 张图**。旧口径
+    在 OCR 阶段算出 `1024 × 8 张 × 8 次 = 65536` token 的图片成本，而真实上限是
+    `1024 × 8 = 8192` —— **高估 8 倍**（整条链路上高估输入 token ≈4.4 倍）。
+    方向虽然保守（多扣额度、不会少扣），但"保守"到 4 倍就不再是保护而是失真：
+    用量页会显示一个用户永远对不上的数字，且它直接决定 `402 insufficient_budget`。
+
+    Args:
+        pages: 本题页数（旧口径兜底用）。
+        output_chars: 该阶段实际输出字符数。
+        calls: 真实调用次数（固定开销与输出按次放大）。
+        images: `core` 上报的实际上传图片数；`None` = 未上报，此时按旧口径
+            `calls × pages` 兜底（保证老 payload 行为不变），显式 `0` = 纯文本调用。
     """
-    input_tokens = BASE_INPUT_TOKENS + pages * TOKENS_PER_IMAGE
-    output_tokens = int(output_chars * CHARS_PER_TOKEN_FACTOR)
+    call_count = max(1, int(calls or 1))
+    if images is None:
+        image_count = call_count * max(0, int(pages or 0))
+    else:
+        image_count = max(0, int(images))
+    input_tokens = BASE_INPUT_TOKENS * call_count + image_count * TOKENS_PER_IMAGE
+    output_tokens = int(output_chars * CHARS_PER_TOKEN_FACTOR) * call_count
     return input_tokens, output_tokens
 
 
@@ -60,7 +90,8 @@ class UsageRecorder:
         """记录一次用量。
 
         Args:
-            report: core 的 `usage` 事件负载，含 stage/model/provider/pages/output_chars/calls
+            report: core 的 `usage` 事件负载，含
+                stage/model/provider/pages/output_chars/calls/images
 
         Returns:
             记账结果；失败返回 None（**绝不抛出**，记账不能影响解题）。
@@ -74,11 +105,14 @@ class UsageRecorder:
             pages = int(report.get("pages") or 0)
             output_chars = int(report.get("output_chars") or 0)
             calls = max(1, int(report.get("calls") or 1))
+            # `images` 缺失（None）与显式 0 含义不同：前者按旧口径 calls × pages
+            # 兜底，后者是"纯文本调用、一张图都没传"。见 estimate_tokens。
+            raw_images = report.get("images")
+            images = None if raw_images is None else int(raw_images)
 
-            input_tokens, output_tokens = estimate_tokens(pages, output_chars)
-            # 多次调用（例如逐页 OCR）按次数放大
-            input_tokens *= calls
-            output_tokens *= calls
+            input_tokens, output_tokens = estimate_tokens(
+                pages, output_chars, calls=calls, images=images
+            )
 
             return self.accounts.record_usage(
                 user_id=user_id,
@@ -97,14 +131,16 @@ class UsageRecorder:
     def estimate_task_cost(self, pages: int, *, model: str = "deepseek-flash") -> float:
         """预估一次任务的大致费用，用于提交前的额度预检。
 
-        按"1 次视觉调用 + 1 次求解"估算，偏保守（宁可高估也不能低估）。
+        按"1 次合并视觉调用（带全部图）+ 1 次求解"估算，偏保守（宁可高估也不能低估）。
+        这里**不能**给视觉留 `images=None` 的旧口径：那会按 `calls × pages` 再乘一遍
+        图片，把预检金额抬到实际费用的数倍，用户会因为一个算错的数字被 402 拦住。
         """
         # 视觉层的模型名必须跟随当前 provider 走（deepseek-flash / GLM-4.6V-FlashX），
         # 写死会在切换 provider 后按错的单价预检额度。
         from problem_solver_agent import config as core_config
 
-        vision_input, _ = estimate_tokens(pages, 0)
-        solve_input, solve_output = estimate_tokens(pages, 4000)
+        vision_input, _ = estimate_tokens(pages, 0, calls=1, images=pages)
+        solve_input, solve_output = estimate_tokens(pages, 4000, calls=1, images=0)
         return round(
             estimate_cost(core_config.VISION_CLASSIFY_MODEL, vision_input, 0)
             + estimate_cost(model, solve_input, solve_output),
