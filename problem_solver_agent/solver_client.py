@@ -358,32 +358,43 @@ def stream_solve_text_only(final_prompt: str, provider: str, model: str, enable_
 
 def ask_for_analysis(final_prompt: str, provider: str, model: str) -> str | None:
     """
-    非流式调用LLM进行分析任务（润色 / 文件名生成），内置自动重试逻辑。
+    非流式调用LLM进行分析任务（排版润色 / 公式规范化 / 文件名生成），内置自动重试逻辑。
 
-    两个此前被忽略的坑（T5）：
-    1. **思考模式一直开着**：旧实现没有下发 `extra_body`，而 DeepSeek「思考模式默认
-       打开，且 effort 默认为 high」。于是润色与命名每次都先跑一遍高强度思考——
-       纯延迟浪费，思考 token 照样计费，结果还被直接丢弃（只取 `message.content`）；
-       同时 `temperature=0.7` **静默失效**（思考模式不支持 temperature）。
-       修法与 `_build_payload` 里已有的做法一致：关闭思考必须**显式**下发。
-    2. **超时写死 120 s**：润色要把整篇合并文本重写一遍（输出 6–10K token），
-       思考模式下很容易撞上 120 s，再按 `MAX_RETRIES` 指数退避重试
-       （10s → 20s → 40s），一次润色最坏耗掉几分钟。改用 `config.AUX_TIMEOUT`。
+    思考模式（2026-09-23 用户决策：**辅助链也开思考**）：
+    排版润色不是誊抄，是**判断题** —— 判断两页是不是同一题、要不要去重、公式哪里没闭合、
+    OCR 错字该不该修。公式规范化同理。关掉思考这些判断就是会退化，因此默认**开**。
+    之前的实现写死 `thinking.type=disabled`（当时的理由是"短任务开思考纯属浪费延迟"），
+    那个判断对"文件名生成"成立，对"排版润色"不成立。
+
+    - 开：**不下发** `extra_body`（DeepSeek 思考默认开启且 effort=high），并下发
+      `reasoning_effort` 控制深度；
+    - 关：**必须显式**下发 `thinking.type=disabled`（省略 extra_body 时模型照样思考，
+      这是 `_build_payload` 里记录过的坑）；
+    - 非流式下思考内容在 `message.reasoning_content`，与 `message.content` 同级，
+      这里只取 `content`，不受影响。
+
+    超时：润色要重写整篇（输出 6–10K token），思考模式下更慢，因此用 `config.AUX_TIMEOUT`
+    （默认 300 s）而不是旧实现写死的 120 s —— 那个值会超时并按 `MAX_RETRIES` 指数退避重试
+    （10s → 20s → 40s），一次润色最坏耗掉几分钟。
     """
     logger.info(f"正在使用辅助模型 '{model}' (提供商: {provider}) 进行非流式分析...")
 
     payload: dict[str, Any] = {
         "model": model,
         "stream": False,
-        "temperature": 0.7,
         "timeout": config.AUX_TIMEOUT,
     }
-    # 只有支持思考开关的 provider 才下发；缺少这一步时思考会一直开着。
-    # 判定走 config 的能力位（与 vision_client 同一依据），而不是写死
-    # `provider == "deepseek"`：将来接入另一家支持该开关的 provider 时，只加一条
-    # 表项就生效，不会出现"换了 provider 就开始空转思考"的静默退化。
-    if config.provider_supports_thinking_control(provider):
-        payload["extra_body"] = {"thinking": {"type": "disabled"}}
+    # 思考模式：默认开。关掉时才需要显式下发 disabled（省略 extra_body 不会关掉思考）。
+    # 注意 `temperature` 只在**非思考**模式下有意义 —— DeepSeek 思考模式不支持它，
+    # 带上去也是静默失效（传了个看似生效其实没用的参数最容易误导后来人）。
+    if config.AUX_ENABLE_THINKING:
+        if config.provider_supports_thinking_control(provider):
+            # 不下发 extra_body = 走 provider 默认（DeepSeek 思考默认开启）
+            payload["reasoning_effort"] = config.AUX_REASONING_EFFORT
+    else:
+        payload["temperature"] = 0.7
+        if config.provider_supports_thinking_control(provider):
+            payload["extra_body"] = {"thinking": {"type": "disabled"}}
 
     for attempt in range(config.MAX_RETRIES + 1):
         try:

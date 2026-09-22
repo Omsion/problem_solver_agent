@@ -174,7 +174,11 @@ class SeenLedger:
             self._dirty = True
 
     def flush(self) -> None:
-        """把账本原子写盘（内存模式 path=None 时什么都不做）。"""
+        """把账本原子写盘（内存模式 path=None 时什么都不做）。
+
+        写盘时**每个文件名一行**（`indent` + 逐项排版）：账本是给人排查用的，
+        一整行几百个键值对没法读。
+        """
         if self.path is None:
             return
         with self._lock:
@@ -185,7 +189,16 @@ class SeenLedger:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            # 一行一个文件名（键 = `文件名|大小|mtime_ns`，值 = 记账时间）。
+            # 不用 `indent=2`：那会把每个键值的三个字段再拆成 4 行，反而更长；
+            # 这里自定义排版，保证"一个文件 = 一行"，且键值本身保持紧凑。
+            lines = ["{"]
+            items = sorted(payload.items())
+            for index, (key, stamp) in enumerate(items):
+                comma = "," if index < len(items) - 1 else ""
+                lines.append(f"  {json.dumps(key, ensure_ascii=False)}: {stamp}{comma}")
+            lines.append("}")
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
             tmp.replace(self.path)
         except OSError as exc:
             logger.warning("写入监控去重账本失败（不影响本次处理）: %s", exc)
@@ -361,10 +374,21 @@ def scan_once(
         if max_age_minutes and max_age_minutes > 0:
             age_minutes = (now - _safe_mtime(path)) / 60
             if age_minutes > max_age_minutes:
+                # **只跳过，不记账** —— 与上面"锁"那条同一个道理（2026-09-23 修）。
+                #
+                # 这里曾经是 `ledger.mark(path)`，它制造了一个用户逃不出去的闭环：
+                #   删掉账本想重投 → 下次启动扫描又被年龄闸门拦住 → 却又把"拦住"
+                #   当成"已处理"记回账本 → 这些图此后永远不会再被自动评估。
+                # 现场就是 16 张 6 天前的截图：账本删了又长回来，图一张没解。
+                #
+                # 年龄闸门要表达的是"启动时别把历史截图全重跑一遍"，那是**本轮**的
+                # 决策，不是"这张图已完成"。不记账的代价只是每次启动多打印几行日志；
+                # 好处是用户随时可以删账本（或调大 `MONITOR_CATCHUP_MAX_AGE_MINUTES`）
+                # 让它们重新进入评估，而不需要额外的工具。
                 logger.info(
-                    "补偿扫描跳过过早的文件（%.0f 分钟前）：%s", age_minutes, path.name
+                    "补偿扫描跳过过早的文件（%.0f 分钟前，未记账）：%s",
+                    age_minutes, path.name,
                 )
-                ledger.mark(path)
                 continue
         fresh.append(path)
 

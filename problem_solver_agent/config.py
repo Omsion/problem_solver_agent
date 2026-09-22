@@ -131,6 +131,19 @@ VISION_API_KEY = _vision_api_key()
 AUX_PROVIDER = "deepseek"
 AUX_MODEL_NAME = "deepseek-flash"
 
+# 辅助调用（排版润色 / 公式规范化 / 文件名生成）的思考模式。
+#
+# **默认开**（2026-09-23 用户决策）。理由：排版润色不是誊抄，是**判断题** ——
+# 判断两页是不是同一题、要不要去重、公式哪里没闭合、OCR 错字该不该修；公式规范化同理。
+# 关掉思考这些判断会退化，而用户明确表示不在乎这点钱。
+# 置 false 可回到"关思考"的省钱模式（会快一些，排版质量自担）。
+AUX_ENABLE_THINKING = os.getenv("AUX_ENABLE_THINKING", "true").lower() in ("true", "1", "yes")
+# 辅助调用的思考深度：low / medium / high。默认 high —— 排版润色是"慢工出细活"的活，
+# 不是实时交互，值得给足思考预算。
+AUX_REASONING_EFFORT = os.getenv("AUX_REASONING_EFFORT", "high").strip().lower()
+if AUX_REASONING_EFFORT not in ("low", "medium", "high"):
+    AUX_REASONING_EFFORT = "high"
+
 # --- 4. 核心求解器配置 (Solver Configuration) ---
 # 配置字典，用于定义问题类型到求解器的映射规则。
 SOLVER_ROUTING_CONFIG = {
@@ -152,14 +165,20 @@ SOLVER_CONFIG = {
 # （solver_client 会自动关闭思考模式重试 / 由流水线升级到思考档重跑）。
 SOLVER_MAX_TOKENS = int(os.getenv("SOLVER_MAX_TOKENS", "16000"))
 
-# --- 4.1 思考模式：首选与"按需升级" ---
-# 实测（2026-09-13）：难题上思考过程会写掉 2.6 万字符，把 16000 配额吃光后
-# finish_reason=length、正文 0 字符——等于白等约 70 秒还多花一份 token，
-# 并没有换来正确率。因此改成两段式：
-#   1) 先按"不开思考"快跑一次（简单题十几秒出答案）；
-#   2) 只有答案不合格（空 / 被截断 / 过短）时，才升级到"开思考 + 大配额"重跑。
-# 显式指定（网页上手动开思考、resolve 传参）永远优先，不受这里的默认值影响。
-SOLVER_THINKING_DEFAULT = os.getenv("SOLVER_THINKING_DEFAULT", "false").lower() in ("true", "1", "yes")
+# --- 4.1 思考模式：默认开 ---
+# **默认开思考**（2026-09-23 用户决策：不在乎钱，要的是答对）。
+#
+# 历史（2026-09-13）：曾改成"先不开思考快跑、答案不合格才升级到思考"，理由是
+# "难题上思考会写掉 2.6 万字符、把 16000 配额吃光导致正文为空"。那个坑的真实原因
+# **不是思考本身，而是配额不够** —— 升级档已用 `SOLVER_ESCALATE_MAX_TOKENS=32000`
+# 解决。而"两段式"留下了一个真实漏洞：它只判"答案是否存在且完整"，**不判对错**，
+# 于是"答案写得很长但答错了"（难题、10 道多选一起做）永远不会触发思考重跑。
+# 现在改为默认就开思考，直接消掉这个漏洞。
+#
+# 显式指定（网页上手动关思考、resolve 传参）永远优先，不受这里的默认值影响。
+SOLVER_THINKING_DEFAULT = os.getenv("SOLVER_THINKING_DEFAULT", "true").lower() in ("true", "1", "yes")
+# 仍然保留"升级"机制：默认已开思考时它不会触发（`_should_escalate` 直接返回 False），
+# 只有用户显式关掉思考（`SOLVER_THINKING_DEFAULT=false`）时才作为兜底生效。
 SOLVER_ESCALATE_TO_THINKING = os.getenv("SOLVER_ESCALATE_TO_THINKING", "true").lower() in ("true", "1", "yes")
 # 升级档的输出上限。实测该 API 接受 32768 / 65536，给思考留出写完的余地。
 SOLVER_ESCALATE_MAX_TOKENS = int(os.getenv("SOLVER_ESCALATE_MAX_TOKENS", "32000"))
@@ -241,10 +260,18 @@ else:
 # 合并调用（一次带 N 张图）的独立超时。它与逐页 OCR 的输出量差一个数量级，
 # 共用 120 s 几乎必然超时，因此单独给 300 s。
 VISION_COMBINED_TIMEOUT = float(os.getenv("VISION_COMBINED_TIMEOUT", "300"))
-# 合并调用成功后是否**内联**拼接（跳过润色调用）。
-# CONT 页的接缝判断来自模型本身，本地 join 即可；发现模型在 CONT 页多删了内容时
-# 置 false 即可回到「合并调用 + 独立润色」的老路径。
-VISION_INLINE_MERGE = os.getenv("VISION_INLINE_MERGE", "true").lower() in ("true", "1", "yes")
+# 合并成功后是否**内联**拼接（本地 join、跳过润色调用）。
+#
+# **默认 false：排版交给润色模型**（2026-09-23 用户决策）。
+# 内联拼接能省掉一次"重写整篇约 10K token"的调用，代价是**渲染质量**：截屏 OCR 的
+# 原始文本直接进解答文件时，正文不换行、选项挤成一坨、代码被 `1.` `2.` 行号列表包住 ——
+# 用 Markdown 渲染出来很难读。而这份文本正是人要看着读题的（`# 题目文本` 小节）。
+# 润色 prompt 已重写为"排版优先 + 内容一字不减"，并配了确定性的"丢内容"兜底
+# （输出短于 60% 就丢弃润色结果，见 `core_pipeline._polish_or_keep`）。
+#
+# 置 true 可回到省钱模式：本地做确定性排版（剥页眉、合并跨页代码围栏、去重抄段）
+# 并把公式单独送去规范化，一次润色都不调。
+VISION_INLINE_MERGE = os.getenv("VISION_INLINE_MERGE", "false").lower() in ("true", "1", "yes")
 # 辅助调用（润色 / 文件名生成）的超时。润色要重写整篇合并文本（输出 6–10K token），
 # 旧的硬编码 120 s 会超时并按 MAX_RETRIES 指数退避重试，一次润色最坏耗掉几分钟。
 AUX_TIMEOUT = float(os.getenv("AUX_TIMEOUT", "300"))
@@ -295,8 +322,6 @@ VISION_BATCH_SIZE = int(os.getenv("VISION_BATCH_SIZE", "8"))
 # 批间并行度。批与批互相独立（每批自带图片与 prompt），因此可以并发；
 # 约束同样不是 API 并发，而是本机 JPEG 解码/缩放与服务端首字延迟。
 VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))
-# 多图 OCR 合并文本短于该长度时跳过"润色"调用
-MERGE_SKIP_THRESHOLD = int(os.getenv("MERGE_SKIP_THRESHOLD", "1200"))
 
 # 文件名生成模式：
 #   "auto"（默认）= 优先用求解正文首行的 FILE: 建议，其次本地按题号生成，

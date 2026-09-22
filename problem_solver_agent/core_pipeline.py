@@ -55,6 +55,14 @@ _FILENAME_LINE_RE = re.compile(
 # 这么多字符还没等到换行时，就不必再等——它是正文，不是文件名建议。
 _FILENAME_PROBE_MAX = 120
 
+# 润色结果"丢内容"的判定阈值：输出长度 / 输入长度 低于它就丢弃润色结果。
+#
+# 为什么需要：润色要**重写整篇**，而它历史上真的静默删过内容（把两道独立题当重叠、
+# 删掉后一道的开头）。prompt 里已用"内容一字不减 + 场景判断"压住，但 prompt 是概率性的，
+# 这里再加一道确定性兜底。取 60% 而不是"变短就丢"：排版本来就会显著变短（删页眉、
+# 去代码行号、合并错误换行），实测正常输出约为输入的 70–90%，只有成段丢失才会跌破 60%。
+_POLISH_MIN_LENGTH_RATIO = 0.6
+
 
 def _parse_formula_array(raw: str | None, *, expected: int) -> list[str] | None:
     """解析公式规范化调用的返回值，拿不到等长数组就返回 None（调用方保留原公式）。
@@ -290,7 +298,7 @@ class SolutionPipeline:
                 transcribed_text, polish_ms = self._textualize(
                     task_id, pages, failed_pages, cancel, timings,
                     vision_mode=vision_mode, continuations=continuations,
-                    seams=seams,
+                    seams=seams, problem_type=problem_type,
                 )
                 timings.polish = polish_ms
                 if polish_ms > 0:
@@ -875,39 +883,45 @@ class SolutionPipeline:
         vision_mode: str = "parallel",
         continuations: list[bool] | None = None,
         seams: bool = False,
+        problem_type: str = "",
     ) -> tuple[str, int]:
         """把逐页文本合并成题目文本；必要时才调用润色模型。
+
+        Args:
+            problem_type: 第 1 阶段（分类 + 转录，同一次请求）就已经拿到的题型。
+                **必须传进润色 prompt**：排版规则依赖题型（选择题要选项分段、编程题要代码
+                围栏、填空题要保住下划线占位符），而题型是已知信息，不需要重新判断、
+                也不产生额外请求。见 `prompts.format_hint_for`。
 
         Returns:
             (题目文本, 润色耗时毫秒)
         """
-        if len(pages) == 1:
-            # 单图无需"合并去重"，但**仍需排版与公式规范化**：
-            # 单页同样带 App 页眉，公式同样可能没被 `$...$` 包住。
-            text, removed = text_layout.normalize_pages(pages)
-            if removed:
-                logger.info("单图任务：剥离 %d 行页眉/导航噪音", len(removed))
-            text, formula_ms = self._normalize_formulas(text, cancel)
-            return text or pages[0].strip(), formula_ms
-
-        # 合并路径内联：`<<<PAGE n|CONT>>>` 的接缝判断来自视觉模型自己，本地拼一下
-        # 就够了，再让第二个模型"找最长重叠"重写整篇文本不但白花钱，还会**静默删掉
-        # 一道题的开头**（多道独立题时相邻页必然有"下列哪项正确"这类相同措辞）。
-        # 缺页（部分页转录失败）时不敢内联：那几页内容本来就不完整，仍交给润色。
+        # 把逐页文本拼成"带显式页边界"的输入。
         #
-        # **只在有可信接缝判断时内联**（`seams=True`，即每批都走 PAGE 协议）：
-        # JSON 回退协议没有 NEW/CONT 标记（continuations 恒为 False），拿它内联等于把
-        # "每页完整重述一次"的文本用空行直接拼起来 —— 既不去重、也没有 `---[NEXT]---`
-        # 边界，重复内容会整段进解答文件。那种情况正好是润色 prompt 的"场景判断"要处理的
-        # 场景，必须保留润色。分批合并时批内接缝可信（批首页按 NEW），同样可以内联。
-        if (
-            seams
-            and not failed_pages
-            and config.VISION_INLINE_MERGE
-        ):
-            # A：本地排版规范化（剥页眉、合并跨页代码围栏、规整空行）—— 零 token 成本。
-            # 这是"合并路径不调润色"当初欠下的一环：润色 prompt 里的公式规范化与
-            # 排版处理随之一起消失了，而人是要看着这份文本读题的。
+        # 为什么页边界不能省：相邻两页可能是**两道完全不同的题**，没有边界时模型会把它们
+        # 当成一道题的续写；同时 `---[NEXT]---` 也正是润色 prompt 用来判断"场景一 / 场景二"
+        # 的依据（见 TEXT_MERGE_AND_POLISH_PROMPT 第一步）。这里刻意**不**先做本地
+        # `normalize_pages`（那是"同一题连续页"的语义，会把两道题连成一体，有用例锁住）。
+        joined = text_layout.join_with_separator([page.strip() for page in pages])
+
+        # 排版与合并**交给润色模型**（2026-09-23 用户决策）。
+        #
+        # 历史：内联拼接（本地 join + 跳润色）是为了省掉一次"重写整篇约 10K token"的调用，
+        # 代价是**排版质量**——渲染出来正文不换行、选项挤成一坨、代码被行号列表包住。
+        # 用户明确表示"不在乎那点钱，要的是渲染后好看"，因此默认改回调用润色。
+        # `VISION_INLINE_MERGE=true` 仍保留为省钱的回退开关。
+        if not config.VISION_INLINE_MERGE:
+            text, formula_ms = self._polish_or_keep(joined, cancel, problem_type)
+            if text is not None:
+                return text, formula_ms
+            # 润色失败：退回本地排版（至少把页眉与空行处理掉），并补一次公式规范化
+            laid_out, _removed = text_layout.normalize_pages(pages, continuations or [])
+            fallback = laid_out or joined
+            text, formula_ms = self._normalize_formulas(fallback, cancel)
+            return text, formula_ms
+
+        # 下面的内联路径 = 用户在 .env 里显式设了 VISION_INLINE_MERGE=true（省钱模式）
+        if seams and not failed_pages:
             inlined, removed = text_layout.normalize_pages(pages, continuations or [])
             if inlined.strip():
                 if removed:
@@ -917,33 +931,57 @@ class SolutionPipeline:
                 # C：只把公式送去规范化（输出量几十 token，而非重写整篇 10K）。
                 # 正文一个字都不经过模型 —— 不存在被删改的风险。
                 inlined, formula_ms = self._normalize_formulas(inlined, cancel)
-                logger.info("合并路径（%s）本地排版完成，跳过润色步骤", vision_mode)
+                logger.info("合并路径（%s）本地排版完成，跳过润色步骤（省钱模式）", vision_mode)
                 return inlined.strip(), formula_ms
-            logger.warning("合并路径内联拼接结果为空，回退到润色流程")
 
-        joined = text_layout.join_with_separator([page.strip() for page in pages])
-        if len(joined) < config.MERGE_SKIP_THRESHOLD:
-            logger.info("合并文本较短（%d 字符），跳过润色步骤", len(joined))
-            # 润色被跳过（文本太短），但**公式规范化不该跟着省掉**。
-            # 注意这里必须传 `joined`（已带 `---[NEXT]---` 页边界），不能用
-            # `normalize_pages` 的结果替换它 —— 那是"同一题连续页"的语义，会把
-            # 两道互不相关的题连成一体（有回归用例锁住）。
-            text, formula_ms = self._normalize_formulas(joined, cancel)
+        # 内联不可用（缺页 / JSON 回退协议）或结果为空：无论如何都要排版，
+        # 此时润色是唯一手段（本地排版对"多道独立题"语义不安全）
+        text, formula_ms = self._polish_or_keep(joined, cancel, problem_type)
+        if text is not None:
             return text, formula_ms
+        return joined, formula_ms
 
+    def _polish_or_keep(
+        self, joined: str, cancel: CancelToken, problem_type: str = ""
+    ) -> tuple[str | None, int]:
+        """调用润色模型做合并 + 排版；失败或"丢内容"时返回 None 让调用方回退。
+
+        为什么要有"丢内容"这道闸：润色要**重写整篇**，而它历史上真的发生过静默删内容
+        （把两道独立题当重叠，删掉后一道的开头）。prompt 里已用"第一原则：内容一字不减"
+        与场景判断压住，但 prompt 是概率性的，所以这里再加一道**确定性**的兜底：
+        输出比输入短太多（<60%）就认定发生了成段丢失，直接丢弃润色结果并用原始文本。
+
+        阈值取 60% 而不是"变短就丢"：排版本来就会显著变短 —— 删掉页眉、去掉代码行号、
+        合并错误换行，实测正常输出约为输入的 70–90%。只有成段丢失才会跌破 60%。
+        """
+        if not joined.strip():
+            return None, 0
         cancel.raise_if_cancelled()
         started = time.time()
         # 统一用 replace 而不是 format：题目里的花括号不该被当成占位符
-        prompt = prompts.TEXT_MERGE_AND_POLISH_PROMPT.replace("{raw_texts}", joined)
+        prompt = prompts.build_polish_prompt(joined, problem_type)
         polished = solver_client.ask_for_analysis(
             prompt, provider=config.AUX_PROVIDER, model=config.AUX_MODEL_NAME
         )
         elapsed = int((time.time() - started) * 1000)
         if not polished or len(polished.strip()) < 5:
-            logger.warning("润色结果不可用，回退使用原始转录文本")
-            return joined, elapsed
-        # 润色 prompt 本身就要求做公式规范化，这里不再叠加一次（避免两次改写）
-        return polished, elapsed
+            logger.warning("润色结果不可用（空或过短），回退使用原始转录文本")
+            return None, elapsed
+
+        ratio = len(polished.strip()) / max(1, len(joined.strip()))
+        if ratio < _POLISH_MIN_LENGTH_RATIO:
+            logger.warning(
+                "润色结果比原文短太多（%d → %d 字符，%.0f%%），判定为丢失内容，"
+                "丢弃润色结果、改用原始转录文本",
+                len(joined.strip()), len(polished.strip()), ratio * 100,
+            )
+            return None, elapsed
+
+        logger.info(
+            "润色完成：%d → %d 字符（%.0f%%），耗时 %d ms",
+            len(joined.strip()), len(polished.strip()), ratio * 100, elapsed,
+        )
+        return polished.strip(), elapsed
 
     def _normalize_formulas(self, text: str, cancel: CancelToken) -> tuple[str, int]:
         """C：把文本里的公式片段送去模型规范化，正文不动。

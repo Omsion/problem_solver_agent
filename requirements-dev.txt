@@ -1,5 +1,0 @@
-# requirements-dev.txt - 开发与测试依赖
-#
-# 安装：pip install -r requirements.txt -r requirements-dev.txt
-
-pytest>=8.0.0        # 测试框架（tests/ 目录）
