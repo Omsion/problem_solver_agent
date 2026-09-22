@@ -74,6 +74,10 @@ def main():
     logger.info("=" * 50)
 
     image_grouper = ImageGrouper()
+    # 启动时先清掉上一次进程残留的处理锁：强杀（任务管理器结束进程 / 崩溃）不会
+    # 执行 `_execute_pipeline` 的 finally，锁会留在盘上，导致那一组图片被永久跳过。
+    # 此刻不可能有本进程发起的在途任务，因此清锁是安全的。
+    file_monitor.recover_stale_locks(config.SOLUTION_DIR)
     # file_monitor 现在接收任意回调，不再反向依赖 ImageGrouper；
     # on_group 用于补偿扫描（漏事件/停机期间到达的文件）整组补投
     observer = file_monitor.start_monitoring(

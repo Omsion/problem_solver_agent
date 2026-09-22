@@ -15,6 +15,10 @@ file_monitor.py - 文件系统监控模块
 4. **补偿扫描**：定时（默认 15s）与启动时各扫一遍目录，兜住任何丢失的事件
    （watchdog 事件缓冲区溢出、进程停机期间到达的文件）。配合 `SeenLedger`
    去重，保证同一张图片只投递一次。
+5. **账本记的是"投递过"，不是"解出来了"**：若一次运行在流水线中途被强杀，
+   图片已进账本而解答并不存在。因此启动时调用 `recover_stale_locks()` 清掉
+   上一次进程残留的处理锁，且 `scan_once` **不再**把"锁存在"的文件记入账本 ——
+   两者合起来保证被中断的图片能自动重投，而不是被永久跳过（2026-09-22 修复）。
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
@@ -186,6 +190,38 @@ class SeenLedger:
         except OSError as exc:
             logger.warning("写入监控去重账本失败（不影响本次处理）: %s", exc)
 
+    def forget(self, names: Iterable[str] | None = None) -> list[str]:
+        """把"已投递"记录清掉，让这些图片能被重新投递。
+
+        为什么需要：账本记的是"投递过"而不是"解出来了"。一次运行如果在
+        `_execute_pipeline` 里被强杀，图片已在账本里而解答并不存在 ——
+        此时唯一的恢复手段就是把对应记录抹掉，让补偿扫描重新投递。
+
+        Args:
+            names: 要清除的**文件名**集合（如 `{"a.jpg"}`）；`None` 表示清空整个账本。
+
+        Returns:
+            实际被清除的文件名列表（去重、排序）。
+        """
+        wanted = None if names is None else {str(name) for name in names}
+        removed: list[str] = []
+        with self._lock:
+            for key in list(self._entries):
+                name = key.split("|", 1)[0]
+                if wanted is None or name in wanted:
+                    self._entries.pop(key, None)
+                    removed.append(name)
+            if removed:
+                self._dirty = True
+        if removed:
+            self.flush()
+        return sorted(set(removed))
+
+    def names(self) -> list[str]:
+        """账本里记录的全部文件名（去重、排序）。"""
+        with self._lock:
+            return sorted({key.split("|", 1)[0] for key in self._entries})
+
     def _load(self) -> None:
         if self.path is None or not self.path.exists():
             return
@@ -309,9 +345,18 @@ def scan_once(
     for path in candidates:
         if ledger.seen(path):
             continue
-        # 正在被流水线处理（锁文件存在）：记账，避免同一张图被投两次
+        # 正在被流水线处理（锁文件存在）：**跳过但绝不记账**。
+        #
+        # 这里曾经是 `ledger.mark(path)`（"记账以避免重复投递"），那是一个
+        # 2026-09-22 定位到的数据丢失缺陷：锁文件只在 `ImageGrouper._execute_pipeline`
+        # 的 `finally` 里删除，进程被强杀（Ctrl+C 之外、任务管理器结束、崩溃）时
+        # `finally` 不执行 → 锁文件永久残留。旧逻辑此时把图片记成"已投递"，
+        # 而它其实**从未被处理**；下次启动扫描看到"已投递"就永久跳过它 ——
+        # 用户看到的就是满屏"该图片已投递过，跳过重复事件"却什么都解不出来。
+        #
+        # 新语义：锁只表示"本轮别投"，不表示"已完成"。锁残留时留着不记账，
+        # 配合 `recover_stale_locks()`（启动时清掉上一次进程留下的锁）即可自动重投。
         if lock_dir is not None and (Path(lock_dir) / f".{path.stem}.lock").exists():
-            ledger.mark(path)
             continue
         if max_age_minutes and max_age_minutes > 0:
             age_minutes = (now - _safe_mtime(path)) / 60
@@ -370,6 +415,96 @@ def _attach_watchdog_logging() -> None:
         if handler not in wd_logger.handlers:
             wd_logger.addHandler(handler)
     _WATCHDOG_LOGGING_ATTACHED = True
+
+
+def recover_stale_locks(lock_dir: str | Path) -> list[str]:
+    """删除上一次进程残留的处理锁，返回被恢复的文件名列表。
+
+    为什么需要：`ImageGrouper._execute_pipeline` 在 `finally` 里删锁，但**强杀**
+    （任务管理器结束进程、断电、`Stop-Process -Force`）不执行 `finally` ——
+    锁文件会永久留在 `SOLUTION_DIR` 下。后果有两条，都会让用户看到"图片被跳过"：
+
+    1. 锁文件让 `scan_once` 认为"正在处理中"而跳过该图；
+    2. 旧版 `scan_once` 还会顺手把它记进去重账本，于是**永久**跳过（已修，见该函数）。
+
+    在**进程启动时**调用是安全的：此刻不可能有本进程发起的、仍在进行中的处理。
+    唯一会误伤的场合是"同时跑两个实例"（第二个实例会把第一个正在用的锁删掉，
+    导致同一组图被处理两次）—— 这种用法本身就会互相抢图，应先退出其中一个。
+
+    Args:
+        lock_dir: 锁文件所在目录（通常是 `config.SOLUTION_DIR`）。
+
+    Returns:
+        被删掉锁的文件名（不含 `.lock` 前缀），供调用方写日志或核对。
+    """
+    directory = Path(lock_dir)
+    if not directory.exists():
+        return []
+    recovered: list[str] = []
+    for lock_file in sorted(directory.glob(".*.lock")):
+        try:
+            lock_file.unlink()
+            recovered.append(lock_file.name[1:-len(".lock")])
+        except OSError as exc:
+            logger.warning("清理残留锁文件失败 %s: %s", lock_file, exc)
+    if recovered:
+        logger.warning(
+            "发现 %d 个上次运行残留的处理锁（任务被中断，锁未释放）：%s。"
+            "这些图片会被重新处理。",
+            len(recovered), ", ".join(recovered),
+        )
+    return recovered
+
+
+def deliver_now(
+    directory: str | Path,
+    image_names: Iterable[str],
+    deliver_group: Callable[[Sequence[Path]], None],
+    ledger: SeenLedger,
+    *,
+    wait_stable: bool = False,
+) -> list[Path]:
+    """把指定的图片**立即**按 mtime 补投一次，绕开年龄闸门。
+
+    为什么需要绕过 `max_age_minutes`：它存在的原因是"别在启动时把用户的历史截图全
+    重跑一遍"（默认只补投 2 小时内到达的）。但**被中断的任务**恰恰往往更旧 ——
+    2026-09-22 的事故里那批图是 6 天前拍的，清掉账本后仍会被年龄闸门挡下，用户
+    重启多少次都等不到。用户显式点名要重投的图片，年龄不该是理由。
+
+    与 `scan_once` 的分工：那个是**自动**补偿路径（保守，受年龄与锁的双重约束）；
+    这个是**显式**重投路径（用户/工具明确指定文件，只做存在性与稳定性检查）。
+
+    Args:
+        directory: 图片所在目录。
+        image_names: 要补投的文件名（相对 `directory`）。
+        deliver_group: 整组投递回调（按 mtime 分组后调用）。
+        ledger: 投递成功后逐张记账；失败的组不记账，便于下次重试。
+
+    Returns:
+        实际投递的图片路径（按投递顺序）。
+    """
+    directory = Path(directory)
+    wanted: list[Path] = []
+    for name in image_names:
+        path = directory / name if not Path(name).is_absolute() else Path(name)
+        if path.exists() and is_candidate_image(path):
+            wanted.append(path)
+
+    delivered: list[Path] = []
+    for group in group_by_mtime_gap(wanted, config.GROUP_TIMEOUT):
+        ready = [p for p in group if not wait_stable or wait_until_stable(p)]
+        if not ready:
+            continue
+        try:
+            deliver_group(ready)
+        except Exception as exc:
+            logger.error("补投失败（这些图片仍留在账本外，下次可重试）: %s", exc, exc_info=True)
+            continue
+        for path in ready:
+            ledger.mark(path)
+            delivered.append(path)
+    ledger.flush()
+    return delivered
 
 
 class MonitorHandle:

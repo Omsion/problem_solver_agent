@@ -401,6 +401,39 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 
 去重账本在 `<工作根目录>/solutions/.monitor_seen.json`（**不在**同步目录里，避免同步回手机）。
 
+### 6.4 "该图片已投递过，跳过重复事件" —— 图片被永久跳过怎么办
+
+**症状**：日志里每一张图都是这两行，目录里图片明明在，却什么都不发生：
+
+```
+检测到新图片（新建）: IMG_xxx.jpg
+该图片已投递过，跳过重复事件: IMG_xxx.jpg
+```
+
+**原因**：账本记的是**"投递过"**，不是**"解出来了"**。如果上一次运行在解题中途被
+强杀（任务管理器结束进程、崩溃、直接关掉终端），图片已经进了账本、解答却没生成，
+于是之后每次启动都跳过它们。2026-09-22 遇到过这个情况。
+
+**恢复**（一条命令）：
+
+```powershell
+# 先看不改动任何东西的预演
+py -3.10 -m tools.requeue --dry-run
+
+# 确认后重投（会真的调用 API 解题）
+py -3.10 -m tools.requeue                      # 重投监控目录里的全部图片
+py -3.10 -m tools.requeue --pattern "IMG_20260916_19*.jpg"   # 只重投某一批
+```
+
+> 为什么不能只删账本就算了：启动扫描有**年龄闸门**
+> （`MONITOR_CATCHUP_MAX_AGE_MINUTES=120`，只补投 2 小时内的文件，防止把历史截图
+> 全重跑一遍），而被中断的图片往往已经放了好几天 —— 删了账本照样会被闸门挡下。
+> `tools/requeue` 因此是**直接投递**，不受年龄限制。
+
+**防止再次发生**（2026-09-22 已修）：启动时会自动清掉上一次进程残留的处理锁
+（`recover_stale_locks`），且"正在处理中"的图片**不再**被记入账本 —— 被中断的任务
+下次启动能自动重投，不需要手跑上面的命令。
+
 ---
 
 ## 7. 产物在哪
@@ -583,6 +616,10 @@ python tools/diag.py --port 8000
 # 视觉层 A/B 评测：同一组图跑两个 provider 的 OCR，出差异报告（换 provider 前先跑它）
 python -m tools.vision_ab check -i "D:\Users\wzw\Pictures\Screenshots\test_images"
 
+# 图片被"已投递过，跳过重复事件"永久跳过时，重投（先 --dry-run 看清单）
+python -m tools.requeue --dry-run
+python -m tools.requeue
+
 # 健康检查（网页服务在跑时）
 Invoke-RestMethod http://localhost:8000/api/health
 Invoke-RestMethod http://localhost:8000/api/status
@@ -600,6 +637,9 @@ python -c "import sqlite3;c=sqlite3.connect('webapp/data/tasks.db');print(c.exec
 | `文件监控已启动` | 监控正常起来了 |
 | `检测到新图片（改名就位）` | Syncthing「临时文件+改名」的投递被识别了 |
 | `补偿扫描：补投 N 张图片` | 兜底扫描捡回了漏掉的文件 |
+| `补偿扫描跳过过早的文件` | 超过 `MONITOR_CATCHUP_MAX_AGE_MINUTES` 的老图被跳过（被中断的图用 `tools.requeue` 重投，见 6.4） |
+| `该图片已投递过，跳过重复事件` | 账本认为投递过了；若其实没解出来，见 6.4 |
+| `发现 N 个上次运行残留的处理锁` | 上次是被强杀的，这些图会被重新处理（正常的一次性提示） |
 | `图片已按拍摄时间重排` | 到达顺序是乱的，已自动纠正 |
 | `视觉层: provider=` | 当前视觉 provider 与模型（切 provider 后先看这一行） |
 | `合并调用（分类 + 转录），协议=PAGE` | 8 图走的是 1 次合并请求 |

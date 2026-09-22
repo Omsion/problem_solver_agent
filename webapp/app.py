@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from problem_solver_agent import config as core_config
+from problem_solver_agent.file_monitor import recover_stale_locks
 
 from . import config as web_config
 from .accounts import AccountManager
@@ -127,10 +128,15 @@ def _warmup_clients() -> None:
 
 
 def _startup_cleanup(task_manager: TaskManager, *, upload_dir: Path | None = None) -> None:
-    """启动时清理：残留上传目录、超量图片缓存。
+    """启动时清理：残留处理锁、残留上传目录、超量图片缓存。
 
     缺陷 N2：旧实现只删解答文件，`uploads/<task_id>/` 从未被清理，
     实测已累积 45.6 MB。
+
+    **处理锁清理（2026-09-22）**：`ImageGrouper._execute_pipeline` 在 `finally` 里
+    删锁，强杀时不执行 —— 残留的锁会让对应的那组图片被 `scan_once` 永久跳过。
+    启动瞬间不可能有本进程发起的在途处理，因此这里无条件清锁；若确实同时跑着
+    第二个实例，应先把那个实例退掉（两者共用同一监控目录，本来就会互相抢图）。
 
     **安全护栏（2026-09-20 事故后新增）**：真实事故中 `webapp/uploads/*/` 下 8 个
     上传目录被整批删除，而这 8 个目录**都对应真实 DB 里的任务** —— 也就是说删除
@@ -150,6 +156,13 @@ def _startup_cleanup(task_manager: TaskManager, *, upload_dir: Path | None = Non
     永久性的题面归档。两条护栏对归档同样成立（空任务库走的是上面的告警分支）。
     """
     target_dir = upload_dir if upload_dir is not None else web_config.UPLOAD_DIR
+    try:
+        recovered = recover_stale_locks(core_config.SOLUTION_DIR)
+        if recovered:
+            logger.info("启动清理：恢复 %d 个被中断的任务（锁已释放）", len(recovered))
+    except Exception as exc:  # 清锁失败不能挡住启动
+        logger.warning("启动清理残留锁失败: %s", exc)
+
     try:
         task_ids = task_manager.all_task_ids()
         orphans = stale_uploads(target_dir, task_ids)
