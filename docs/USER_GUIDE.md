@@ -498,6 +498,8 @@ py -3.10 -m tools.requeue --pattern "IMG_20260916_19*.jpg"   # 只重投某一�
 | `VISION_MAX_TOKENS` | 32768 | 视觉输出上限（旧值写死 8192，多图合并转录必被截断） |
 | `VISION_COMBINED_TIMEOUT` | 300 | 合并调用专用超时（秒）；逐页 OCR 仍是 `VISION_TIMEOUT=120` |
 | `VISION_INLINE_MERGE` | true | 合并成功后本地拼接并**跳过润色**；发现 CONT 页被多删内容时置 false 回退 |
+| `FORMULA_NORMALIZE` | true | 只把**公式片段**送去模型规范化（输出几十 token，而非重写整篇约 10K）；关掉它排版仍照做，只是公式不再规范化 |
+| `FORMULA_MIN_CHARS` | 40 | 抽出的公式总字符数低于此值就跳过规范化（收益 < 一次网络往返） |
 | `OCR_PARALLEL_WORKERS` | 4 | 回退路径的逐页 OCR 并行度（合并调用成功时用不到） |
 | `AUX_TIMEOUT` | 300 | 辅助调用（润色 / 文件名生成）超时（秒），旧值硬编码 120 会撞超时 |
 | `FILENAME_MODE` | auto | 文件名生成：`auto`=求解正文首行 `FILE:` → 本地题号 → 才调模型；`local`=从不调模型；`model`=旧行为 |

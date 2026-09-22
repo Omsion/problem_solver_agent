@@ -59,7 +59,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from problem_solver_agent import config, vision_client  # noqa: E402
+from problem_solver_agent import config, text_layout, vision_client  # noqa: E402
 from problem_solver_agent.image_order import photo_timestamp, sort_images_by_time  # noqa: E402
 
 # 评测产物目录（与 _probe/ 下其他施工产物同级，实施完成后可整目录删除）
@@ -132,12 +132,10 @@ _CATEGORY_LABELS = (
 # 实测证明这会产生**假缺失**：同一组 8 张图，两家模型各自在不同页页眉上省略/保留，
 # 于是"缺失 11 个"全部来自页眉数字，而正文逐要素比对无缺失。
 # 被剥离的行会原样记进报告（`chrome_samples`），可人工核对，不做隐藏。
-_CHROME_LINE_RE = re.compile(
-    r"(科目|模拟试题|满分|及格|已答|上一题|下一题|存疑|错题反|自动跳下一题"
-    r"|第\s*\d+\s*/\s*\d+\s*题"          # 题号导航（必须有斜杠，避免误伤"第 2 题"这种正文）
-    r"|^\s*\d{4,}\s*$"                   # 整行只有一个长数字（试卷/考试 ID）
-    r")"
-)
+#
+# **规则已上移到 `problem_solver_agent/text_layout.py`**：生产路径现在也要做同样的
+# 排版清理（合并路径不调润色，因此欠着这一环）。两边必须用**同一套规则** ——
+# 否则"验收时判 0 缺失"与"生产时剥了什么"会各说各话。此处直接复用，不再各写一份。
 
 # 被吃掉反斜杠的残片 → 正确写法的映射。
 # 为什么按"残片"查而不是按"控制字符"查：控制字符可能被后续处理（如 .strip()、
@@ -208,15 +206,13 @@ def extract_body_elements(text: str) -> dict[str, list[str]]:
 
 
 def strip_chrome_lines(text: str) -> tuple[str, list[str]]:
-    """剥离考试 App 的页眉/页脚/题号导航行，返回 (题目正文, 被剥离的行)。"""
-    body: list[str] = []
-    ignored: list[str] = []
-    for line in (text or "").splitlines():
-        if _CHROME_LINE_RE.search(line):
-            ignored.append(line.strip())
-        else:
-            body.append(line)
-    return "\n".join(body), ignored
+    """剥离考试 App 的页眉/页脚/导航噪音，返回 (题目正文, 被改写的行)。
+
+    直接复用生产模块 `text_layout.strip_chrome_lines` —— 判据与生产行为必须同源。
+    注意它**保留题号与题型**（`单选题 第18/60题 自动跳下一题` → `单选题 第18题`），
+    因此"被改写的行"里可能出现带题号的行；那些行不再被当成噪音，见该模块的说明。
+    """
+    return text_layout.strip_chrome_lines(text)
 
 
 def _snippet(text: str, offset: int, width: int = 24) -> str:

@@ -16,6 +16,7 @@ core_pipeline.py - 共享流水线（CLI Agent 与 Web 应用共用的唯一实�
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -24,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, image_prep, prompts, solver_client, vision_client
+from . import config, image_prep, prompts, solver_client, text_layout, vision_client
 from .answer_card import extract_answer_card
 from .cancel import CancelToken, CancelledError
 from .image_order import describe_order, sort_images_by_time
@@ -53,6 +54,30 @@ _FILENAME_LINE_RE = re.compile(
 # 首行判定上限：文件名建议必然很短（prompts 里要求 8–10 个字），因此首行累积超过
 # 这么多字符还没等到换行时，就不必再等——它是正文，不是文件名建议。
 _FILENAME_PROBE_MAX = 120
+
+
+def _parse_formula_array(raw: str | None, *, expected: int) -> list[str] | None:
+    """解析公式规范化调用的返回值，拿不到等长数组就返回 None（调用方保留原公式）。
+
+    宽松解析：模型可能加 ```json 围栏、可能在数组前后写一句客套话 —— 这里只取
+    第一段 `[...]`。**数量必须严格等于 expected**：数量不匹配意味着"哪条对应哪条"
+    已经不可知，硬按顺序填回去会把公式错位到别的题目上，比不规范化危险得多。
+    """
+    if not raw:
+        return None
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(raw[start:end + 1])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, list) or len(parsed) != expected:
+        return None
+    if not all(isinstance(item, str) for item in parsed):
+        return None
+    return parsed
 
 
 @dataclass
@@ -763,11 +788,13 @@ class SolutionPipeline:
           没有文本输入（`transcribed_text == "N/A"`），写空串而不是 "N/A"，
           否则历史搜索里全是这种噪声。
         - `ocr_raw_text`：逐页原始 OCR 拼接，**没有被润色改写** —— 润色会重写整篇文本，
-          用户搜原图里的关键词时可能一个字都对不上。
+          用户搜原图里的关键词时可能一个字都对不上。这里用**显式页边界**
+          （`---[NEXT]---`）而不是 `join_by_continuation` 的空行：没有可信接缝判断时，
+          空行会让"两道互不相关的题"在文本里连成一体，而页边界是读题的必要信息。
         """
         return {
             "problem_text": "" if transcribed_text == "N/A" else transcribed_text,
-            "ocr_raw_text": vision_client.join_by_continuation(pages, continuations) if pages else "",
+            "ocr_raw_text": text_layout.join_with_separator(pages) if pages else "",
         }
 
     def _write_ocr_archive(
@@ -855,10 +882,13 @@ class SolutionPipeline:
             (题目文本, 润色耗时毫秒)
         """
         if len(pages) == 1:
-            # 单图无需"合并去重"，直接采用 OCR 原文（省一次 2-10 秒的调用）
-            text = pages[0].strip()
-            logger.info("单图任务，跳过润色步骤")
-            return text, 0
+            # 单图无需"合并去重"，但**仍需排版与公式规范化**：
+            # 单页同样带 App 页眉，公式同样可能没被 `$...$` 包住。
+            text, removed = text_layout.normalize_pages(pages)
+            if removed:
+                logger.info("单图任务：剥离 %d 行页眉/导航噪音", len(removed))
+            text, formula_ms = self._normalize_formulas(text, cancel)
+            return text or pages[0].strip(), formula_ms
 
         # 合并路径内联：`<<<PAGE n|CONT>>>` 的接缝判断来自视觉模型自己，本地拼一下
         # 就够了，再让第二个模型"找最长重叠"重写整篇文本不但白花钱，还会**静默删掉
@@ -875,16 +905,31 @@ class SolutionPipeline:
             and not failed_pages
             and config.VISION_INLINE_MERGE
         ):
-            inlined = vision_client.join_by_continuation(pages, continuations or [])
+            # A：本地排版规范化（剥页眉、合并跨页代码围栏、规整空行）—— 零 token 成本。
+            # 这是"合并路径不调润色"当初欠下的一环：润色 prompt 里的公式规范化与
+            # 排版处理随之一起消失了，而人是要看着这份文本读题的。
+            inlined, removed = text_layout.normalize_pages(pages, continuations or [])
             if inlined.strip():
-                logger.info("合并路径（%s）本地拼接，跳过润色步骤", vision_mode)
-                return inlined.strip(), 0
+                if removed:
+                    logger.info(
+                        "合并路径（%s）剥离 %d 行页眉/导航噪音", vision_mode, len(removed)
+                    )
+                # C：只把公式送去规范化（输出量几十 token，而非重写整篇 10K）。
+                # 正文一个字都不经过模型 —— 不存在被删改的风险。
+                inlined, formula_ms = self._normalize_formulas(inlined, cancel)
+                logger.info("合并路径（%s）本地排版完成，跳过润色步骤", vision_mode)
+                return inlined.strip(), formula_ms
             logger.warning("合并路径内联拼接结果为空，回退到润色流程")
 
-        joined = "\n---[NEXT]---\n".join(page.strip() for page in pages)
+        joined = text_layout.join_with_separator([page.strip() for page in pages])
         if len(joined) < config.MERGE_SKIP_THRESHOLD:
             logger.info("合并文本较短（%d 字符），跳过润色步骤", len(joined))
-            return joined, 0
+            # 润色被跳过（文本太短），但**公式规范化不该跟着省掉**。
+            # 注意这里必须传 `joined`（已带 `---[NEXT]---` 页边界），不能用
+            # `normalize_pages` 的结果替换它 —— 那是"同一题连续页"的语义，会把
+            # 两道互不相关的题连成一体（有回归用例锁住）。
+            text, formula_ms = self._normalize_formulas(joined, cancel)
+            return text, formula_ms
 
         cancel.raise_if_cancelled()
         started = time.time()
@@ -897,7 +942,74 @@ class SolutionPipeline:
         if not polished or len(polished.strip()) < 5:
             logger.warning("润色结果不可用，回退使用原始转录文本")
             return joined, elapsed
+        # 润色 prompt 本身就要求做公式规范化，这里不再叠加一次（避免两次改写）
         return polished, elapsed
+
+    def _normalize_formulas(self, text: str, cancel: CancelToken) -> tuple[str, int]:
+        """C：把文本里的公式片段送去模型规范化，正文不动。
+
+        为什么只送公式：润色模型重写整篇要输出约 10K token（整条链最贵的一次），
+        而它的"找最长重叠"指令在多道独立题场景会**静默删掉一道题的开头**。
+        只送公式则输出量降到几十 token，且**正文一个字符都不经过模型**。
+
+        失败与异常一律回退原文（`text` 原样返回）——排版降级可以接受，
+        丢内容不可以。
+
+        Returns:
+            (规范化后的文本, 耗时毫秒)。未启用 / 没有公式 / 失败时耗时均为 0。
+        """
+        if not config.FORMULA_NORMALIZE or not text:
+            return text, 0
+
+        skeleton, formulas = text_layout.extract_math_spans(text)
+        if not formulas:
+            return text, 0
+        # 片段太碎的（比如只有 `$x$`）不值得一次调用：规范化收益 < 一次往返成本
+        if sum(len(item) for item in formulas) < config.FORMULA_MIN_CHARS:
+            logger.info(
+                "公式片段过少（%d 个 / %d 字符），跳过规范化",
+                len(formulas), sum(len(item) for item in formulas),
+            )
+            return text, 0
+
+        cancel.raise_if_cancelled()
+        started = time.time()
+        prompt = prompts.FORMULA_NORMALIZE_PROMPT.replace(
+            "{formulas_json}", json.dumps(formulas, ensure_ascii=False)
+        )
+        try:
+            raw = solver_client.ask_for_analysis(
+                prompt, provider=config.AUX_PROVIDER, model=config.AUX_MODEL_NAME
+            )
+        except Exception as exc:  # 规范化失败绝不能让解题失败
+            logger.warning("公式规范化调用异常，保留原公式: %s", exc)
+            return text, int((time.time() - started) * 1000)
+
+        normalized = _parse_formula_array(raw, expected=len(formulas))
+        elapsed = int((time.time() - started) * 1000)
+        if normalized is None:
+            logger.warning(
+                "公式规范化返回不可用（数量不匹配或非 JSON），保留原公式：%r",
+                (raw or "")[:120],
+            )
+            return text, elapsed
+
+        # 只接受"确实变了"的结果；逐条为空则视为模型偷懒，保留原样
+        final = [new.strip() or old for old, new in zip(formulas, normalized)]
+        changed = sum(1 for old, new in zip(formulas, final) if old != new)
+        logger.info(
+            "公式规范化完成：%d 个片段，其中 %d 个被修正（%d ms）",
+            len(formulas), changed, elapsed,
+        )
+        self._emit_usage(UsageReport(
+            stage="formula",
+            model=config.AUX_MODEL_NAME,
+            provider=config.AUX_PROVIDER,
+            output_chars=len(raw or ""),
+            calls=1,
+            images=0,
+        ))
+        return text_layout.rebuild_math(skeleton, final), elapsed
 
     def _run_solve_attempt(
         self,

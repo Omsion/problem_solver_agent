@@ -249,6 +249,22 @@ VISION_INLINE_MERGE = os.getenv("VISION_INLINE_MERGE", "true").lower() in ("true
 # 旧的硬编码 120 s 会超时并按 MAX_RETRIES 指数退避重试，一次润色最坏耗掉几分钟。
 AUX_TIMEOUT = float(os.getenv("AUX_TIMEOUT", "300"))
 
+# --- 题目文本的排版与公式规范化（A + C）---
+# A（本地、确定性、零 token）：`text_layout.normalize_pages` 在合并路径上
+#   剥离 App 页眉/页脚/导航噪音（**保留题号与题型**）、合并跨页代码围栏、规整空行。
+#   它是"内联拼接跳过润色"当初欠下的一环 —— 润色 prompt 里的排版与公式规范化
+#   随之一起消失了，而人是要看着这份文本读题的。
+# C（一次轻量调用）：只把**公式片段**送去规范化再填回原位。输出量几十 token
+#   （对比润色重写整篇约 10K），且正文一个字符都不经过模型，不存在被删改的风险。
+#
+# 关掉 C 只影响公式是否规范（排版仍由 A 完成）；置 `FORMULA_NORMALIZE=false`
+# 即可，不需要改代码。
+FORMULA_NORMALIZE = os.getenv("FORMULA_NORMALIZE", "true").lower() in ("true", "1", "yes")
+# 抽出的公式总字符数低于该值时跳过 C：规范化收益 < 一次网络往返成本。
+# 超时沿用 `AUX_TIMEOUT`（同属辅助调用，`ask_for_analysis` 不接受单独超时；
+# 实际耗时是秒级，300 s 的上限只是保险）。
+FORMULA_MIN_CHARS = int(os.getenv("FORMULA_MIN_CHARS", "40"))
+
 # 合并调用（一次拿到"题型 + 全部逐页转录"）的开关模式：
 #   "auto"（默认）= 只有图片数 <= COMBINED_VISION_MAX_IMAGES 时才尝试
 #   "true"        = 总是尝试（历史行为）
@@ -259,12 +275,20 @@ AUX_TIMEOUT = float(os.getenv("AUX_TIMEOUT", "300"))
 USE_COMBINED_VISION_CALL = os.getenv("USE_COMBINED_VISION_CALL", "auto").strip().lower()
 COMBINED_VISION_MAX_IMAGES = int(os.getenv("COMBINED_VISION_MAX_IMAGES", "8"))
 # 单次合并请求最多带几张图：超过就**分批 + 批间并行**（组 H2，见下）。
-# 为什么是 4 而不是直接把 8 张塞一次请求：2026-09-21 的真实对照（8 张题图，各 2 轮）——
-#   一次带 8 张：中位数 6.8 s（1 次请求，单序列串行生成）
-#   分批 2×4 并发：≈3.5 s（2 次请求）      ← 本参数生效的路径
-#   逐页并行 OCR：3.7 s（9 次请求，图片 token 付两次）
-# 分批合并因此在**延迟上追平并行路径**，同时保住"图片只上传一次"与批内 NEW/CONT 去重。
-# 详见 docs/plans/deepseek_vision_migration.md §8.2 / §8.5。
+#
+# **它不是 token 参数**：官方明确"每张图独立计费、上限 1024 token/图，多图请求没有
+# 单独算法"，而分批不重传图片（`_merge_batch_results` 按下标写回同一份页列表），
+# 因此 token 成本与批量大小**完全无关**。真正受影响的只有三件事：
+#   请求数（每次请求都要重发 prompt 模板）、单请求输出长度（越长越容易漏页）、延迟。
+#
+# 为什么是 4：这一版是 2026-09-21 的对照结果（分批 2×4 比一次带 8 张更快）。
+# **2026-09-23 的交替轮次复测（`_probe/probe_batch_sizes.py`，8 张真实题图 ×3 轮）
+# 推翻了这个前提**：批量 4 中位数 8.68 s / 3 次请求 / 每轮触发补页，而批量 8
+# 中位数 7.68 s / 1 次请求 / 0 补页 —— 8 在延迟、请求数与补页率上全面不差。
+# 之所以仍保留 4：它是**更保守**的一侧（单请求输出更短 ⇒ 漏页风险更低），
+# 而 16 张以上的组在批量 16 下实测 16 页要补 9 次（模型明显漏抄），
+# 说明大批量的可靠性代价是真实的。想换 8 直接改这里即可（见 .env.example）。
+# 详见 docs/plans/deepseek_vision_migration.md §8.2 / §8.5 / §8.8。
 VISION_BATCH_SIZE = int(os.getenv("VISION_BATCH_SIZE", "4"))
 # 批间并行度。批与批互相独立（每批自带图片与 prompt），因此可以并发；
 # 约束同样不是 API 并发，而是本机 JPEG 解码/缩放与服务端首字延迟。
