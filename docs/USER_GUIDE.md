@@ -264,11 +264,11 @@ DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解 + 辅助 + 视觉层（分类 / OCR
 # ZHIPU_API_KEY=xxxxxxxx           # 可选：仅当 VISION_PROVIDER=zhipu 回退时取消注释
 ```
 
-`.env.example` 里显式写着 `VISION_PROVIDER=deepseek`：分类 / OCR / 视觉推理 / 核对
-全部用 `deepseek-flash`，和求解共用同一个密钥与 `https://api.deepseek.com`。
-**不想用 DeepSeek 做视觉**时，把 `VISION_PROVIDER` 改成 `zhipu`（或整行删掉）
-并填上 `ZHIPU_API_KEY` 即可一键回退（见第 9 节）。注意：整行删掉走的是代码默认值
-`zhipu` —— 双 provider 的 A/B 判定通过之前，deepseek 不作为代码默认值。
+`.env.example` 与代码默认值都是 `VISION_PROVIDER=deepseek`：分类 / OCR / 视觉推理 /
+核对全部用 `deepseek-flash`，和求解共用同一个密钥与 `https://api.deepseek.com`。
+**不想用 DeepSeek 做视觉**时，把 `VISION_PROVIDER` 改成 `zhipu` 并填上 `ZHIPU_API_KEY`
+即可一键回退（见第 9 节）。默认值是在双 provider 的 A/B 闸门判定通过后（2026-09-21：
+题目正文要素缺失 0、分类一致率 97.2%）才切过来的。
 
 ---
 
@@ -428,7 +428,7 @@ GROUP_TIMEOUT=8      # 连续 8 秒没有新图片 → 提交这一组
 |---|---|---|
 | `SOLVER_ROOT_DIR` | 项目父目录 | 工作根目录；其下是 `Screenshots/`、`processed/`、`ocr/`、`solutions/` |
 | `DEEPSEEK_API_KEY` | — | 求解 + 辅助 + 视觉层（**默认必填**） |
-| `VISION_PROVIDER` | `.env.example` 写的是 deepseek；代码默认 zhipu | 视觉层供应商：`deepseek`（分类/OCR/推理/核对全用 `deepseek-flash`）/ `zhipu`（回退；分类/OCR 用 `GLM-4.6V-FlashX`，推理/核对用 `GLM-4.6V`）。未知取值回落代码默认 provider（当前 `zhipu`） |
+| `VISION_PROVIDER` | deepseek | 视觉层供应商：`deepseek`（分类/OCR/推理/核对全用 `deepseek-flash`）/ `zhipu`（回退；分类/OCR 用 `GLM-4.6V-FlashX`，推理/核对用 `GLM-4.6V`）。未知取值回落代码默认 provider（当前 `deepseek`） |
 | `ZHIPU_API_KEY` | — | 仅 `VISION_PROVIDER=zhipu` 时需要 |
 
 ### 进图与分组

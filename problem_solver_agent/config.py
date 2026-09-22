@@ -43,16 +43,19 @@ MAX_RETRIES = 3
 RETRY_DELAY = 10
 
 # --- 2. 视觉模型配置（provider 化）---
-# 视觉层用哪家：deepseek（迁移目标）/ zhipu（当前安全基线）。
+# 视觉层用哪家：deepseek（默认，2026-09-21 起）/ zhipu（一键回退）。
 # 迁移背景与代价量化见 docs/plans/deepseek_vision_migration.md。
 #
-# 为什么**未显式配置时**默认仍是 zhipu：按计划书 §6 第 5 步，只有双 provider 的
-# A/B（`python -m tools.vision_ab check -i <图> --reference <provider>`）跑出
-# 数字、S1（OCR 不倒退）/ S2（分类一致率 ≥90%）判定通过之后，才把默认值切到
-# deepseek。在那之前，新 provider 必须由 .env 里的 `VISION_PROVIDER=deepseek`
-# **显式**启用（本机 .env 就是这么写的，因此这里的默认值不影响已配置的部署）。
-# 这样"切换"永远是一次显式动作，而"回退"是从未离开过的状态。
-DEFAULT_VISION_PROVIDER = "zhipu"
+# 为什么默认值在 2026-09-21 由 zhipu 切到 deepseek：计划书 §6 第 5 步规定"A/B 出数字
+# 之后再切默认值"，而闸门已经跑过并判定通过：
+#   - S1（OCR 不倒退）：4 组共 32 张真实题图，**题目正文**要素缺失 0（候选多出 7–28 个、
+#     字符数 +345…+1129）；
+#   - S2（分类一致率 ≥90%）：36 个逐图独立样本一致率 **97.2%**（35/36）；
+#   - 截断 0、LaTeX 静默损坏 0。
+# 原始数据与人工复核记录见计划书 §8.6。代价是视觉单价高约 4.7 倍（8 图任务约
+# 0.033 元 vs 0.007 元），换来的是 3–8 倍的视觉耗时优势。
+# 回退仍然只需一个环境变量：`VISION_PROVIDER=zhipu`。
+DEFAULT_VISION_PROVIDER = "deepseek"
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", DEFAULT_VISION_PROVIDER).strip().lower()
 
 # 每个 provider 的密钥环境变量、端点、模型名与**输出上限**。新增一家只需加一条。

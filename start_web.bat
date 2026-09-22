@@ -7,10 +7,9 @@ rem ---------------------------------------------------------------------------
 rem 视觉层密钥检查的说明（放在括号块之外的注释里：CMD 把多行 if/for 括号块当作
 rem 一个整体解析，块内的中文全角标点与引号在解析期就可能把块拆坏）。
 rem
-rem 本脚本**按 provider 判定**所需密钥：当前安全基线（代码默认）是 zhipu，
-rem 但本仓库 .env 通常显式写着 VISION_PROVIDER=deepseek（迁移目标，视觉与求解
-rem 共用 DEEPSEEK_API_KEY）。只有需要回退到 GLM-4.6V 时才用 ZHIPU_API_KEY。
-rem 旧版本写死 ZHIPU_API_KEY，在 deepseek 配置下会误报"密钥缺失"。
+rem 本脚本**按 provider 判定**所需密钥：代码默认（也是 .env.example 的推荐值）是
+rem deepseek，密钥为 DEEPSEEK_API_KEY（视觉与求解共用）；只有需要回退到 GLM-4.6V
+rem 时才用 ZHIPU_API_KEY。旧版本写死 ZHIPU_API_KEY，在 deepseek 配置下会误报"密钥缺失"。
 rem
 rem 另一个坑：括号块内的 %VAR% 在**解析期**就展开，块里刚 set 的值在同一块里读不到。
 rem 因此下面改用 goto 标签而不是大块 if/else。
@@ -65,9 +64,9 @@ echo.
 goto deps
 
 :config_check_key
-rem 与 config.DEFAULT_VISION_PROVIDER 保持一致（安全基线 zhipu）：
-rem .env 里没写 VISION_PROVIDER 时，代码也用 zhipu，两边不能各说各话
-set "VISION_PROVIDER=zhipu"
+rem 与 config.DEFAULT_VISION_PROVIDER 保持一致（默认 deepseek）：
+rem .env 里没写 VISION_PROVIDER 时，代码也用 deepseek，两边不能各说各话
+set "VISION_PROVIDER=deepseek"
 for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
     if /i "%%A"=="VISION_PROVIDER" set "VISION_PROVIDER=%%B"
 )

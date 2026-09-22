@@ -996,7 +996,7 @@ data: {"type":"chunk","content":"..."}
 | 任务归属 | 无隔离，所有人可见全部任务 | 任务带 `user_id` / `tenant_id`；普通用户只见自己的，他人任务一律 `404` |
 | 额度 | 无 | 注册赠 `DEFAULT_USER_BUDGET`；提交 / 换路重解前预检，不足返回 `402 insufficient_budget` |
 | 用量 | 无 | `usage_events` 流水累计；`GET /api/v1/auth/me` 返回汇总，`usage` 事件不下发 |
-| 视觉层 provider | 写死智谱 GLM-4.6V 系列 | `VISION_PROVIDER`（`deepseek` 为迁移目标、`.env.example` 的推荐值；代码默认 `zhipu` 安全基线 / 一键回退），密钥与模型名由 provider 表派生 |
+| 视觉层 provider | 写死智谱 GLM-4.6V 系列 | `VISION_PROVIDER`（`deepseek` 默认 / `zhipu` 一键回退），密钥与模型名由 provider 表派生 |
 | 任务表搜索字段 | 无 | `tasks` 新增 `problem_text` / `ocr_raw_text` / `vision_mode` 三列（幂等迁移自动补列），`GET /api/tasks` 支持 `q` 关键词搜索（LIKE，未上 FTS5） |
 | 管理员 | 无 | `ADMIN_PHONES` 命中即 admin；`GET /api/v1/admin/dashboard` / `users` / `users/{id}`、`PATCH .../budget` / `role`、`GET /api/v1/admin/usage` |
 | 计费口径 | 无 | 按「页数 + 输出字符数」估算 token × `COST_TABLE` 单价，**属于估算而非精确账单** |

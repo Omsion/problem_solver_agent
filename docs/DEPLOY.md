@@ -58,7 +58,7 @@ Copy-Item .env.example .env
 ```dotenv
 DEEPSEEK_API_KEY=sk-xxxxxxxx        # 求解 + 辅助（润色/文件名）+ 视觉层（分类/OCR/视觉推理/核对），统一 deepseek-flash
 # ZHIPU_API_KEY=xxxxxxxx            # 可选：仅当 VISION_PROVIDER=zhipu 回退时取消注释
-# VISION_PROVIDER=deepseek          # 视觉层供应商：deepseek（迁移目标/推荐）/ zhipu（代码默认的安全基线，一键回退，见 5.7）
+# VISION_PROVIDER=deepseek          # 视觉层供应商：deepseek（默认/推荐）/ zhipu（一键回退，见 5.7）
 ```
 
 其余可选变量（`GROUP_TIMEOUT`、`MAX_CONCURRENT_TASKS`、`IMAGE_MAX_EDGE`、

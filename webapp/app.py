@@ -16,7 +16,7 @@ from . import config as web_config
 from .accounts import AccountManager
 from .auto_import import start_auto_import, stop_auto_import
 from .models import TaskManager
-from .pipeline import PipelineService
+from .pipeline import PipelineService, delete_ocr_archives
 from .retention import prune_image_cache, prune_uploads, stale_uploads
 from .routers.admin import router as admin_router
 from .routers.auth import router as auth_router
@@ -144,6 +144,10 @@ def _startup_cleanup(task_manager: TaskManager, *, upload_dir: Path | None = Non
     2. **任务库为空而上传目录非空时，只告警不删除** —— "空库 + 有上传目录"正是
        配置配错的特征，而真正的"删库后残留"场景下用户多半想要那些目录。
     代价是这种组合下残留不会被自动回收（可用 `tools` 手工清理或补齐 DB）。
+
+    清理无主目录时**同时删除对应的 OCR 归档**（计划书 11.6-1）：这条路径处理的任务
+    DB 行已经消失，永远不会再被 `delete_task()` 或保留策略扫到，不在这里删就会留下
+    永久性的题面归档。两条护栏对归档同样成立（空任务库走的是上面的告警分支）。
     """
     target_dir = upload_dir if upload_dir is not None else web_config.UPLOAD_DIR
     try:
@@ -160,6 +164,15 @@ def _startup_cleanup(task_manager: TaskManager, *, upload_dir: Path | None = Non
             else:
                 prune_uploads(target_dir, task_ids)
                 logger.info("启动清理：移除 %d 个无主上传目录", len(orphans))
+                # 11.6-1：无主任务的 OCR 归档必须跟着上传目录一起走。
+                # 这条路径处理的是"DB 行已消失"的任务，它们永远不会再被 `delete_task()`
+                # 或保留策略扫到 —— 不在这里删，`<OCR_DIR>/<日期>/<task_id>.md` 里的
+                # **原始题面**就会永久留在盘上（归档比上传目录多留一份题面）。
+                # 护栏与上面同源：空任务库已在 `if not task_ids` 分支里提前返回，
+                # 因此这里不可能拿到"整批任务 id"去误删（删除本身还带 OCR_DIR 包含性校验）。
+                removed_archives = delete_ocr_archives(orphans)
+                if removed_archives:
+                    logger.info("启动清理：移除 %d 份无主 OCR 归档", removed_archives)
     except Exception as exc:
         logger.warning("启动清理上传目录失败: %s", exc)
 

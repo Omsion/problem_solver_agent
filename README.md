@@ -43,11 +43,10 @@ copy .env.example .env
 | `DEEPSEEK_API_KEY` | 求解 + 辅助（润色 / 文件名）+ 视觉层（分类 / OCR / 视觉推理 / 核对），统一走 `deepseek-flash` | platform.deepseek.com |
 | `ZHIPU_API_KEY` | **可选**：仅当 `VISION_PROVIDER=zhipu` 回退到智谱视觉模型时才需要 | open.bigmodel.cn |
 
-视觉层用哪一家由 `VISION_PROVIDER` 决定。**未配置时代码默认 `zhipu`（安全基线：
-双 provider 的 A/B 出数字之前，不把未验证的 provider 变成默认）**；本仓库的
-`.env` 与 `.env.example` 都显式写着 `VISION_PROVIDER=deepseek`，所以照上面这份
-配置走的就是新 provider —— 与求解共用同一个密钥、同一个 base_url，`.env` 里
-少一个必填项。想换回智谱视觉模型见下方「一键回退到智谱」。
+视觉层用哪一家由 `VISION_PROVIDER` 决定，**代码默认 `deepseek`**（2026-09-21 起：
+双 provider 的 A/B 闸门 S1/S2 判定通过后才切换的默认值，数据见
+`docs/plans/deepseek_vision_migration.md` §8.6）。视觉与求解共用同一个密钥、同一个
+base_url，所以 `.env` 里少一个必填项。想换回智谱视觉模型见下方「一键回退到智谱」。
 
 完整可配置项见 `.env.example`（每项都有注释说明）。
 
@@ -243,8 +242,8 @@ python tools/diag.py
 
 ```python
 # 视觉层：provider 表（迁移目标 deepseek，回退分支 zhipu）
-# 未显式配置 VISION_PROVIDER 时代码用 DEFAULT_VISION_PROVIDER = "zhipu"（安全基线），
-# 只有 A/B（tools/vision_ab）判定 S1/S2 通过后才把默认值切到 "deepseek"。
+# 未显式配置 VISION_PROVIDER 时代码用 DEFAULT_VISION_PROVIDER = "deepseek"
+# （A/B 闸门 S1/S2 判定通过后才由 zhipu 切过来；回退仍是一个环境变量的事）
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", DEFAULT_VISION_PROVIDER)
 VISION_PROVIDER_CONFIG = {
     "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "base_url": "https://api.deepseek.com",

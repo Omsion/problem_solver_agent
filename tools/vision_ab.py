@@ -14,9 +14,12 @@ vision_ab.py - 视觉层 A/B 评测工具（S1 / S2 / S12 的唯一判据）
 2. **如实记录走了哪条回退路径**：合并调用（1 次视觉调用）失败时会回退到
    `classify_and_transcribe_parallel`（1 次分类 + N 次 OCR）。这条信息是迁移方案第 8 节
    要回填的"PAGE 协议成功率"，所以必须写进报告，而不是悄悄用了回退还不说。
-3. **要素差用"两版并集"做基准**：`\frac`、题干数字、选项标号这些要素，只要**任何一版**
-   提到了就算基准，另一版缺了就是"要素缺失"。基准取并集而不是取某一家，是为了让
-   验收标准（要素缺失必须为 0）对两家都成立、不偏袒默认 provider。
+3. **要素差按"题目正文"比对**：基准 = `--reference` 指定的那一家的逐页文本
+   （不是"两版并集"—— 并集语义会让任何一家少写的内容都变成"谁都没丢"，从而失去判据
+   意义）。比对**先剥离页眉/页脚/题号导航**，因为 `extract_elements` 抓的是全页数字，
+   试卷 ID、`满分：135分 及格：115分`、`第18/60题` 都会被算成"题干数字"，产生假缺失
+   （2026-09-21 实测：某组"缺失 11 个"全部来自页眉）。全页计数同时写进报告
+   （`要素缺失数（全页…）`）与被剥离的行样例，剥离过程完全可核对。
 4. **LaTeX 静默损坏检测**：JSON 协议下 `\frac`→`\f`(formfeed)、`\begin`→`\b`(backspace)、
    `\theta`→`\t`(tab)、`\neq`→`\n` 都是**合法转义**，解析"成功"但正文被改写，还会
    通过页数校验直接写进解答文件。换 PAGE 协议的目的就是消除这类损坏，因此必须
@@ -123,6 +126,19 @@ _CATEGORY_LABELS = (
     ("options", "选项标号"),
 )
 
+# 考试 App 的页眉/页脚/题号导航 —— **不是题目要素**（S1 的判据说的是"题干、选项、数字、公式"）。
+# 为什么必须单独剥离：`extract_elements` 抓的是全页数字，试卷 ID（`78060`）、
+# `满分：135分 及格：115分 已答`、`第18/60题` 都会落进"题干数字"。2026-09-21 的验收
+# 实测证明这会产生**假缺失**：同一组 8 张图，两家模型各自在不同页页眉上省略/保留，
+# 于是"缺失 11 个"全部来自页眉数字，而正文逐要素比对无缺失。
+# 被剥离的行会原样记进报告（`chrome_samples`），可人工核对，不做隐藏。
+_CHROME_LINE_RE = re.compile(
+    r"(科目|模拟试题|满分|及格|已答|上一题|下一题|存疑|错题反|自动跳下一题"
+    r"|第\s*\d+\s*/\s*\d+\s*题"          # 题号导航（必须有斜杠，避免误伤"第 2 题"这种正文）
+    r"|^\s*\d{4,}\s*$"                   # 整行只有一个长数字（试卷/考试 ID）
+    r")"
+)
+
 # 被吃掉反斜杠的残片 → 正确写法的映射。
 # 为什么按"残片"查而不是按"控制字符"查：控制字符可能被后续处理（如 .strip()、
 # 写文件时的编码）吃掉，残片 `rac{` 才是最终落盘的样子，两种都要查。
@@ -159,6 +175,9 @@ def extract_elements(text: str) -> dict[str, list[str]]:
 
     为什么需要它：字符数差只能发现"少了一大段"，发现不了"数字 3.5 变成了 3"
     或"`\\frac` 丢了" —— 而后者正是多图 OCR 出错的典型方式（一处缺失，整道题废掉）。
+
+    注意：本函数抓**全页**数字，因此会包含页眉/题号里的数字；判据请用
+    `extract_body_elements`（先剥离这些非题目行）。
     """
     numbers = _RE_NUMBER.findall(text)
     fractions = [n for n in numbers if any(ch in n for ch in "./%")]
@@ -170,6 +189,34 @@ def extract_elements(text: str) -> dict[str, list[str]]:
         "options": [m.group(1).upper() for m in _RE_OPTION.finditer(text)]
                    + [m.group(1).upper() for m in _RE_OPTION_MATH.finditer(text)],
     }
+
+
+def extract_body_elements(text: str) -> dict[str, list[str]]:
+    """只从**题目正文**里抽要素（先剥离页眉/页脚/题号导航行）。
+
+    为什么需要：`extract_elements` 的分类名叫"题干数字"，但它按正则抓全页数字，
+    于是试卷 ID（`78060`）、`满分：135分 及格：115分`、`第18/60题` 都会被算成
+    "题干数字"。2026-09-21 的迁移验收实测证明这会产生**假缺失**：同一组 8 张图，
+    两家模型各自在不同页面上省略了页眉 → "缺失 11 个"全部来自页眉数字，而题目正文
+    逐要素比对无缺失（且候选比基准多出 24 个要素、字符数 +345）。
+
+    S1 说的是"题目要素（题干、选项、数字、公式）"无遗漏，因此**判据用本函数**；
+    原始计数同时保留在报告里（`missing_raw_count`），不做隐藏。
+    """
+    body, _ignored = strip_chrome_lines(text)
+    return extract_elements(body)
+
+
+def strip_chrome_lines(text: str) -> tuple[str, list[str]]:
+    """剥离考试 App 的页眉/页脚/题号导航行，返回 (题目正文, 被剥离的行)。"""
+    body: list[str] = []
+    ignored: list[str] = []
+    for line in (text or "").splitlines():
+        if _CHROME_LINE_RE.search(line):
+            ignored.append(line.strip())
+        else:
+            body.append(line)
+    return "\n".join(body), ignored
 
 
 def _snippet(text: str, offset: int, width: int = 24) -> str:
@@ -487,20 +534,32 @@ def run_provider(provider: str, image_paths: list[Path]) -> dict[str, Any]:
 def compare_pages(
     baseline_pages: list[str], candidate_pages: list[str]
 ) -> dict[str, Any]:
-    """逐页做要素差：基准 = 两版**并集**（任何一版提到的要素都算应到）。
+    """逐页做要素差：基准 = 指定的基准 provider 的逐页文本（candidate 相对它比）。
 
-    返回 `{"missing": {类别: [ (页, 要素) ]}, "extra": {...}, "per_page": [...], ...}`。
+    返回：
+    - `missing` / `missing_count`：**题目正文**要素缺失（判据，见 `extract_body_elements`）
+    - `missing_raw` / `missing_raw_count`：**含页眉/题号的全页**要素缺失（诊断，不做判据）
+    - `extra` / `extra_count`、`extra_raw_count`：候选多出的要素（可能是幻觉，也可能是更完整）
+    - `chrome_samples`：被当成非题目行剥离的样例行（可人工核对，避免"判据偷偷放水"）
     """
     missing: dict[str, list[list[Any]]] = {key: [] for key, _ in _CATEGORY_LABELS}
     extra: dict[str, list[list[Any]]] = {key: [] for key, _ in _CATEGORY_LABELS}
+    missing_raw: dict[str, list[list[Any]]] = {key: [] for key, _ in _CATEGORY_LABELS}
+    extra_raw: dict[str, list[list[Any]]] = {key: [] for key, _ in _CATEGORY_LABELS}
+    chrome_samples: list[str] = []
     per_page: list[dict[str, Any]] = []
 
     count = max(len(baseline_pages), len(candidate_pages))
     for index in range(count):
         base_text = baseline_pages[index] if index < len(baseline_pages) else ""
         cand_text = candidate_pages[index] if index < len(candidate_pages) else ""
-        base_elements = extract_elements(base_text)
-        cand_elements = extract_elements(cand_text)
+        # 判据用题目正文；原始计数同时算一份，只作诊断
+        base_elements = extract_body_elements(base_text)
+        cand_elements = extract_body_elements(cand_text)
+        base_all = extract_elements(base_text)
+        cand_all = extract_elements(cand_text)
+        _body, ignored_base = strip_chrome_lines(base_text)
+        _body, ignored_cand = strip_chrome_lines(cand_text)
 
         page_missing: dict[str, list[str]] = {}
         page_extra: dict[str, list[str]] = {}
@@ -512,6 +571,14 @@ def compare_pages(
                 missing[key].append([index + 1, element])
             for element in page_extra[key]:
                 extra[key].append([index + 1, element])
+            for element in sorted(set(base_all[key]) - set(cand_all[key])):
+                missing_raw[key].append([index + 1, element])
+            for element in sorted(set(cand_all[key]) - set(base_all[key])):
+                extra_raw[key].append([index + 1, element])
+
+        for line in ignored_base + ignored_cand:
+            if line and line not in chrome_samples:
+                chrome_samples.append(line)
 
         per_page.append({
             "page": index + 1,
@@ -520,6 +587,7 @@ def compare_pages(
             "char_delta": len(cand_text) - len(base_text),
             "missing": page_missing,
             "extra": page_extra,
+            "chrome_ignored": len(ignored_base) + len(ignored_cand),
         })
 
     lengths = [entry["chars"] for entry in per_page]
@@ -528,8 +596,13 @@ def compare_pages(
         "per_page": per_page,
         "missing": missing,
         "extra": extra,
+        "missing_raw": missing_raw,
+        "extra_raw": extra_raw,
+        "chrome_samples": chrome_samples[:12],
         "missing_count": sum(len(items) for items in missing.values()),
+        "missing_raw_count": sum(len(items) for items in missing_raw.values()),
         "extra_count": sum(len(items) for items in extra.values()),
+        "extra_raw_count": sum(len(items) for items in extra_raw.values()),
         "chars": sum(lengths),
         "baseline_chars": sum(baseline_lengths),
         "char_delta": sum(lengths) - sum(baseline_lengths),
@@ -773,13 +846,29 @@ def render_report(payload: dict[str, Any], comparisons: dict[str, dict[str, Any]
         rows = (
             ("字符数差（候选-基准）", lambda c: f"{c['char_delta']:+d}"),
             ("字符数差比例", lambda c: f"{c['char_delta_ratio']:+.1%}"),
-            ("**要素缺失数**", lambda c: f"**{c['missing_count']}**"),
-            ("要素多出数", lambda c: f"{c['extra_count']}"),
+            ("**要素缺失数（题目正文，判据）**", lambda c: f"**{c['missing_count']}**"),
+            ("要素缺失数（全页，含页眉/题号，仅诊断）",
+             lambda c: f"{c['missing_raw_count']}"),
+            ("要素多出数（题目正文）", lambda c: f"{c['extra_count']}"),
         )
         for label, getter in rows:
             cells = [str(getter(comparisons[name])) for name in order if name != reference]
             add(f"| {label} | " + " | ".join(cells) + " |")
         add("")
+        # 判据只覆盖"题目正文"，因此被剥离的行必须列出来，避免看起来像偷偷放水
+        chrome_seen: list[str] = []
+        for name in order:
+            if name != reference and name in comparisons:
+                for sample in comparisons[name]["chrome_samples"]:
+                    if sample not in chrome_seen:
+                        chrome_seen.append(sample)
+        if chrome_seen:
+            add("> 判据已剥离的非题目行（页眉 / 页脚 / 题号导航，样例）："
+                + "、".join(f"`{sample}`" for sample in chrome_seen[:6]) + "…")
+            add(">")
+            add("> `要素缺失数（全页…）` 是同一批文本**未剥离**时的计数，用来核对剥离没有掩盖"
+                "正文缺失：两者相差部分即页眉/题号差异。")
+            add("")
         # 要素缺失按类别 + 具体元素列出：只有"缺了什么"才能判断严重性
         for name in order:
             if name == reference or name not in comparisons:
@@ -962,12 +1051,19 @@ def _build_verdict(
     elif reference and comparisons and reference_usable:
         worst = max(comparisons.values(), key=lambda c: c["missing_count"], default=None)
         missing = worst["missing_count"] if worst else 0
+        raw_missing = max(
+            (c["missing_raw_count"] for c in comparisons.values()), default=0
+        )
         ok = missing == 0
+        detail = (f"相对基准 {reference} 缺失 {missing} 个"
+                  + ("，满足「必须为 0」" if ok else "，**不满足**「必须为 0」"))
+        if raw_missing > missing:
+            detail += (f"（判据只数**题目正文**要素；全页计数为 {raw_missing} 个，"
+                       f"其中 {raw_missing - missing} 个来自页眉/题号等非题目行，已单列并可见）")
         items.append({
             "mark": "✅" if ok else "❌",
-            "label": "要素缺失（数字/选项/LaTeX 片段）",
-            "detail": (f"相对基准 {reference} 缺失 {missing} 个"
-                       + ("，满足「必须为 0」" if ok else "，**不满足**「必须为 0」")),
+            "label": "要素缺失（题干/选项/公式，题目正文）",
+            "detail": detail,
         })
         overall &= ok
     elif reference and comparisons:
@@ -975,7 +1071,7 @@ def _build_verdict(
         # 任何候选的要素差都是 0，照旧打 ✅ 就等于用"没有基准"伪造一个"要素零缺失"。
         items.append({
             "mark": "❌",
-            "label": "要素缺失（数字/选项/LaTeX 片段）",
+            "label": "要素缺失（题干/选项/公式，题目正文）",
             "detail": (f"无法判定：基准 {reference} 没有任何非空页"
                        f"（{len(reference_pages)} 页全空），"
                        "空基准下「缺失 0」不构成满足验收标准的证据"),

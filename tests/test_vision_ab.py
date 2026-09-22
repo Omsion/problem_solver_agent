@@ -240,6 +240,77 @@ def test_f2_empty_reference_baseline_is_not_reported_as_zero_missing():
 
 
 # ---------------------------------------------------------------------------
+# S1 判据的测量面：页眉/题号不是"题目要素"，但剥离必须可见
+# ---------------------------------------------------------------------------
+
+
+def test_chrome_only_difference_is_not_a_body_element_loss():
+    """只有页眉/题号差异时，判据必须判 0 缺失 —— 但全页计数仍如实报出来。
+
+    这是 2026-09-21 真实验收暴露的缺陷：`extract_elements` 抓全页数字，
+    `满分：135分 及格：115分`、`第18/60题`、试卷 ID 都被算成"题干数字"，
+    于是两家在不同页面省略页眉时，"缺失 11 个"全部是页眉数字（假缺失）。
+    判据要量的是 S1 说的"题目要素"，因此按题目正文比对；剥离必须可核对。
+    """
+    baseline = [
+        "科目（工作级,Python）\n78060\n满分：135分 及格：115分 已答\n"
+        "单选题 第18/60题 自动跳下一题\n18、1+1=( )\nA. 1   B. 2   C. 3"
+    ]
+    # 候选项省略了整行页眉/页脚，题目正文一字不差
+    candidate = ["18、1+1=( )\nA. 1   B. 2   C. 3"]
+
+    comparison = vision_ab.compare_pages(baseline, candidate)
+
+    assert comparison["missing_count"] == 0, "题目正文没有缺任何要素"
+    assert comparison["missing_raw_count"] > 0, "全页计数必须如实保留差异（可核对）"
+    assert comparison["missing_raw"]["numbers"], "页眉数字应出现在全页缺失里"
+    assert comparison["chrome_samples"], "被剥离的行必须列出来，不能悄悄放水"
+
+
+def test_missing_option_or_latex_still_fails_the_body_gate():
+    """剥离页眉不能顺手把真缺失也放过：正文里少一个选项/一条 LaTeX 必须照旧判缺失。"""
+    baseline = ["18、解方程 $\\frac{a}{b}=1$\nA. 1   B. 2   C. 3   D. 4"]
+    candidate = ["18、解方程 $\\frac{a}{b}=1$\nA. 1   B. 2   C. 3"]  # 少了 D
+
+    comparison = vision_ab.compare_pages(baseline, candidate)
+
+    assert comparison["missing_count"] > 0
+    assert comparison["missing"]["options"], "少一个选项必须被记为正文缺失"
+
+    baseline_latex = ["求 $\\theta$ 的值\n1、2、3"]
+    candidate_latex = ["求 的值\n1、2、3"]
+    latex_comparison = vision_ab.compare_pages(baseline_latex, candidate_latex)
+    assert latex_comparison["missing"]["latex_commands"] == [[1, "theta"]]
+
+
+def test_page_number_mention_inside_body_is_not_stripped():
+    """正文里的"第 2 题"不能被当成题号导航剥掉（只有 `第 N/M 题` 才算导航）。"""
+    body, ignored = vision_ab.strip_chrome_lines("第 2 题：求极限\n第18/60题 自动跳下一题")
+    assert "第 2 题：求极限" in body
+    assert ignored == ["第18/60题 自动跳下一题"]
+
+
+def test_verdict_mentions_the_raw_count_when_chrome_differs():
+    """判据通过时，结论里也要点出"全页还有 N 个差异来自页眉"，避免读报告的人被误导。"""
+    runs = {
+        "zhipu": _fake_run(["科目\n满分：135分 及格：115分 已答\n18、1+1=( )\nA. 1 B. 2"]),
+        "deepseek": _fake_run(["18、1+1=( )\nA. 1 B. 2"]),
+    }
+    comparisons = {
+        "deepseek": vision_ab.compare_pages(
+            runs["zhipu"]["pages"], runs["deepseek"]["pages"]
+        )
+    }
+
+    verdict = vision_ab._build_verdict(runs, ["zhipu", "deepseek"], "zhipu", comparisons)
+
+    item = next(i for i in verdict["items"] if i["label"].startswith("要素缺失"))
+    assert item["mark"] == "✅"
+    assert "题目正文" in item["detail"]
+    assert "页眉" in item["detail"]
+
+
+# ---------------------------------------------------------------------------
 # F3：截断闸门必须能被"缺 <<<END>>>"触发
 # ---------------------------------------------------------------------------
 

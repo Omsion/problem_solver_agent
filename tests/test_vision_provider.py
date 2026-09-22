@@ -316,19 +316,18 @@ def test_provider_env_is_normalised(raw_value):
 def test_unknown_provider_falls_back_to_default_without_raising():
     """组 G4 / S5：未知 VISION_PROVIDER 值回落**当前默认 provider**，**不抛异常**。
 
-    默认值是刻意的**安全基线**（`config.DEFAULT_VISION_PROVIDER`）：计划书 §6 第 5 步
-    规定 A/B（S1/S2）出数字之前，deepseek 不作为默认，只能由 .env 显式启用。
-    因此"配置写错"既不该让服务起不来，也不该把用户悄悄带到未验证的 provider 上。
+    默认值由计划书 §6 第 5 步决定：A/B 闸门（S1/S2）通过后默认就是迁移目标 deepseek
+    （2026-09-21 判定通过，数据见计划书 §8.6）。这条用例锁住"默认值是什么"，
+    让将来任何一次默认值变更都必须是一次**显式**改动。
     """
     snapshot = _config_snapshot_in_fresh_process("definitely-not-a-provider")
 
+    assert snapshot["DEFAULT_VISION_PROVIDER"] == "deepseek"
     assert snapshot["VISION_PROVIDER"] == snapshot["DEFAULT_VISION_PROVIDER"]
     assert snapshot["VISION_PROVIDER_NAME"] == snapshot["DEFAULT_VISION_PROVIDER"]
-    # 当前安全基线是 zhipu（回退分支），因此派生模型必须是 GLM 系列
-    assert snapshot["DEFAULT_VISION_PROVIDER"] == "zhipu"
-    assert snapshot["VISION_CLASSIFY_MODEL"] == "GLM-4.6V-FlashX"
-    assert snapshot["VISION_REASONING_MODEL"] == "GLM-4.6V"
-    assert snapshot["VISION_BASE_URL"] == "https://open.bigmodel.cn/api/paas/v4/"
+    assert snapshot["VISION_CLASSIFY_MODEL"] == "deepseek-flash"
+    assert snapshot["VISION_REASONING_MODEL"] == "deepseek-flash"
+    assert snapshot["VISION_BASE_URL"] == "https://api.deepseek.com"
 
 
 def test_deepseek_env_derives_flash_models():

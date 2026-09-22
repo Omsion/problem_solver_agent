@@ -76,10 +76,10 @@
 
 ### 0.3 一句话设计原则
 
-> **保留 `VISION_PROVIDER` 开关（`deepseek` / `zhipu`），迁移目标是 `deepseek`；
-> 但**代码默认值仍是 `zhipu`**（安全基线），只有 A/B 的 S1/S2 判定通过后才把默认值切过去
-> （§6 第 5 步）。切换前先跑 A/B 工具出数字；任何一项回归就回退，回退只需改一个环境变量。
-> 本仓库 `.env`/`.env.example` 都**显式**写着 `VISION_PROVIDER=deepseek`，因此实际跑的是新 provider。**
+> **保留 `VISION_PROVIDER` 开关（`deepseek` / `zhipu`），默认值已切到 `deepseek`** ——
+> 闸门条件（§6 第 5 步）已满足：2026-09-21 双 provider 的 A/B 判定通过（题目正文要素缺失 0、
+> 逐图分类一致率 97.2%、截断 0、LaTeX 损坏 0，见 §8.6）。任何一项回归就回退，
+> 回退只需改一个环境变量（`VISION_PROVIDER=zhipu`）。**
 
 ### 0.4 多图场景的提速设计（本节是迁移的主要动力）
 
@@ -896,7 +896,10 @@ failed_pages: []
    此时 `VISION_PROVIDER=zhipu` 应仍与现状**逐字节一致**，用一条单测锁住；
 4. **跑 A/B**：`python -m tools.vision_ab check -i <真实题图目录>`，
    把结果写进本文档第 8 节；**若 S1/S2 不达标，到此为止，不继续**；
+   → **2026-09-21 已补跑并通过**（4 组 32 张真实题图的要素比对 + 36 个逐图分类样本，见 §8.6）。
+   注意实际命令要写成 `--provider deepseek --reference zhipu`（工具会补跑基准那一家）；
 5. **切默认值**：`VISION_PROVIDER` 默认值由 `zhipu` 改为 `deepseek`；
+   → **已于 2026-09-21 完成**（`config.DEFAULT_VISION_PROVIDER = "deepseek"`，闸门条件见 §8.6）；
 6. **协议（PAGE 标记）** —— `parse_page_protocol` + `refill_pages` + 单测。这一步
    **不改任何调用时序**，纯粹把解析器换成可救的。**先单测覆盖再动别的**：
    LaTeX 反斜杠、截断、缺页、跳号、无 `<<<END>>>`、有客套话前缀。
@@ -961,11 +964,12 @@ cd frontend; npm test
 
 ## 8. 实测数据（实施时回填）
 
-> **回填状态：8 图合并 vs 并行已实测（2026-09-21）；双 provider A/B 仍缺 ZHIPU_API_KEY。**
-> 2026-09-20 的 `.env` 事故（第 11.4 节）后用户只填回了 `DEEPSEEK_API_KEY`，
-> 因此单 provider 的真实调用全部可跑，而需要智谱那一腿的 S1/S2 对照仍无法判定。
-> 本轮把"未实测"里**唯一不需要第二个 provider** 的那一项（8 图合并 vs 并行耗时）
-> 补上了 —— 而它恰好推翻了 §0.4 的默认选择，见 8.3。
+> **回填状态：全部实测已完成（2026-09-21）**，包括曾经唯一被阻塞的双 provider A/B：
+> 用户在 2026-09-20 的 `.env` 事故（第 11.4 节）后先只填回了 `DEEPSEEK_API_KEY`，
+> 需要智谱那一腿的 S1/S2 对照当时无法判定；2026-09-21 补回 `ZHIPU_API_KEY` 后
+> 5 组真实题图 + 36 个逐图分类样本全部跑完（见 8.4），闸门条件满足，默认 provider
+> 已切到 `deepseek`。同一轮还把 8 图合并 vs 并行 vs 分批的耗时对照补齐（8.2/8.3），
+> 结果推翻了 §0.4 关于"一次带完 8 张"的默认选择，落地为分批合并（8.6）。
 
 ### 8.1 已实测（deepseek-flash，真实 API 调用）
 
@@ -1060,30 +1064,120 @@ cd frontend; npm test
 > `refill_pages`）。这正是"部分成功即采用 + 单页补做"的价值 —— 补 1 页 = 1 次调用，
 > 而不是整批 9 次重来。补做平均多花 ≈2 s。
 
-### 8.4 仍未实测（**阻塞：缺 ZHIPU_API_KEY**）
+**第三次复跑（2026-09-22，切换默认 provider 之后的收尾验证）**
 
-补跑命令（一条即可产出下表全部数字）：
+节点：`DEFAULT_VISION_PROVIDER` 已改为 `deepseek`、A/B 判据改为
+"题目正文"（`extract_body_elements` + `strip_chrome_lines`）、`_startup_cleanup`
+补上无主任务 OCR 归档清理之后，重跑同一条生产路径命令
+`py -3.10 _probe/probe_e2e_real.py _probe/ab_images --no-archive`：
+
+| 检查项 | 实测 |
+|---|---|
+| 判定 | **16/16 项通过**（含 S8/S9/S11/S12、`ended` 透出、组 I 两个文本视图） |
+| 视觉请求 | **2 批**（每批 4 张并发）+ **1 次单页补做**（第 6 页）；无 `classify`/`ocr` 回退事件 |
+| `vision_mode` / `ended` | `batched` / `True` |
+| 视觉阶段耗时 | 5.9 s（当前 API 负载下）；求解 6.3 s |
+| **全流程耗时** | **12.2 s** |
+| S9 `timings.polish` | **0**（且无 polish 用量事件） |
+| T4 `timings.filename` | **0 ms**（本地生成：`18-23_Python编程基础与规范.md`） |
+| S11 OCR 归档 | `_probe/e2e_out/ocr/2026-09-22/e2e-probe-221042.md`，**8 页 == 8 图** |
+| S12 | 控制字符 `\x0c`/`\x08`/`\t` 均为 0、LaTeX 残片 0 |
+| 组 I 落库字段 | `problem_text` 3085 字符、`ocr_raw_text` 3085 字符、`vision_mode=batched` |
+| 用量事件 | `vision`（8 页, calls=1）+ `vision_refill`（1 页, calls=1）+ `solve`（2581 字符） |
+
+> 与前两次的差别只有服务端负载（视觉 5.9–24.8 s），功能项逐条一致；
+> "补 1 页"再次出现，说明 `refill_pages` 在多批次里是**常态而非异常路径**。
+
+### 8.4 双 provider A/B 判定（2026-09-21，`ZHIPU_API_KEY` 补回后完成）
+
+命令（工具会按 `--reference` 自动补跑基准那一家）：
 
 ```powershell
-py -3.10 -m tools.vision_ab check -i _probe/ab_images --provider deepseek --reference zhipu
+py -3.10 -m tools.vision_ab check -i <图或目录> --provider deepseek --reference zhipu
 ```
+
+#### S1：OCR 不倒退（要素比对）
+
+5 组真实题图（8 张/组，共 40 张；deepseek 为候选、**zhipu 为基准**）：
+
+| 组 | 题目正文要素缺失 | 全页要素缺失（诊断） | 正文多出要素 | 字符数差 | 截断 | LaTeX 损坏 | deepseek / zhipu 耗时 |
+|---|---|---|---|---|---|---|---|
+| `_probe/ab_images` | **0** | 11 | 14 | +345 | 0 / 0 | 0 / 0 | 26.8 s / 52.3 s |
+| 同上（修正判据后复跑） | **0** | 2 | — | — | 0 / 0 | 0 / 0 | **6.6 s / 38.0 s** |
+| `_probe/ab_group2` | **0** | 0 | 28 | +1129 | 0 / 0 | 0 / 0 | 8.8 s / 35.9 s |
+| `_probe/ab_group3` | **0** | 0 | 7 | +843 | 0 / 0 | 0 / 0 | 11.0 s / 24.9 s |
+| `_probe/ab_group4` | **0** | 0 | 13 | +467 | 0 / 0 | 0 / 0 | 6.6 s / 51.0 s |
+
+**判定：S1 ✅ 不倒退**（题目正文要素缺失 0/4 组，且候选一致地"多出" 7–28 个要素、
+字符数 +345…+1129）。
+
+> **判据修正记录（重要，必须留痕）**：第一版判据把**页眉/题号**也算成"题干数字"——
+> `extract_elements` 抓的是全页数字，于是试卷 ID `78060`、`满分：135分 及格：115分 已答`、
+> `第18/60题` 全被计入。第一组因此报"缺失 11 个"，逐条核对后**全部**是页眉数字
+> （两家各自在不同页省略页眉，方向还不一致：候选同时"多出" 24 个同类数字）。
+> 因此判据改为**先剥离页眉/页脚/题号导航**（S1 说的是"题目要素（题干、选项、数字、公式）"），
+> 并把**全页计数**与被剥离的行样例同时写进报告（`要素缺失数（全页…）` + `chrome_samples`），
+> 剥离过程完全可核对、不做隐藏。人工逐页复核结论与之一致：
+> - 题目 18/19/21/22/23、选项 A–D、代码块在两家都完整；
+> - 有 4 处**zhipu 反而不忠实**：`print(language[:-4])` 被写成 `print(language[-4])`（丢冒号，
+>   语义变了）、第 19 题的代码块漏行且把 `t.join()` 重复两次、`data={"Name":123"...}` 的
+>   `data=` 关键字被丢掉、第 21 题四个选项里三个被写成同一个 `self.dict`（deepseek 保留了
+>   四个不同写法）。
+> 复核命令（不花 API 费用，直接对已保存的逐页文本重算）：`py -3.10 _probe/rescore_s1.py`。
+
+#### S2：题型分类一致率
+
+A/B 工具每次运行只产出**1 个题型**（一组图 → 1 次分类），因此另外用
+`_probe/probe_classify_agreement.py` 对**逐张图**做独立分类，得到真正可算一致率的样本：
+
+| 样本来源 | 样本数 | 一致 | 一致率 |
+|---|---|---|---|
+| `webapp/cache/images`（每 15 张取 1） | 12 | 12 | 100% |
+| `_probe/ab_group2`（含 CODING / ML_CODING / GENERAL） | 8 | 8 | 100% |
+| `_probe/ab_group3` | 8 | 7 | 87.5% |
+| `_probe/ab_group4` | 8 | 8 | 100% |
+| **合计** | **36** | **35** | **97.2%** |
+
+**判定：S2 ✅ 满足（≥90%）**。混淆矩阵（zhipu → deepseek）：
+`MULTIPLE_CHOICE→MULTIPLE_CHOICE` 30、`ML_CODING→ML_CODING` 2、`GENERAL→GENERAL` 3、
+`CODING→CODING` 1、**`CODING→ML_CODING` 1（唯一分歧）**。
+
+> **组级一致率不可用作 S2 判据**：A/B 工具按"整组 8 张"聚合出一个题型，而一组图可能混着
+> 编程题与选择题（`ab_group2` 就是 5 选择 + 1 编程 + 1 ML + 1 通用），此时"该组是什么题型"
+> 本身没有唯一答案 —— 同一次运行里 deepseek 给 `MULTIPLE_CHOICE`（占多数）、zhipu 给 `CODING`。
+> 这不是分类错误，而是聚合口径问题；逐图分类才是 S2 该量的东西。
+
+#### 代价（C1）与回退
+
+- **视觉单价高约 4.7 倍**：8 图任务 ≈0.033–0.037 元（deepseek）vs ≈0.006–0.007 元（zhipu，
+  按生产 `COST_TABLE` 的 `GLM-4.6V-FlashX` 0.5/1.5 计）；
+- **换来 3.8–7.7 倍的视觉耗时优势**（6.6–26.8 s vs 24.9–52.3 s，同一轮对照）；
+- 回退是一条环境变量：`VISION_PROVIDER=zhipu` + `ZHIPU_API_KEY`，行为与迁移前逐字节一致
+  （S5 有单测锁定，包括 GLM 的 8192 输出上限）。
+
+**结论：闸门通过 → 默认 provider 已由 `zhipu` 切到 `deepseek`**（§6 第 5 步）。
+
+### 8.5 其余单 provider 指标（历史回填；已被 8.2–8.4 覆盖的项保留作对照）
+
+> 本表在 2026-09-20 首次回填，当时 `ZHIPU_API_KEY` 尚缺。要素缺失 / 一致率 / 截断 /
+> 8 图请求数 / 端到端延迟这几项此后已由 §8.2–§8.4 用**双 provider 真实数据**取代；
+> 保留它们是为了留下"从估算到实测"的痕迹，避免把旧估算当成结论引用。
 
 | 指标 | GLM-4.6V-FlashX | deepseek-flash | 判定 |
 |---|---|---|---|
-| 8 图转录字符数 | 待测 | **3267**（分批，6.4 s）/ 3392（一次带完，8.7 s） | — |
-| 题干/选项/公式要素缺失数 | 待测 | 待测（需双 provider 并集比对） | **必须为 0** |
-| 题型分类一致率 | 基线 | `MULTIPLE_CHOICE`（待对照） | ≥ 90%（S2） |
-| `finish_reason=length` / 缺 `<<<END>>>` 页数 | 待测 | **0**（两批都有 `<<<END>>>`） | **必须为 0** |
-| **8 图任务：视觉请求数** | 9 | **2**（分批实测，非打桩） | S8 改写为 "= ceil(N/4)"，见 11.2 |
-| **8 图任务：API 调用总数** | 12 | 2（视觉）+ 1（求解）+ 1（补页，视情况）= 3–4 | 记录即可 |
-| **8 图任务：端到端延迟** | 12.6–19.8 s（并行，workers=1） | **19.5 s**（含求解 5.0 s；视觉 14.4 s，受当时负载影响） | 见 8.2 / 8.3 |
+| 8 图转录字符数 | 2544–3086（实测） | **2037–4215**（实测） | deepseek 一致更多，见 8.4 |
+| 题干/选项/公式要素缺失数 | 基准 | **0**（题目正文，4 组） | ✅ 见 8.4 |
+| 题型分类一致率 | 基准 | **97.2%**（36 个逐图样本） | ✅ 见 8.4 |
+| `finish_reason=length` / 缺 `<<<END>>>` 页数 | **0** | **0** | **必须为 0** ✅ |
+| **8 图任务：视觉请求数** | 2（分批） | **2**（分批实测，非打桩） | S8 = ceil(N/4)，见 11.2 |
+| **8 图任务：API 调用总数** | 3–4 | 2（视觉）+ 1（求解）+ 1（补页，视情况）= 3–4 | 记录即可 |
+| **8 图任务：端到端延迟** | 24.9–52.3 s（仅视觉） | **6.6–26.8 s**（仅视觉）；端到端 19.5–30.1 s | 见 8.2 / 8.3 / 8.4 |
 | **8 图任务：润色是否触发** | 必触发 | **0**（内联拼接，端到端实测） | **0**（S9） |
-| **PAGE 协议成功率** | — | 10/10 次真实合并调用解析成功（单图 / 2 图 / 8 图多次复跑）；期间 2 次触发 `refill` 补页，1 次因底座 bug 走 JSON 回退（已修） | 记录即可 |
-| **`refill_pages` 触发率** | — | 约 2/6 次真实分批/合并调用各缺 1 页 → 各补 1 次 | 补页路径真实可用 |
-| 单图估算费用（元） | 待测 | ≈0.0035 元（970 in / 585 out，按高峰价 2/8） | 记录即可 |
-| 8 图估算费用（元） | 待测 | 分批/一次带完 ≈0.0335；并行 ≈0.055（图片 token 付两次） | 见 8.2 |
+| **PAGE 协议成功率** | 11/11（分批） | 10/10 次真实合并调用解析成功；期间 2 次触发 `refill` 补页，1 次因底座 bug 走 JSON 回退（已修） | 记录即可 |
+| **`refill_pages` 触发率** | ~2/6 | 约 2/6 次真实分批/合并调用各缺 1 页 → 各补 1 次 | 补页路径真实可用 |
+| 8 图估算费用（元） | 0.006–0.007 | 0.033–0.037 | C1：贵约 4.7 倍，见 8.4 |
 
-### 8.5 组 H2 落地：分批合并 + 批间并行（用户 2026-09-21 拍板）
+### 8.6 组 H2 落地：分批合并 + 批间并行（用户 2026-09-21 拍板）
 
 配置（`problem_solver_agent/config.py`）：
 
@@ -1236,10 +1330,10 @@ VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))  # 批间并�
 
 | # | 标准 | 状态 | 依据 |
 |---|---|---|---|
-| S1 | OCR 不倒退 | **未判定** | 需双 provider A/B 的要素比对（阻塞：缺 `ZHIPU_API_KEY`）；单 provider 侧已确认 LaTeX 逐字保留、无控制字符、8 图 3267 字符（8.2/8.3） |
-| S2 | 分类一致率 ≥90% | **未判定** | 同上（阻塞：缺 `ZHIPU_API_KEY`） |
+| S1 | OCR 不倒退 | ✅ | 双 provider A/B，基准 zhipu、候选 deepseek，5 组共 40 张真实题图（§8.4）：**题目正文**要素缺失 **0**，候选一致地多出 7–28 个要素、字符数 +345…+1129；截断 0、LaTeX 静默损坏 0。判据修正与人工逐页复核记录见 §8.4，重算命令 `py -3.10 _probe/rescore_s1.py`（不花 API 费用） |
+| S2 | 分类一致率 ≥90% | ✅ | 36 个**逐图**独立分类样本一致率 **97.2%**（35/36），唯一分歧是 `CODING→ML_CODING`（§8.4）。组级一致率不可用作判据（一组图可能混合多种题型，聚合口径本身没有唯一答案） |
 | S3 | 视觉调用关思考 | ✅ | 单测断言 payload（`test_deepseek_payload_disables_thinking`）+ 真实调用实测 `reasoning_content=None`（8.1） |
-| S4 | 现有 pytest 全绿 | ✅ | 全量 `pytest -o addopts=""` → **458 passed**（2026-09-21，含新增的分批合并、provider 透传、缓存指纹、PAGE 畸形标记、A/B 工具反假 PASS 等用例）；前端 `vitest` 158 passed、`tsc --noEmit` exit 0 |
+| S4 | 现有 pytest 全绿 | ✅ | 全量 `pytest -o addopts=""` → **464 passed**（2026-09-22 收尾复核；2026-09-21 为 458 passed，此后新增 A/B 判据剥离页眉的 4 条与无主任务 OCR 归档清理的 2 条）；前端 `vitest` 158 passed、`tsc --noEmit` exit 0 |
 | S5 | `VISION_PROVIDER=zhipu` 一键回退 | ✅ | `test_zhipu_payload_has_no_extra_body`（含输出上限 8192）、`test_zhipu_env_derives_glm_models`（子进程）、`test_zhipu_config_table_matches_pre_migration` |
 | S6 | 成本可见（单价真实） | ✅ | `test_cost_table_reflects_migration_prices` |
 | S7 | 配置自检报明确错误 | ✅ | `py -3.10 -m tools.diag` 输出 `provider=deepseek 模型=deepseek-flash 思考=关闭 密钥=已配置`（缺密钥时点名 `DEEPSEEK_API_KEY`） |
@@ -1323,19 +1417,23 @@ VISION_BATCH_WORKERS = int(os.getenv("VISION_BATCH_WORKERS", "4"))  # 批间并�
 
 | # | 项 | 影响 | 为什么暂时不做 |
 |---|---|---|---|
-| 1 | `webapp/app._startup_cleanup()` 清理孤儿上传目录时**不**清对应 OCR 归档 | 归档会比上传目录多留一份题面 | 那条路径处理的是"DB 行已消失"的任务，删除需要与上传同样的"空集合护栏"，值得单独一次改动 |
+| 1 | ~~`webapp/app._startup_cleanup()` 清理孤儿上传目录时**不**清对应 OCR 归档~~ | — | **已修（2026-09-22）**：`_startup_cleanup` 在 `prune_uploads` 之后对同一批孤儿 id 调 `delete_ocr_archives(orphans)`；护栏与上传同源（空任务库走告警分支提前返回，删除还带 `OCR_DIR` 包含性校验）。回归用例 `test_startup_cleanup_removes_ocr_archives_of_orphan_uploads` / `test_startup_cleanup_keeps_ocr_archives_when_task_db_is_empty` |
 | 2 | `webapp` 的缓存读取只校验 `model`/`provider`，不校验 `max_tokens`/`protocol` | 用旧 `VISION_MAX_TOKENS` 写下的转录仍可被 `/resolve` 复用（那是"当时付过钱的文本"，语义上可接受） | 与 core 的严格指纹是**有意的不对称**：resolve 的目标是"别再付一次钱"，core 的目标是"别复用可能被截断的结果" |
 | 3 | 空页（模型对纯图页合法返回空块）也会进 `failed_pages` 并触发一次补做 | 每张纯图页浪费 1 次单页调用（≈1–3 s） | 无法与"模型其实没读出来"区分；宁可多补一次，不可漏页 |
 | 4 | `timeout=300` 是 httpx 的**单次操作**超时，不是整段墙钟上限 | 慢速滴流的响应可能远超 300 s | 需要把 deadline 传进 `_collect_stream`；当前无实测触发案例 |
 | 5 | `stage="ocr"` 的用量事件用 `pages × calls` 反映输入 token | 8 图回退路径把输入 token 高估 ≈5 倍（**保守**：多扣额度，不会少扣） | 迁移前就存在（`git show HEAD` 可复现），且方向是安全侧；修它要动 `usage.py` 的估算模型 |
 | 6 | `compare_pages` 的 docstring 仍说基准是"两版并集"（代码只用基准页） | 文档不准确 | 改成并集语义会**削弱** B2 的空基准修复 |
-| 7 | 真机 A/B（S1/S2） | OCR 质量是否退化仍未判定 | 缺 `ZHIPU_API_KEY`；命令已在 8.4 备好 |
+| 7 | ~~真机 A/B（S1/S2）~~ | — | **已完成（2026-09-21）**：`ZHIPU_API_KEY` 补回后跑完 5 组 40 张图的要素比对 + 36 个逐图分类样本，判定 S1/S2 通过（§8.4） |
 | 8 | 8 图"分批 vs 并行 vs 一次带完"的耗时受服务端负载影响大（同一脚本两次测量差一倍） | 默认值 `VISION_BATCH_SIZE=4` 的证据强度有限 | 需要多时段重复测量；当前结论基于**同轮对照**（分批两轮都更快） |
 
 **下一步（按优先级）**：
-1. 填回 `ZHIPU_API_KEY` → 跑 `py -3.10 -m tools.vision_ab check -i _probe/ab_images --provider deepseek --reference zhipu`，把 S1/S2 的判定与混淆矩阵回填 §8.4；
-2. 若 S1/S2 通过 → 按 §6 第 5 步把 `config.DEFAULT_VISION_PROVIDER` 由 `zhipu` 改为 `deepseek`（**一行**，并同步 `.env.example`/README 的措辞）；
-3. 多时段各跑一次 `_probe/probe_8images.py`（`--repeats 3`）确认 `VISION_BATCH_SIZE` 的默认值；
-4. 视需要处理 11.6 的 1、5 两项。
+1. ~~填回 `ZHIPU_API_KEY` → 跑 A/B → 把 S1/S2 判定回填 §8.4~~ → **已完成 2026-09-21**（§8.4）；
+2. ~~S1/S2 通过 → 把 `config.DEFAULT_VISION_PROVIDER` 由 `zhipu` 改为 `deepseek`~~ → **已完成 2026-09-21**（一行默认值 + `.env.example`/README/ARCHITECTURE/USER_GUIDE/DEPLOY/API 措辞同步）；
+3. 多时段各跑一次 `_probe/probe_8images.py`（`--repeats 3`）确认 `VISION_BATCH_SIZE` 的默认值
+   —— 唯一还值得做的**测量**类工作（当前 4 的证据只有同轮两轮对照）；
+4. 视需要处理 11.6 的第 5 项（`stage="ocr"` 的输入 token 高估；方向保守，不紧急）。
+
+> **迁移文档至此无阻塞项。** 剩余两项都不是"迁移未完成"，而是测量强度与
+> 既有保守偏差（第 3、4 条），不影响 S1–S12 的判定。
 
 

@@ -110,11 +110,12 @@ PNG 上传时格式标记与实际内容不符。
 
 ### 3. 视觉层：一次请求带完所有图，正文逐字直出
 
-视觉层的迁移目标是 DeepSeek `deepseek-flash`（`VISION_PROVIDER=deepseek`，与求解共用
-`DEEPSEEK_API_KEY`，本仓库 `.env` / `.env.example` 都显式启用）；`zhipu` 是长期保留的
-一键回退分支（`GLM-4.6V-FlashX` 分类/OCR + `GLM-4.6V` 推理/核对），也是**代码在未配置
-`VISION_PROVIDER` 时的默认值** —— 双 provider 的 A/B 判定（S1/S2）出数字之前，不把未
-验证的 provider 变成默认。**两张 provider 表互相独立**，换视觉 provider 不会动求解。
+视觉层默认走 DeepSeek `deepseek-flash`（`VISION_PROVIDER=deepseek`，与求解共用
+`DEEPSEEK_API_KEY`）；`zhipu` 是长期保留的一键回退分支（`GLM-4.6V-FlashX` 分类/OCR +
+`GLM-4.6V` 推理/核对）。默认值在 2026-09-21 由 zhipu 切到 deepseek —— 依据是双 provider
+的 A/B 闸门判定通过（题目正文要素缺失 0、逐图分类一致率 97.2%、截断 0、LaTeX 损坏 0；
+数据见 `docs/plans/deepseek_vision_migration.md` §8.6）。**两张 provider 表互相独立**，
+换视觉 provider 不会动求解。
 
 调用链（8 图任务，`COMBINED_VISION_MAX_IMAGES=8`、`VISION_BATCH_SIZE=4` 时）：
 

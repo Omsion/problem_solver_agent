@@ -127,6 +127,66 @@ def test_startup_cleanup_does_not_wipe_uploads_for_an_empty_task_db(tmp_path, mo
     assert (uploads / "t2").exists()
 
 
+def test_startup_cleanup_removes_ocr_archives_of_orphan_uploads(tmp_path, monkeypatch):
+    """11.6-1：清掉无主上传目录时，对应的 OCR 归档必须一起清（否则题面永久留盘）。
+
+    这条路径处理的是"DB 行已消失"的任务：`delete_task()` 与保留策略都扫不到它们，
+    因此归档只能在这里删。同时验证护栏：存活任务的归档**不能**被误删。
+    """
+    from problem_solver_agent import config as core_config
+    from webapp import app as webapp_app
+    from webapp import config as web_config
+    from webapp.models import TaskManager
+
+    uploads = tmp_path / "uploads"
+    _make_upload(uploads, "orphan")
+    _make_upload(uploads, "alive")
+    monkeypatch.setattr(web_config, "UPLOAD_DIR", uploads, raising=False)
+
+    ocr = tmp_path / "ocr"
+    day = ocr / "2026-09-21"
+    day.mkdir(parents=True)
+    monkeypatch.setattr(core_config, "OCR_DIR", ocr, raising=False)
+    orphan_archive = day / "orphan.md"
+    alive_archive = day / "alive.md"
+    for path in (orphan_archive, alive_archive):
+        path.write_text("---\ntask_id: x\n---\n\n题面文本\n", encoding="utf-8")
+
+    manager = TaskManager(tmp_path / "tasks.db")
+    manager.create_task("alive", 1)  # 任务库非空 → 清理真的会执行
+
+    webapp_app._startup_cleanup(manager)  # noqa: SLF001
+
+    assert not orphan_archive.exists(), "无主任务的归档必须被清掉"
+    assert alive_archive.exists(), "存活任务的归档不能被误删"
+    assert not (uploads / "orphan").exists()
+    assert (uploads / "alive").exists()
+
+
+def test_startup_cleanup_keeps_ocr_archives_when_task_db_is_empty(tmp_path, monkeypatch):
+    """护栏：空任务库 + 有上传目录时，OCR 归档同样一份都不能删。"""
+    from problem_solver_agent import config as core_config
+    from webapp import app as webapp_app
+    from webapp import config as web_config
+    from webapp.models import TaskManager
+
+    uploads = tmp_path / "uploads"
+    _make_upload(uploads, "t1")
+    monkeypatch.setattr(web_config, "UPLOAD_DIR", uploads, raising=False)
+
+    ocr = tmp_path / "ocr"
+    day = ocr / "2026-09-21"
+    day.mkdir(parents=True)
+    monkeypatch.setattr(core_config, "OCR_DIR", ocr, raising=False)
+    archive = day / "t1.md"
+    archive.write_text("题面\n", encoding="utf-8")
+
+    webapp_app._startup_cleanup(TaskManager(tmp_path / "tasks.db"))  # noqa: SLF001
+
+    assert archive.exists(), "空任务库是配置配错的信号，归档必须保留现场"
+    assert (uploads / "t1").exists()
+
+
 def test_prune_image_cache_removes_oldest_first(tmp_path):
     cache = tmp_path / "cache"
     cache.mkdir()
