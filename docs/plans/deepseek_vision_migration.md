@@ -1462,8 +1462,11 @@ A/B/C 各一轮算一个 cycle，连续 4 个 cycle，用"每个 cycle 内谁最
   在真实 `webapp/uploads/` 下放一个哨兵目录后跑完整 pytest，哨兵存活。
   A/B 改用 `webapp/cache/images` 里 181 张已预处理的真实题图（`_probe/ab_images/` 8 张）。
 - **2026-09-21 更新**：用户已填回 `DEEPSEEK_API_KEY`（只填了这一个），因此单 provider 的
-  真实调用全部可跑（见 8.1/8.2/8.3）；`ZHIPU_API_KEY` 仍缺，S1/S2 的双 provider 对照
-  仍未判定。第 8 节的"两条补跑命令"现在只剩 `--reference zhipu` 那一条跑不了。
+  真实调用全部可跑（见 8.1/8.2/8.3）。
+- **2026-09-21 晚更新**：`ZHIPU_API_KEY` 也已补回，双 provider 的 S1/S2 对照跑完并判定
+  通过（§8.4），默认 provider 随即由 `zhipu` 切到 `deepseek`（§6 第 5 步）。
+  **本次事故至此全部收口**：密钥补回、`start_web.bat` 不再自动 `copy .env`、
+  上传目录清理的三处护栏与哨兵实验均已落地。
 
 ### 11.5 独立审计与修复（2026-09-21，两个只读审计）
 

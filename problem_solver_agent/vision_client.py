@@ -2,15 +2,15 @@
 vision_client.py - 视觉 API 客户端 (Provider-Agnostic)
 
 本模块封装了所有与多模态视觉模型（图像分类、OCR转录、视觉推理）的交互。
-具体模型与端点由 `config.VISION_PROVIDER`（迁移目标 deepseek / 代码默认 zhipu）决定，
+具体模型与端点由 `config.VISION_PROVIDER`（默认 deepseek / 一键回退 zhipu）决定，
 切换只需改一个环境变量，代码不用动。
 
-本仓库 .env 当前显式启用 deepseek（VISION_PROVIDER=deepseek）:
+默认（VISION_PROVIDER=deepseek，双 provider 的 A/B 闸门通过后于 2026-09-21 切换）:
 - 分类: deepseek-flash (chat/completions)
 - OCR:   deepseek-flash (chat/completions)
 - 视觉推理: deepseek-flash (chat/completions)
 
-回退（VISION_PROVIDER=zhipu，也是未配置时的代码默认）与迁移前逐字节一致:
+回退（VISION_PROVIDER=zhipu）与迁移前逐字节一致:
 - 分类: GLM-4.6V-FlashX / 视觉推理: GLM-4.6V
 
 两个关键约定（迁移踩过的坑，详见 docs/plans/deepseek_vision_migration.md）：

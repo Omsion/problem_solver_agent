@@ -278,7 +278,8 @@ ZHIPU_API_KEY=xxxxxxxx        # 只有这一行需要新填；DEEPSEEK_API_KEY �
 - 回退后视觉层用 `GLM-4.6V-FlashX`（分类 / OCR）+ `GLM-4.6V`（视觉推理 / 核对），
   思考模式开关对该 provider 不生效（智谱不支持这个开关），其余行为与迁移前一致；
 - 未知的 `VISION_PROVIDER` 取值会**静默回落**到代码默认 provider
-  （`config.DEFAULT_VISION_PROVIDER`，当前 `zhipu` —— 配置写错不该让服务起不来）；
+  （`config.DEFAULT_VISION_PROVIDER`，当前 `deepseek` —— 配置写错不该让服务起不来）；
+  **想跑智谱就必须显式写 `VISION_PROVIDER=zhipu`**，写错名字会被当成 deepseek；
 - 重试已存在的任务时，阶段缓存里记了模型名，provider 切换后旧缓存**自动失效**，
   不会把 DeepSeek 写下的转录当成智谱的结果复用；
 - 切换前建议先跑 A/B：`python -m tools.vision_ab check -i <图或目录>`，

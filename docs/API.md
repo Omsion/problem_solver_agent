@@ -834,31 +834,39 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
   响应结束后才能从 `usage` 字段拿到精确 token，且并非所有兼容网关都会返回该字段，
   因此用保守的启发式换算替代。
 
-- **token 由"页数 + 输出字符数"启发式换算**（`webapp/usage.py:24-40`）：
+- **token 由"调用次数 + 实际图片数 + 输出字符数"启发式换算**（`webapp/usage.py`）：
 
   | 常量 | 值 | 含义 |
   |---|---|---|
-  | `BASE_INPUT_TOKENS` | 600 | 题面文本本身的输入开销（prompt 模板 + 上下文） |
+  | `BASE_INPUT_TOKENS` | 600 | 单次调用的固定输入开销（prompt 模板 + 上下文），**按调用次数重复** |
   | `TOKENS_PER_IMAGE` | 1024 | 一张图片在视觉模型中的固定折算。取 1024 是因为 DeepSeek 官方给出的**每图 token 上限**就是 1024（服务端会把图二次缩放到约 1300×1300 等效）；沿用旧值 700 会在换到 `deepseek-flash` 后低估近 1/3 的输入成本 |
   | `CHARS_PER_TOKEN_FACTOR` | 0.6 | 每字符折算的 token 数（CJK 偏 1.0、英文偏 0.25，取 0.6 作折中） |
 
   于是（`estimate_tokens`）：
 
   ```
-  输入 token = 600 + 页数 × 1024    # 输入侧只计图片与固定开销，题目文本真实长度未回传
-  输出 token = int(输出字符数 × 0.6)
-  多次调用（如逐页 OCR）再按 calls 次数整体放大
+  输入 token = 600 × calls + images × 1024
+  输出 token = int(输出字符数 × 0.6) × calls
   ```
 
-  哪些阶段会上报 `output_chars`（`problem_solver_agent/core_pipeline.py`）：
-  视觉 / 分类 / OCR 阶段只报 `pages`，输出字符数按 **0** 计；
-  只有 `polish`（输出为润色后的题面）与 `solve` / `resolve`（输出为解答正文）
-  会报 `output_chars`。
+  **`calls` 与 `images` 必须分开**（2026-09-22 修正）：`calls` 是真实请求次数，
+  `images` 是**实际上传的图片张数**（core 的 `UsageReport.images`）。二者不等：
+  逐页 OCR 是 8 次调用各带 1 张图（`calls=8, images=8`），分批合并是 2 次调用合起来
+  8 张（`calls=1, images=8`）。旧口径只报 `calls` 并把「每图 token」按它再乘一遍，
+  于是逐页 OCR 的 8 张图被算成 64 张（**高估 8 倍**，整条回退链路高估 4.5 倍）。
+  `images` 缺省（`None`）时按旧口径 `calls × pages` 兜底，老调用方行为不变；
+  纯文本阶段（`polish` / `solve` / `resolve` / `filename`）显式报 `images=0`。
+
+  哪些阶段上报什么（`problem_solver_agent/core_pipeline.py`）：
+  `vision` / `classify` / `ocr` / `vision_refill` 报 `pages` + `images`，
+  输出字符数按 **0** 计；只有 `polish`（润色后的题面）与 `solve` / `resolve`
+  （解答正文）会报 `output_chars`，`filename` 在真调模型时也报。
 
   **所以记账口径既不完整也不精确**：输入侧只计图片与固定开销（题目文本的真实长度
-  没有回传），输出侧只覆盖 `polish` / `solve` / `resolve` 三个阶段。这里的数字只是
-  **估算口径下的记账值**，与真实 token 数没有一一对应关系。与之相对，提交前的
-  `estimate_task_cost()` 是刻意**高估**的（见下一条），两者方向不同，不要混用。
+  没有回传），输出侧只覆盖 `polish` / `solve` / `resolve` / `filename` 四个阶段。
+  这里的数字只是**估算口径下的记账值**，与真实 token 数没有一一对应关系。
+  与之相对，提交前的 `estimate_task_cost()` 按同样的单价表估算（见下一条）——
+  两者口径已统一，不再存在"记账按旧口径、预检按新口径"这类方向性差异。
 
 - **计价公式**：`estimate_cost(model, in, out)`（`accounts.py:48`）=
   `round(in / 1e6 × 输入单价 + out / 1e6 × 输出单价, 6)`，单位元；未列出的模型走
@@ -881,16 +889,17 @@ Query：`limit`（int，默认 100，`1 ~ 500`）。
   （`webapp/routes.py:195`）在 `POST /api/tasks`（落盘之前）与
   `POST /api/tasks/{id}/resolve`（启动流水线之前）做预检：
 
-  ```
-  预估费用 = estimate_task_cost(页数)          # usage.py:97，偏保守：宁可高估也不低估
+   ```
+  预估费用 = estimate_task_cost(页数)          # usage.py，与记账同一套口径
            = 1 次视觉调用（按当前 provider 的 VISION_CLASSIFY_MODEL 计价，
-             默认 deepseek-flash；输入侧只算图片）
-           + 1 次求解调用（默认 deepseek-flash，输出按 4000 字符估算）
+             默认 deepseek-flash；输入 = 600 + 页数 × 1024）
+           + 1 次求解调用（默认 deepseek-flash，输入只算固定开销、输出按 4000 字符估算）
   required = max(预估费用, MIN_TASK_BUDGET)     # MIN_TASK_BUDGET 默认 0.05 元
   ```
 
   > 视觉那一条**跟随 provider** 取模型名（`core_config.VISION_CLASSIFY_MODEL`），不再是
   > 写死的 `GLM-4.6V-FlashX` —— 否则 `VISION_PROVIDER=zhipu` 时会按 DeepSeek 的单价预检。
+  > 2026-09-22 之前它还按 `calls × pages` 计图片，把 8 图任务的预检金额抬到实际的数倍。
 
   余额不足时返回 `402`，且响应体是**对象形态**的 `error`：
 
